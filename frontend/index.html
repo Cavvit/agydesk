@@ -86,6 +86,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .rbtn{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;color:var(--mut);transition:.15s;position:relative;font-size:16px}
 .rbtn:hover{background:var(--bg3);color:var(--txt)}
 .rbtn.on{background:var(--cu-d);color:var(--cu)}
+.rbtn.rdrag{opacity:.35}
+.rbtn.rover-t::before,.rbtn.rover-b::before{content:'';position:absolute;left:4px;right:4px;height:2px;border-radius:2px;background:var(--cu)}
+.rbtn.rover-t::before{top:-3px}.rbtn.rover-b::before{bottom:-3px}
 .rbtn[data-tip]:hover::after{content:attr(data-tip);position:absolute;left:44px;background:var(--bg3);border:1px solid var(--line);padding:3px 8px;border-radius:6px;font-size:12px;white-space:nowrap;z-index:9;color:var(--txt)}
 .sp{flex:1}
 .left,.right{background:var(--bg2);overflow:hidden;min-width:0;min-height:0;height:100vh;position:relative}
@@ -3172,8 +3175,51 @@ function initTextPrefs(){
   document.addEventListener('wheel',e=>{ if(e.ctrlKey){e.preventDefault();stepTz(e.deltaY<0?1:-1);} },{passive:false});
 }
 
+/* ---------- Sol ray: sürükle-bırak ile sıralama ---------- */
+function initRailDrag(){
+  const rail=document.querySelector('.rail'); if(!rail) return;
+  const btns=[...rail.querySelectorAll('.rbtn')];
+  const keyOf=(b,i)=>b.dataset.k||(b.dataset.k=b.dataset.mode||b.id||(i===0?'attach':'newnote'));
+  btns.forEach((b,i)=>keyOf(b,i));
+  const sp=rail.querySelector('.sp'), uring=rail.querySelector('.uring');
+  // kayıtlı sıra: yalnızca ray içindeki bilinen butonlar
+  try{
+    const saved=JSON.parse(localStorage.getItem('agydesk_rail')||'null');
+    if(Array.isArray(saved)){
+      const map={sp:sp}; btns.forEach(b=>map[b.dataset.k]=b);
+      saved.forEach(k=>{ if(map[k]) rail.insertBefore(map[k],uring); });
+      rail.insertBefore(uring,null);
+    }
+  }catch(e){}
+  const save=()=>{
+    const order=[...rail.querySelectorAll('.rbtn,.sp')].map(b=>b.classList.contains('sp')?'sp':b.dataset.k);
+    localStorage.setItem('agydesk_rail',JSON.stringify(order));
+  };
+  let drag=null;
+  btns.forEach(b=>{
+    b.draggable=true;
+    b.addEventListener('dragstart',e=>{ drag=b; b.classList.add('rdrag'); e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/rail',b.dataset.k); });
+    b.addEventListener('dragend',()=>{ b.classList.remove('rdrag'); rail.querySelectorAll('.rover-t,.rover-b').forEach(x=>x.classList.remove('rover-t','rover-b')); drag=null; });
+    b.addEventListener('dragover',e=>{
+      if(!drag||drag===b) return;
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      const r=b.getBoundingClientRect(), top=e.clientY<r.top+r.height/2;
+      b.classList.toggle('rover-t',top); b.classList.toggle('rover-b',!top);
+    });
+    b.addEventListener('dragleave',()=>b.classList.remove('rover-t','rover-b'));
+    b.addEventListener('drop',e=>{
+      if(!drag||drag===b) return;
+      e.preventDefault();
+      const r=b.getBoundingClientRect(), top=e.clientY<r.top+r.height/2;
+      rail.insertBefore(drag, top?b:b.nextSibling);
+      b.classList.remove('rover-t','rover-b');
+      save();
+    });
+  });
+}
+
 /* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
-initThemes(); initTextPrefs();
+initThemes(); initTextPrefs(); initRailDrag();
 setMode('kasalar'); loadVault(); loadChats();
 </script>
 </body>
