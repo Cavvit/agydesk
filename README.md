@@ -8,9 +8,19 @@ Native Rust masaüstü motoru (`AgyDesk.exe` — Axum + Tao/Wry WebView2) ve Pyt
 .\AgyDesk.exe
 # veya Baslat_AgyDesk.bat
 
-# Python Backend ile:
-python -m uvicorn backend.main:app --port 8780
+# Python Backend ile (Masaüstü veya Android Termux):
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 python -m pytest tests -q
+```
+
+## Tablet (Android / Termux) Kullanımı
+```bash
+git clone https://github.com/Cavvit/agydesk.git ~/ai-workstation
+cd ~/ai-workstation
+pip install -r requirements.txt
+# Çalışma notlarını notes/ klasörüne kopyaladıktan sonra:
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
+# Tablet tarayıcısında (Chrome/Brave) aç: http://127.0.0.1:8765
 ```
 
 ## Model & İzin Eşlemesi (`agy` CLI)

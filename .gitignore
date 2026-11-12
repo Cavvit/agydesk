@@ -8,6 +8,9 @@ server.log
 *.tmp
 *.old
 *.bak*
+*_dump.txt
+*.zip
+*.tar.gz
 src-rust/target/
 src-rust/*.def
 frontend/*.bak*

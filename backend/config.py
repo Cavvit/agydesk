@@ -23,6 +23,10 @@ def _resolve_agy_bin() -> str:
         home / "AppData" / "Roaming" / "npm" / "agy.cmd",
         home / "AppData" / "Local" / "Programs" / "agy" / "agy.exe",
         home / ".gemini" / "antigravity-cli" / "bin" / "agy.exe",
+        home / ".gemini" / "antigravity-cli" / "bin" / "agy",
+        home / ".local" / "bin" / "agy",
+        home / ".npm-global" / "bin" / "agy",
+        Path("/data/data/com.termux/files/usr/bin/agy"),
     ]
     for c in candidates:
         if c.exists():

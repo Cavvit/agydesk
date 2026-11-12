@@ -3,6 +3,7 @@ yerel modeller Ollama üzerinden çalıştırılır. API anahtarı gerekmez."""
 import asyncio
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -26,7 +27,7 @@ def _parse_reset_s(err: str) -> int:
 
 
 def agy_available() -> bool:
-    return Path(AGY_BIN).exists()
+    return Path(AGY_BIN).exists() or shutil.which(AGY_BIN) is not None
 
 
 async def ollama_alive() -> bool:
