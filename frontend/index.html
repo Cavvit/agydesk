@@ -72,11 +72,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .app.no-left{grid-template-columns:var(--rail) 0 1fr var(--right)}
 .app.no-right{grid-template-columns:var(--rail) var(--left) 1fr 0}
 .app.no-left.no-right{grid-template-columns:var(--rail) 0 1fr 0}
-.app.zen{grid-template-columns:0 0 1fr 0}
-.app.zen .rail{display:none}
-.app.zen .left,.app.zen .right{display:none!important}
+.app.zen{grid-template-columns:1fr!important}
+.app.zen .rail,.app.zen .left,.app.zen .right,.app.zen .resizer{display:none!important}
+.app.zen .center{grid-column:1/-1;width:100%;min-width:0}
 .app.zen .topbar{height:34px;padding:3px 8px 0;background:var(--bg)}
-.app.zen .resizer{display:none!important}
 .zen-exit-btn{display:none;align-items:center;gap:5px;padding:3px 9px;margin-bottom:4px;border:1px solid var(--cu);border-radius:6px;font:500 11.5px var(--sans);color:var(--cu);background:var(--cu-d);flex-shrink:0;cursor:pointer;transition:.12s}
 .zen-exit-btn:hover{background:var(--cu);color:#121513}
 .app.zen .zen-exit-btn{display:inline-flex}
@@ -2704,6 +2703,11 @@ function syncPaneBtns(){
   if(r) r.classList.toggle('on', !app.classList.contains('no-right'));
 }
 function togglePane(side){
+  if(app.classList.contains('zen')){
+    app.classList.remove('zen');
+    const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
+    applyPaneWidths();
+  }
   if(side==='right'&&viewerPrev&&!app.classList.contains('no-right')){
     closeRightViewer();
     return;
@@ -2781,7 +2785,6 @@ let curMode='kasalar';
 function layoutMode(m){
   curMode=m;
   $$('.rbtn[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
-  app.classList.remove('zen');
   const show=(treeVis,src,sess,title)=>{
     $('#tree').style.display=treeVis?'':'none';
     $('#sources').style.display=src?'block':'none';
@@ -2799,6 +2802,10 @@ function layoutMode(m){
   syncPaneBtns();
 }
 function setMode(m){
+  if(app.classList.contains('zen')){
+    app.classList.remove('zen');
+    const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
+  }
   layoutMode(m);
   if(m==='kasalar')openPage('kasalar');
   if(m==='plan')openPage('cal');
