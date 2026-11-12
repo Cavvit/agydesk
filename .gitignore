@@ -1,0 +1,13 @@
+﻿atolye.db
+.env
+__pycache__/
+.pytest_cache/
+graphify-out/
+notes/
+server.log
+*.tmp
+*.old
+*.bak*
+src-rust/target/
+src-rust/*.def
+frontend/*.bak*
