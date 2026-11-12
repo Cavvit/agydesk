@@ -201,8 +201,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .cal{padding:32px;width:100%;box-sizing:border-box;max-width:900px;margin:0 auto}
 .cal h1{font-size:28px;letter-spacing:-.02em;margin-bottom:4px}
-.cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:18px}
-.cgrid>div{background:var(--bg2);min-height:78px;padding:6px 8px;font-size:12px}
+.cgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:18px}
+.cgrid>div{background:var(--bg2);min-height:78px;min-width:0;overflow:hidden;padding:6px 8px;font-size:12px}
 .cgrid .dh{min-height:0;color:var(--mut);font:11px var(--mono);text-transform:uppercase;padding:8px}
 .cgrid .today{box-shadow:inset 0 0 0 1.5px var(--cu)}
 .ev{margin-top:4px;padding:2px 6px;border-radius:4px;font-size:11px;background:var(--cu-d);color:var(--cu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
