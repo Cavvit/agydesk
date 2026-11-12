@@ -2795,7 +2795,7 @@ function layoutMode(m){
   if(m==='write'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
   if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');rtab('ai');}
   if(m==='plan'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
-  if(m==='ai'){app.classList.remove('no-left','no-right');show(1,0,1,'AI Oturumları');rtab('skills');renderSessions();}
+  if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
   syncPaneBtns();
 }
 function setMode(m){
