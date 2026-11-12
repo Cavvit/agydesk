@@ -56,6 +56,17 @@ body[data-theme="sepia"]{ /* Kitap & Papirüs / Sıcak Gündüz */
   --bg:#f3ece0; --bg2:#e8decb; --bg3:#dcceb7; --line:#c3b197; --txt:#1d140a; --mut:#544130;
   --cu:#874218; --cu-d:#87421822; --ok:#3c661c; --err:#9d2c2e;
 }
+body[data-theme="mono-dark"]{ /* Saf Siyah-Beyaz / Gemini & Obsidian sade */
+  --bg:#000000; --bg2:#0b0b0b; --bg3:#161616; --line:#2a2a2a; --txt:#f2f2f2; --mut:#9a9a9a;
+  --cu:#ffffff; --cu-d:#ffffff1c; --ok:#d4d4d4; --err:#ff8a80;
+}
+body[data-theme="mono-light"]{ /* Saf Beyaz-Siyah / sade */
+  --bg:#ffffff; --bg2:#f6f6f6; --bg3:#ececec; --line:#d4d4d4; --txt:#0a0a0a; --mut:#5c5c5c;
+  --cu:#000000; --cu-d:#0000000f; --ok:#2e2e2e; --err:#b3261e;
+}
+body[data-theme="mono-light"] .kw,body[data-theme="mono-light"] .fn{color:#000;font-weight:700}
+body[data-theme="mono-light"] .ty,body[data-theme="mono-light"] .num,body[data-theme="mono-light"] .str{color:#333}
+body[data-theme="mono-light"] .cm{color:#777}
 /* Açık ve Kağıt temalarda kod renklendirme kontrastı */
 body[data-theme="eink"] .kw, body[data-theme="sepia"] .kw{color:#cf222e}
 body[data-theme="eink"] .ty, body[data-theme="sepia"] .ty{color:#953800}
@@ -208,6 +219,211 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .ev{margin-top:4px;padding:2px 6px;border-radius:4px;font-size:11px;background:var(--cu-d);color:var(--cu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ev.g{background:#7bc47f22;color:var(--ok)}
 .gsync{display:inline-flex;gap:6px;align-items:center;font:11px var(--mono);color:var(--ok);margin-left:10px}
+/* ----- Google Takvim Stüdyosu (GCal Studio) ----- */
+.gcal{display:flex;flex-direction:column;height:100%;width:100%;min-width:0;min-height:0;background:var(--bg2);color:var(--txt);overflow:hidden;user-select:none;position:relative}
+.gcal-top{display:flex;align-items:center;gap:10px;padding:8px 14px;background:var(--bg);border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+.gcal-brand{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;letter-spacing:-.01em;margin-right:4px}
+.gcal-brand{display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:16px;letter-spacing:-.02em;margin-right:4px}
+.gcal-brand .gic{width:30px;height:30px;border-radius:8px;background:var(--bg2);border:1px solid var(--cu);overflow:hidden;display:flex;flex-direction:column;box-shadow:0 3px 10px #00000035}
+.gcal-brand .gic-m{background:var(--cu);color:#111412;font:800 7.5px/1 var(--mono);text-align:center;padding:2px 0;letter-spacing:.06em}
+.gcal-brand .gic-d{flex:1;display:grid;place-items:center;color:var(--txt);font:700 12.5px/1 var(--mono)}
+.gcal-brand-txt{display:inline-flex;align-items:baseline;gap:1px}
+.gcal-brand-txt b{color:var(--cu);font-weight:800}
+.gcal-brand-badge{font:700 9px var(--mono);padding:1.5px 5px;border-radius:99px;background:var(--cu-d);color:var(--cu);border:1px solid #e0a45844;margin-left:5px;letter-spacing:.04em}
+.acal-tab-pill{font:700 9.5px var(--mono);padding:1px 5px;border-radius:99px;margin-left:3px;letter-spacing:.01em;display:inline-flex;align-items:center;gap:3px}
+.acal-tab-pill.exam{background:#ff6b6b24;color:#ff6b6b;border:1px solid #ff6b6b55}
+.acal-tab-pill.pomo{background:#52b78826;color:#52b788;border:1px solid #52b78855}
+.gcal-smartbar{display:flex;align-items:center;gap:10px;padding:7px 14px;background:linear-gradient(90deg,var(--cu-d),transparent 85%);border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap}
+.gcal-smart-in{flex:1;min-width:240px;display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid #e0a45855;border-radius:9px;padding:5px 10px;box-shadow:inset 0 1px 3px #00000028}
+.gcal-smart-in:focus-within{border-color:var(--cu);box-shadow:0 0 0 2px var(--cu-d)}
+.gcal-smart-in input{flex:1;background:0;border:0;outline:0;color:var(--txt);font:12.5px var(--sans)}
+.gcal-smart-in input::placeholder{color:var(--mut)}
+.gcal-smart-prev{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;font:11px var(--mono)}
+.gcal-smart-chip{padding:2px 7px;border-radius:6px;background:var(--bg2);border:1px solid var(--line);color:var(--txt);display:inline-flex;align-items:center;gap:4px}
+.gcal-nav{display:inline-flex;align-items:center;gap:4px}
+.gcal-btn{padding:5px 11px;border-radius:7px;border:1px solid var(--line);background:var(--bg2);color:var(--txt);font:500 12.5px var(--sans);display:inline-flex;align-items:center;gap:6px;transition:.12s;cursor:pointer;white-space:nowrap}
+.gcal-btn:hover{background:var(--bg3);border-color:var(--cu)}
+.gcal-btn.pri{background:var(--cu);color:#111412;border-color:var(--cu);font-weight:600}
+.gcal-btn.pri:hover{filter:brightness(1.08)}
+.gcal-btn.on{background:var(--cu-d);color:var(--cu);border-color:var(--cu)}
+.gcal-icbtn{width:28px;height:28px;border-radius:7px;border:1px solid transparent;display:grid;place-items:center;color:var(--mut);transition:.12s;cursor:pointer}
+.gcal-icbtn:hover{background:var(--bg3);color:var(--txt);border-color:var(--line)}
+.gcal-title{font-size:17px;font-weight:600;letter-spacing:-.02em;min-width:170px;color:var(--txt)}
+.gcal-search{position:relative;display:flex;align-items:center}
+.gcal-search input{width:190px;background:var(--bg2);border:1px solid var(--line);border-radius:7px;padding:5px 10px 5px 26px;color:var(--txt);font:12.5px var(--sans);outline:0;transition:width .18s,border-color .15s}
+.gcal-search input:focus{width:240px;border-color:var(--cu)}
+.gcal-search i{position:absolute;left:8px;font-style:normal;font-size:12px;color:var(--mut);pointer-events:none}
+.gcal-dd{position:relative;display:inline-block}.gcal-dd-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);min-width:170px;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:4px;z-index:80;box-shadow:0 8px 24px #0000003a}.gcal-dd.open .gcal-dd-menu{display:block}.gcal-dd-menu button{display:flex;width:100%;justify-content:space-between;align-items:center;padding:7px 10px;border-radius:6px;font:500 12.5px var(--sans);color:var(--txt);text-align:left}.gcal-dd-menu button:hover{background:var(--bg3)}.gcal-dd-menu button.on{color:var(--cu);font-weight:600}.gcal-dd-menu kbd{font:10px var(--mono);color:var(--mut)}
+.gcal-seg{display:inline-flex;background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:2px;gap:2px}
+.gcal-seg button{padding:4px 10px;border-radius:6px;font:500 12px var(--sans);color:var(--mut);transition:.12s;display:inline-flex;align-items:center;gap:5px}
+.gcal-seg button kbd{font:10px var(--mono);opacity:.65;padding:0 3px;border-radius:3px;background:var(--bg)}
+.gcal-seg button:hover{color:var(--txt)}
+.gcal-seg button.on{background:var(--cu);color:#111412;font-weight:600}
+.gcal-seg button.on kbd{background:#00000028;color:#111412;opacity:.9}
+.gcal-body{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+.gcal-side{width:256px;border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;gap:12px;padding:12px;overflow-y:auto;flex-shrink:0;transition:margin-left .18s ease}
+.gcal.no-side .gcal-side{display:none}
+.gcal-create-big{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border-radius:12px;background:var(--cu-d);border:1px solid var(--cu);color:var(--cu);font:600 13.5px var(--sans);box-shadow:0 4px 14px #00000028;transition:.15s;cursor:pointer}
+.gcal-create-big:hover{background:var(--cu);color:#111412;transform:translateY(-1px)}
+/* Mini Takvim */
+.gmini{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:10px}
+.gmini-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;font:600 12.5px var(--sans);padding:0 2px}
+.gmini-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:2px;text-align:center}
+.gmini-dh{font:600 10px var(--mono);color:var(--mut);padding:3px 0}
+.gmini-d{height:26px;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;font:11.5px var(--mono);cursor:pointer;position:relative;color:var(--txt);transition:.1s}
+.gmini-d:hover{background:var(--bg3)}
+.gmini-d.dim{color:var(--mut);opacity:.45}
+.gmini-d.sel{background:var(--cu-d);color:var(--cu);font-weight:600;border:1px solid var(--cu)}
+.gmini-d.today{background:var(--cu);color:#111412;font-weight:700}
+.gmini-dots{display:flex;gap:2px;position:absolute;bottom:2px}
+.gmini-dots i{width:3.5px;height:3.5px;border-radius:50%;display:block}
+/* Geri Sayım & Filtreler */
+.gcal-sec{display:flex;flex-direction:column;gap:6px}
+.gcal-sec-hd{font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--mut);display:flex;justify-content:space-between;align-items:center}
+.gcal-cd{background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;cursor:pointer;transition:.14s;display:flex;flex-direction:column;gap:4px}
+.gcal-cd:hover{border-color:var(--cu);transform:translateX(2px)}
+.gcal-cd-top{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12px;font-weight:600}
+.gcal-cd-top span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gcal-cd-badge{font:600 10px var(--mono);padding:1px 6px;border-radius:99px;white-space:nowrap;flex-shrink:0}
+.gcal-cd-bar{height:4px;background:var(--bg);border-radius:99px;overflow:hidden}
+.gcal-cd-bar i{display:block;height:100%;border-radius:99px}
+.gcal-flt{display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:7px;cursor:pointer;font-size:12.5px;transition:.12s}
+.gcal-flt:hover{background:var(--bg2)}
+.gcal-flt .chk{width:14px;height:14px;border-radius:4px;display:grid;place-items:center;font-size:10px;color:#111;font-weight:700;flex-shrink:0}
+.gcal-flt.off{opacity:.45}
+.gcal-flt.off .chk{background:transparent!important;border:1.5px solid var(--mut);color:transparent}
+/* Ana Sahne */
+.gcal-stage{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;position:relative;background:var(--bg2)}
+/* Aylık Izgara (42 hücre, taşma korumalı) */
+.gmonth{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0}
+.gmonth-hdr{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-bottom:1px solid var(--line);background:var(--bg);flex-shrink:0}
+.gmonth-hdr div{padding:7px 10px;font:600 11px var(--mono);color:var(--mut);text-transform:uppercase;text-align:center;border-right:1px solid var(--line)}
+.gmonth-hdr div:last-child{border-right:0}
+.gmonth-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));grid-template-rows:repeat(6,minmax(0,1fr));flex:1;min-height:0;min-width:0;background:var(--line);gap:1px}
+.gmcell{background:var(--bg2);min-width:0;min-height:0;padding:5px 6px;display:flex;flex-direction:column;gap:3px;overflow:hidden;position:relative;transition:background .12s;cursor:pointer}
+.gmcell:hover{background:var(--bg3)}
+.gmcell.wknd{background:color-mix(in srgb,var(--bg2) 92%,var(--bg) 8%)}
+.gmcell.other{opacity:.48;background:var(--bg)}
+.gmcell.today{background:color-mix(in srgb,var(--bg2) 90%,var(--cu) 10%);box-shadow:inset 0 0 0 1.5px var(--cu)}
+.gmcell.drop-hot{outline:2px dashed var(--cu);outline-offset:-2px;background:var(--cu-d)}
+.gmcell-top{display:flex;align-items:center;justify-content:space-between;font:500 11.5px var(--mono);color:var(--mut);margin-bottom:1px;flex-shrink:0}
+.gmcell-num{width:22px;height:22px;border-radius:99px;display:inline-grid;place-items:center}
+.gmcell.today .gmcell-num{background:var(--cu);color:#111412;font-weight:700}
+.gmcell-evs{display:flex;flex-direction:column;gap:2.5px;overflow-y:auto;overflow-x:hidden;min-width:0;flex:1}
+.gmcell-evs::-webkit-scrollbar{width:3px}
+.gmcell-evs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+.gev-pill{display:flex;align-items:center;gap:5px;padding:2px 6px;border-radius:5px;font-size:11px;line-height:1.35;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:grab;border-left:3px solid currentColor;transition:transform .1s,filter .12s;flex-shrink:0}
+.gev-pill:hover{filter:brightness(1.12);transform:translateX(1px)}
+.gev-pill.done{opacity:.5;text-decoration:line-through}
+.gev-pill b{font:600 10px var(--mono);opacity:.92;flex-shrink:0}.gev-pill,.gw-ev{color:#fff}.gev-pill.done,.gw-ev.done{opacity:.6}.gw-ev.lec{opacity:.9}
+.gev-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* Haftalık & Günlük Saatlik Izgara */
+.gweek{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden}
+.gweek-top{display:grid;border-bottom:1px solid var(--line);background:var(--bg);flex-shrink:0}
+.gweek-top.cols-7{grid-template-columns:58px repeat(7,minmax(0,1fr))}
+.gweek-top.cols-1{grid-template-columns:58px minmax(0,1fr)}
+.gw-tz{font:10px var(--mono);color:var(--mut);display:flex;align-items:flex-end;justify-content:center;padding:6px 4px;border-right:1px solid var(--line)}
+.gw-dh{padding:8px 6px 6px;text-align:center;border-right:1px solid var(--line);cursor:pointer;transition:background .12s;min-width:0}
+.gw-dh:last-child{border-right:0}
+.gw-dh:hover{background:var(--bg3)}
+.gw-dh .dn{font:600 10.5px var(--mono);color:var(--mut);text-transform:uppercase;letter-spacing:.05em}
+.gw-dh .dd{width:30px;height:30px;border-radius:99px;margin:2px auto 0;display:grid;place-items:center;font:600 15px var(--sans);color:var(--txt)}
+.gw-dh.today .dn{color:var(--cu)}
+.gw-dh.today .dd{background:var(--cu);color:#111412;font-weight:700}
+.gw-allday{display:grid;border-bottom:1px solid var(--line);background:var(--bg);flex-shrink:0;min-height:28px}
+.gw-allday.cols-7{grid-template-columns:58px repeat(7,minmax(0,1fr))}
+.gw-allday.cols-1{grid-template-columns:58px minmax(0,1fr)}
+.gw-ad-lbl{font:10px var(--mono);color:var(--mut);display:flex;align-items:center;justify-content:center;border-right:1px solid var(--line);padding:2px}
+.gw-ad-cell{border-right:1px solid var(--line);padding:3px 4px;display:flex;flex-direction:column;gap:2px;min-width:0;overflow:hidden}
+.gw-ad-cell:last-child{border-right:0}
+.gweek-scroll{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;min-height:0}
+.gweek-grid{display:grid;position:relative;min-height:960px}
+.gweek-grid.cols-7{grid-template-columns:58px repeat(7,minmax(0,1fr))}
+.gweek-grid.cols-1{grid-template-columns:58px minmax(0,1fr)}
+.gw-times{border-right:1px solid var(--line);background:var(--bg);position:relative}
+.gw-tlbl{height:60px;padding:0 6px;font:10.5px var(--mono);color:var(--mut);text-align:right;position:relative;top:-7px}
+.gw-col{border-right:1px solid var(--line);position:relative;min-width:0;background:repeating-linear-gradient(to bottom,transparent 0,transparent 29px,color-mix(in srgb,var(--line) 45%,transparent) 29px,color-mix(in srgb,var(--line) 45%,transparent) 30px,transparent 30px,transparent 59px,var(--line) 59px,var(--line) 60px)}
+.gw-col:last-child{border-right:0}
+.gw-col.today{background-color:color-mix(in srgb,var(--cu) 4%,transparent)}
+.gw-slot{height:60px;width:100%;cursor:pointer}
+.gw-slot:hover{background:color-mix(in srgb,var(--cu) 8%,transparent)}
+.gw-slot.drop-hot{background:var(--cu-d);outline:1.5px dashed var(--cu)}
+.gw-ev{position:absolute;border-radius:6px;padding:4px 7px;font-size:11.5px;line-height:1.25;overflow:hidden;cursor:grab;border-left:3.5px solid currentColor;box-shadow:0 2px 8px #00000035;transition:transform .1s,box-shadow .12s,filter .12s;z-index:3;display:flex;flex-direction:column;gap:1px}
+.gw-ev:hover{z-index:8;filter:brightness(1.1);box-shadow:0 6px 18px #00000066}
+.gw-ev.lec{opacity:.78;border-style:dashed;z-index:2}
+.gw-ev.lec:hover{opacity:1}
+.gw-ev.done{opacity:.5;text-decoration:line-through}
+.gw-ev .et{font:600 10px var(--mono);opacity:.9}
+.gw-ev .en{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gw-ev .el{font-size:10px;opacity:.82;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Canlı Kırmızı Zaman Çizgisi */
+.gw-now{position:absolute;left:0;right:0;height:2px;background:#ff5555;z-index:6;pointer-events:none;box-shadow:0 0 8px #ff5555}
+.gw-now::before{content:'';position:absolute;left:-5px;top:-4px;width:10px;height:10px;border-radius:50%;background:#ff5555;box-shadow:0 0 8px #ff5555}
+.gw-now-tag{position:absolute;left:6px;top:-18px;background:#ff5555;color:#fff;font:700 9.5px var(--mono);padding:1px 5px;border-radius:4px}
+/* Günlük Görünüm Sağ Odak & Pomodoro Kokpiti */
+.gday-wrap{display:grid;grid-template-columns:1.35fr 1fr;flex:1;min-height:0;min-width:0;overflow:hidden}
+.gday-cockpit{border-left:1px solid var(--line);background:var(--bg);padding:18px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+.gpomo{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;align-items:center;gap:16px}
+.gpomo-ring{width:96px;height:96px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--cu) calc(var(--pp,100)*1%),var(--bg3) 0);flex-shrink:0;position:relative}
+.gpomo-ring::before{content:'';position:absolute;inset:7px;border-radius:50%;background:var(--bg2)}
+.gpomo-time{position:relative;font:700 20px var(--mono);color:var(--txt)}
+/* Planlama (Ajanda) Görünümü */
+.gagenda{flex:1;overflow-y:auto;padding:22px 28px 80px;max-width:980px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.gag-day{display:grid;grid-template-columns:150px 1fr;gap:14px;padding:12px 0;border-bottom:1px solid var(--line);align-items:start}
+.gag-date{display:flex;align-items:baseline;gap:8px;position:sticky;top:0}
+.gag-date .dnum{font:700 24px var(--sans);color:var(--txt);line-height:1}
+.gag-date.today .dnum{background:var(--cu);color:#111412;padding:3px 9px;border-radius:99px;font-size:18px}
+.gag-date .dmeta{font:600 11px var(--mono);color:var(--mut);text-transform:uppercase}
+.gag-list{display:flex;flex-direction:column;gap:8px;min-width:0}
+.gag-card{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg);border:1px solid var(--line);border-radius:10px;transition:.14s;cursor:pointer;min-width:0}
+.gag-card:hover{border-color:var(--cu);transform:translateX(2px)}
+.gag-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.gag-time{font:600 12px var(--mono);color:var(--mut);min-width:98px;flex-shrink:0}
+/* Dönem Haritası (Semester View) */
+.gsem{flex:1;overflow-y:auto;padding:22px 26px 80px;display:flex;flex-direction:column;gap:18px}
+.gsem-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.gsem-stat{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.gsem-stat b{font:700 22px var(--mono);color:var(--cu)}
+.gsem-months{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+/* Etkinlik Modal / Popover (Google Calendar Birebir UI) */
+.gmodal-bg{position:fixed;inset:0;background:#00000055;z-index:95;display:none;align-items:center;justify-content:center;padding:16px}
+.gmodal-bg.show{display:flex}
+.gmodal{width:448px;max-width:100%;background:var(--bg2);border:1px solid var(--line);border-radius:24px;box-shadow:0 24px 60px #00000088,0 4px 16px #00000044;overflow:hidden;animation:in .15s ease;color:var(--txt);position:relative}
+.gm-top{display:flex;align-items:center;justify-content:space-between;padding:10px 14px 2px 16px;cursor:move;user-select:none}
+.gm-handle{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;color:var(--mut);font-size:18px;letter-spacing:-1px}
+.gm-handle:hover{background:var(--bg3);color:var(--txt)}
+.gm-close{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:var(--mut);font-size:16px;transition:.12s;cursor:pointer}
+.gm-close:hover{background:var(--bg3);color:var(--txt)}
+.gm-title-wrap{padding:2px 20px 10px 56px}
+.gm-title-in{width:100%;background:transparent;border:0;border-bottom:1.5px solid var(--line);color:var(--txt);font:400 22px/1.35 var(--sans);padding:4px 0 6px;outline:0;transition:border-color .15s}
+.gm-title-in::placeholder{color:var(--mut);opacity:.85}
+.gm-title-in:focus{border-bottom:2px solid #4c8df6}
+.gm-tabs{display:flex;align-items:center;gap:6px;padding:4px 20px 12px 56px;flex-wrap:wrap}
+.gm-tab{padding:6px 14px;border-radius:8px;font:500 13px var(--sans);color:var(--mut);background:transparent;transition:.12s;cursor:pointer}
+.gm-tab:hover{background:var(--bg3);color:var(--txt)}
+.gm-tab.on{background:#c2e7ff;color:#001d35;font-weight:600}
+body[data-theme="obsidian"] .gm-tab.on,body[data-theme="gruvbox"] .gm-tab.on{background:#c2e7ff;color:#001d35}
+.gm-rows{display:flex;flex-direction:column;gap:2px;padding:0 16px 8px 12px;max-height:62vh;overflow-y:auto}
+.gm-r{display:grid;grid-template-columns:44px 1fr;align-items:center;min-height:42px;padding:5px 4px;border-radius:10px;transition:background .12s;cursor:pointer}
+.gm-r:hover{background:var(--bg3)}
+.gm-r.align-top{align-items:start;padding-top:8px}
+.gm-ic{width:36px;height:36px;display:grid;place-items:center;color:var(--mut);flex-shrink:0}
+.gm-ic svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.gm-rbody{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:13.5px;color:var(--txt)}
+.gm-inline-in{width:100%;background:transparent;border:0;border-bottom:1px solid transparent;color:var(--txt);font:13.5px var(--sans);padding:4px 0;outline:0;transition:border-color .14s}
+.gm-inline-in::placeholder{color:var(--mut)}
+.gm-inline-in:focus{border-bottom-color:#4c8df6}
+.gm-pill-btn{padding:5px 15px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:#4c8df6;font:500 12.5px var(--sans);white-space:nowrap;transition:.12s;cursor:pointer}
+.gm-pill-btn:hover{background:#4c8df618;border-color:#4c8df6}
+.gm-sub{font-size:12px;color:var(--mut);line-height:1.35}
+.gm-dot{width:14px;height:14px;border-radius:50%;display:inline-block;flex-shrink:0;cursor:pointer;box-shadow:0 0 0 2px var(--bg2)}
+.gm-foot{display:flex;align-items:center;justify-content:space-between;padding:10px 20px 16px;gap:10px}
+.gm-more-btn{padding:8px 14px;border-radius:999px;font:500 13.5px var(--sans);color:#4c8df6;background:transparent;transition:.12s;cursor:pointer}
+.gm-more-btn:hover{background:#4c8df615}
+.gm-save-btn{padding:9px 24px;border-radius:999px;background:#0b57d0;color:#fff;font:600 13.5px var(--sans);box-shadow:0 2px 8px #0b57d055;transition:.14s;cursor:pointer}
+.gm-save-btn:hover{background:#1b66df;transform:translateY(-1px)}
+.gmodal-in{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--txt);padding:6px 10px;border-radius:8px;font:13px var(--sans);outline:0}
+.gmodal-in:focus{border-color:#4c8df6}
 .sim{padding:28px;display:grid;gap:16px;width:100%;box-sizing:border-box;max-width:900px;margin:0 auto}
 .sim h1{font-size:28px;letter-spacing:-.02em}
 canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;display:block}
@@ -219,6 +435,52 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .rt:hover{color:var(--txt)} .rt.on{color:var(--txt);box-shadow:inset 0 -2px 0 var(--cu)}
 .rbody{flex:1;overflow:auto;padding:14px;display:none}
 .rbody.on{display:flex;flex-direction:column;gap:10px}
+/* ---- NotebookLM tarzı Çalış modu ---- */
+.sc-wrap{display:flex;flex-direction:column;height:100%;min-height:0}
+.sc-head{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--line);font-size:14px}
+.sc-src{font:11.5px var(--mono);color:var(--cu);background:var(--cu-d);padding:2px 9px;border-radius:99px}
+.sc-body{flex:1;overflow:auto;padding:26px 0}
+.sc-col{max-width:780px;margin:0 auto;padding:0 28px;display:flex;flex-direction:column;gap:18px}
+.sc-hero{text-align:center;margin:8vh 0 4px}
+.sc-hero .big{font-size:30px;font-weight:600;letter-spacing:-.02em}
+.sc-hero .sub{color:var(--mut);margin-top:8px;font-size:14px}
+.sc-msg{font-size:14.5px;line-height:1.65}
+.sc-msg.me{align-self:flex-end;max-width:82%;background:var(--bg3);border:1px solid var(--line);padding:10px 16px;border-radius:20px 20px 4px 20px}
+.sc-msg.a{padding:2px 2px 0}
+.sc-msg.a h1,.sc-msg.a h2,.sc-msg.a h3{margin:14px 0 6px;line-height:1.3}
+.sc-msg.a p{margin-bottom:8px}.sc-msg.a ul,.sc-msg.a ol{margin:6px 0 10px 20px}
+.sc-msg.a pre{background:var(--bg3);border:1px solid var(--line);padding:12px 14px;border-radius:12px;overflow:auto}
+.sc-msg.a table{border-collapse:collapse;margin:10px 0;font-size:13px}.sc-msg.a th,.sc-msg.a td{border:1px solid var(--line);padding:6px 9px}
+.sc-msg.a .route{display:none}
+.sc-act{display:flex;gap:6px;margin-top:8px;opacity:.55;transition:opacity .15s}
+.sc-msg:hover .sc-act{opacity:1}
+.sc-act button{border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:99px;padding:3px 11px;font-size:11.5px;cursor:pointer}
+.sc-act button:hover{color:var(--cu);border-color:var(--cu)}
+.sc-foot{padding:6px 0 18px}
+.sc-chips{max-width:780px;margin:0 auto 10px;padding:0 28px;display:flex;gap:8px;flex-wrap:wrap}
+.sc-chips button{border:1px solid var(--line);background:var(--bg3);color:var(--txt);border-radius:99px;padding:6px 14px;font-size:12.5px;cursor:pointer}
+.sc-chips button:hover{border-color:var(--cu);color:var(--cu)}
+.sc-box{max-width:780px;margin:0 auto;width:calc(100% - 56px);display:flex;align-items:flex-end;gap:10px;background:var(--bg3);border:1px solid var(--line);border-radius:28px;padding:8px 8px 8px 20px}
+.sc-box:focus-within{border-color:var(--cu)}
+.sc-box textarea{flex:1;background:transparent;border:0;outline:0;color:var(--txt);font:inherit;font-size:14.5px;resize:none;padding:8px 0;max-height:40vh}
+.sc-n{font:11px var(--mono);color:var(--mut);padding-bottom:12px;white-space:nowrap}
+.sc-go{width:38px;height:38px;border-radius:50%;border:0;background:var(--cu);color:var(--bg);font-size:16px;cursor:pointer;flex-shrink:0}
+.sc-go:disabled{opacity:.4;cursor:default}
+.st-wrap{padding:14px;display:flex;flex-direction:column;gap:14px}
+.st-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);display:flex;justify-content:space-between}
+.st-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.st-tile{display:flex;flex-direction:column;gap:6px;text-align:left;border:1px solid var(--line);background:var(--bg3);color:var(--txt);border-radius:14px;padding:11px 12px;font-size:12.5px;cursor:pointer;transition:border-color .15s,transform .1s}
+.st-tile:hover{border-color:var(--cu);transform:translateY(-1px)}
+.st-tile .ic{font-size:17px;color:var(--cu)}
+.st-card{border:1px solid var(--line);background:var(--bg3);border-radius:14px;padding:11px 13px;display:flex;flex-direction:column;gap:6px}
+.st-card .t{font-weight:600;font-size:13px;cursor:pointer;display:flex;gap:6px;align-items:center}
+.st-card .pv{font-size:12px;color:var(--mut);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.st-card .full{font-size:13px;line-height:1.6;max-height:420px;overflow:auto;border-top:1px solid var(--line);padding-top:8px}
+.st-card .full p{margin-bottom:6px}.st-card .full ul{margin:4px 0 8px 18px}
+.st-card .ft{display:flex;gap:6px;font-size:11px;color:var(--mut);align-items:center}
+.st-card .ft button{border:0;background:transparent;color:var(--mut);cursor:pointer;font-size:12px}
+.st-card .ft button:hover{color:var(--cu)}
+.st-empty{color:var(--mut);font-size:12.5px;text-align:center;padding:18px 8px;border:1px dashed var(--line);border-radius:14px}
 .msg{padding:10px 12px;border-radius:10px;background:var(--bg3);font-size:13.5px;animation:in .2s ease}
 .msg.me{background:var(--cu-d);align-self:flex-end;max-width:90%}
 .msg h1,.msg h2,.msg h3{margin:12px 0 6px;line-height:1.3;color:var(--txt)}
@@ -466,7 +728,7 @@ body.fw-full .doc{max-width:none}
     <button class="rbtn on" data-mode="kasalar" data-tip="Kasalar (NotebookLM)">❖</button>
     <button class="rbtn" data-mode="write" data-tip="Not Defteri & Yaz">✎</button>
     <button class="rbtn" data-mode="study" data-tip="Kaynaklarla Çalış (NotebookLM)">◈</button>
-    <button class="rbtn" data-mode="plan" data-tip="Akademik Takvim">▦</button>
+    <button class="rbtn" data-mode="plan" data-tip="AgyCal · Akıllı Takvim">▦</button>
     <button class="rbtn" data-mode="ai" data-tip="Tam Ekran AI Oturumları">◆</button>
     <div class="sp"></div>
     <button class="rbtn" id="themeBtn" data-tip="Görünüm ve Tema Seçici">◑</button>
@@ -528,6 +790,7 @@ body.fw-full .doc{max-width:none}
     <div class="resizer resizer-r" id="resRight" title="Sürükle: Sağ paneli boyutlandır (280–680 px) · Çift tıkla: Sıfırla"></div>
     <div class="pane-in">
     <div class="rtabs" id="rtabsBar">
+      <div class="rt" data-rt="studio" style="display:none">Studio</div>
       <div class="rt on" data-rt="ai">AI</div>
       <div class="rt" data-rt="skills">Skill'ler</div>
       <div class="rt" data-rt="props">Özellikler</div>
@@ -546,6 +809,8 @@ body.fw-full .doc{max-width:none}
         <div style="padding:28px 18px;color:var(--mut);text-align:center;font-size:13px">Bir resim, PDF veya DOCX dosyasına çift tıkladığında burada açılır.</div>
       </div>
     </div>
+
+    <div class="rbody" id="rb-studio" style="padding:0"></div>
 
     <div class="rbody on" id="rb-ai" style="padding:0">
       <div class="rview-head" style="justify-content:space-between">
@@ -603,7 +868,7 @@ let tree=[];
 const pages={
  kasalar:{t:'Kasalar (Ana Ekran)',i:'❖'},
  trafo:{t:'Trafo Lab Analizörü',i:'⚡'},
- cal:{t:'Akademik Takvim',i:'▦'},
+ cal:{t:'AgyCal',i:'▦'},
  sim:{t:'Filtre Simülatörü',i:'∿'}
 };
 const WIKI_MAP={
@@ -613,7 +878,8 @@ const WIKI_MAP={
  'düşük geçiren filtre':'sim',
  'filtre tasarımı':'sim',
  'takvim':'cal',
- 'sınav takvimi':'cal'
+ 'sınav takvimi':'cal',
+ 'agycal':'cal'
 };
 const noteCache={};
 let editMode=false;
@@ -953,6 +1219,8 @@ function updateSideAiCtx(){
   const hasNote=String(active).startsWith('note:');
   const kName=currentKasa==='all'?'Tüm Kasalar':((kasalarData.find(k=>k.key===currentKasa)||{}).title||currentKasa);
   el.textContent=`📚 ${kName} · ${n} kaynak${hasNote?' + aktif not':''}`;
+  const s1=$('#scSrc'); if(s1) s1.textContent=`📚 ${kName}`;
+  const s2=$('#scN'); if(s2) s2.textContent=n+' kaynak';
   const stK=$('#stKasa');
   if(stK) stK.textContent=`Kasa: ${kName} (${kasalarData.reduce((a,k)=>a+(k.counts?k.counts.total:0),0)} dosya)`;
 }
@@ -964,7 +1232,7 @@ function rebuildTreeAndSources(){
       {n:'Kasalar (NotebookLM Ana Ekran)',id:'kasalar',i:'❖'},
       {n:'Trafo Lab Analizörü',id:'trafo',i:'⚡'},
       {n:'RC Filtre Bode Simülatörü',id:'sim',i:'∿'},
-      {n:'Akademik Takvim & Sınavlar',id:'cal',i:'▦'}
+      {n:'AgyCal · Akıllı Takvim',id:'cal',i:'▦'}
     ]}
   ];
   const sh=$('#sources');
@@ -978,9 +1246,9 @@ function rebuildTreeAndSources(){
         const isChk=checkedSources.has(s.rel);
         const lbl=currentKasa==='all'?s.title:(s.short_title||s.title);
         const safeT=(s.title||'').replace(/'/g,'');
-        const act=side?`onclick="if(event.target.tagName!=='INPUT'&&!event.target.dataset.tabbtn){openRightViewer('${s.rel}','${safeT}')}" ondblclick="if(event.target.tagName!=='INPUT'){event.preventDefault();openPage('${s.id}',true)}"`:`onclick="if(event.target.tagName!=='INPUT'){event.preventDefault();openPage('${s.id}')}"`;
+        const act=side?`onclick="if(event.target.tagName!=='INPUT'&&!event.target.dataset.tabbtn){openRightViewer('${s.rel}','${safeT}')}" onmousedown="if(event.button===1)event.preventDefault()" onauxclick="if(event.button===1){event.preventDefault();event.stopPropagation();openPage('${s.id}',true,{newTab:true})}"`:`onclick="if(event.target.tagName!=='INPUT'){event.preventDefault();openPage('${s.id}')}"`;
         const tabBtn=side?`<button class="ph-btn" data-tabbtn="1" style="width:18px;height:18px;font-size:10.5px;margin-left:auto;margin-right:4px" onclick="event.preventDefault();event.stopPropagation();openPage('${s.id}',true)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢</button>`:'';
-        return `<label class="src" style="cursor:pointer;gap:6px" ${act} title="${s.title}${side?' (Tıkla: Sağda önizle · Çift tıkla veya ⤢: Sekmede aç)':''}"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${s.icon} ${lbl}</span>${tabBtn}<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-right:4px${side?'':';margin-left:auto'}" onclick="event.preventDefault();event.stopPropagation();deleteActiveNote('${s.id}')" title="Kasadan sil">🗑</button><input type="checkbox" data-src="${s.rel}" ${isChk?'checked':''} onchange="onSourceCheck('${s.rel}',this.checked)"></label>`;
+        return `<label class="src" style="cursor:pointer;gap:6px" ${act} title="${s.title}${side?' (Tıkla: Sağda önizle · Orta tuş veya ⤢: Sekmede aç)':''}"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${s.icon} ${lbl}</span>${tabBtn}<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-right:4px${side?'':';margin-left:auto'}" onclick="event.preventDefault();event.stopPropagation();deleteActiveNote('${s.id}')" title="Kasadan sil">🗑</button><input type="checkbox" data-src="${s.rel}" ${isChk?'checked':''} onchange="onSourceCheck('${s.rel}',this.checked)"></label>`;
       }).join('');
   }
   updateSideAiCtx();
@@ -1070,7 +1338,7 @@ function svgIcon(raw){
   if(raw==='⚡'||raw==='🌩') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.8 2 3.5 9h4.1l-.4 5 5.3-7H8.4Z"/></svg>';
   if(raw==='🌐'||raw==='🛰') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.8"/><path d="M2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8c-1.6-1.6-2.4-3.6-2.4-5.8S6.4 3.8 8 2.2Z"/></svg>';
   if(raw==='∿') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.8 8c1.5-4.5 3.1-4.5 4.6 0s3.1 4.5 4.6 0 2.2-2.2 3.2 0"/></svg>';
-  if(raw==='▦') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.2" y="3" width="11.6" height="10.5" rx="1.6"/><path d="M2.2 6.5h11.6M5.5 2v2M10.5 2v2"/></svg>';
+  if(raw==='▦') return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.8" width="12" height="11.4" rx="2"/><path d="M2 5.8h12M5.2 1.6v2.2M10.8 1.6v2.2"/><text x="8" y="12.1" text-anchor="middle" fill="currentColor" stroke="none" font-size="6.2" font-weight="800" font-family="var(--mono)">${new Date().getDate()}</text></svg>`;
   if(raw==='◆') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 2.2 13.8 8 8 13.8 2.2 8Z"/></svg>';
   return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.2h5.5L12.5 5v8.8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z"/><path d="M9.2 2.2V5.2h3.2M5.5 8h5M5.5 10.6h3.5"/></svg>';
 }
@@ -1078,11 +1346,13 @@ function firstVaultTab(){
   for(const g of tree){ if(g.k&&g.k.length&&g.k[0].id) return g.k[0].id; }
   return 'kasalar';
 }
+const TREE_OPEN={};
 function renderTree(){
   const root=$('#tree'); root.innerHTML='';
   const build=(arr,host)=>arr.forEach(x=>{
     const d=document.createElement('div');
     const side=x.id&&isSideDoc(x.id);
+    const tk=(x.id||'')+'|'+x.n; if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
     d.className='ti'+(x.k?' folder':'')+(x.open?' open':'')+(x.id===active?' on':'');
     d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:x.n;
     const delBtn=(!x.k&&String(x.id||'').startsWith('note:'))?`<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-left:${side?'0':'auto'}" onclick="event.stopPropagation();deleteActiveNote('${x.id}')" title="Kasadan sil">🗑</button>`:'';
@@ -1092,7 +1362,7 @@ function renderTree(){
     let kids;
     if(x.k){kids=document.createElement('div');kids.className='kids'+(x.open?' show':'');host.appendChild(kids);build(x.k,kids);}
     d.onclick=e=>{
-      if(x.k){d.classList.toggle('open');kids.classList.toggle('show');}
+      if(x.k){d.classList.toggle('open');kids.classList.toggle('show');x.open=d.classList.contains('open');TREE_OPEN[tk]=x.open;}
       if(x.id&&(e.ctrlKey||e.metaKey)){ openPage(x.id,true,{newTab:true}); return; }
       if(x.id&&!side)openPage(x.id,false,{replace:true});
       if(x.id&&side){
@@ -1218,7 +1488,8 @@ function closeRightViewer(){
   if(prev){
     rightW=clampRight(prev.w||340);
     applyPaneWidths();
-    const t=$(`.rt[data-rt=${prev.rt}]`)||$('.rt[data-rt=ai]');
+    const prt=(curMode==='study'&&prev.rt==='ai')?'studio':prev.rt;
+    const t=$(`.rt[data-rt=${prt}]`)||$('.rt[data-rt=ai]');
     if(t){
       $$('.rt').forEach(x=>x.classList.toggle('on',x===t));
       $$('.rbody').forEach(b=>b.classList.toggle('on',b.id==='rb-'+t.dataset.rt));
@@ -1274,6 +1545,7 @@ function closeTab(id){
   renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();
 }
 const isAI=id=>id.startsWith('ai');
+pages.studychat={t:'Sohbet',i:'❖'};
 const pg=id=>isAI(id)?{t:(ai[id]?ai[id].title:id),i:'◆'}:(isBlank(id)?{t:'Yeni sekme',i:'📄'}:(pages[id]||{t:id,i:'📝'}));
 let draggedTabId=null, isTabDragging=false;
 function moveActiveTab(dir){
@@ -1312,7 +1584,16 @@ function renderTabs(){
     const info=pg(id);
     const shortcutHint=idx<8?` (Ctrl+${idx+1})`:(idx===openTabs.length-1?' (Ctrl+9)':'');
     d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir';
-    const badge=s?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`+(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):'';
+    let calBadge='';
+    if(id==='cal'&&typeof GCAL!=='undefined'){
+      if(GCAL.pomo&&GCAL.pomo.running){
+        calBadge=`<span class="acal-tab-pill pomo" id="acalTabPomo">⏱ ${gcalPad(Math.floor(GCAL.pomo.sec/60))}:${gcalPad(GCAL.pomo.sec%60)}</span>`;
+      }else if(typeof calEvents!=='undefined'&&calEvents.length){
+        const nx=calEvents.filter(e=>!e.done&&e.kind==='exam'&&gcalDaysDiff(e.date)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
+        if(nx){ const df=gcalDaysDiff(nx.date); calBadge=`<span class="acal-tab-pill exam" title="Yaklaşan Sınav: ${nx.title}">${df===0?'BUGÜN':'🔥 '+df+'g'}</span>`; }
+      }
+    }
+    const badge=s?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`+(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):calBadge;
     d.innerHTML=`<span class="tic">${svgIcon(info.i)}</span><span class="tt">${info.t}</span>${badge}<span class="x" data-x="${id}" title="Sekmeyi kapat (Ctrl+W)">✕</span>`;
     d.ondragstart=e=>{
       isTabDragging=true;
@@ -1453,6 +1734,7 @@ function renderSideAi(){
   const stBtn=$('#sideAiStop');
   if(stBtn) stBtn.style.display=(s.running||s.pending)?'inline-flex':'none';
   runMermaid('#chat .mermaid');
+  renderStudyChatBody();
 }
 function clearSideAi(){
   api('/api/clear',{session:'side_ai'}).catch(()=>{});
@@ -1462,7 +1744,7 @@ function clearSideAi(){
 }
 function runMermaid(sel){
   if(!window.mermaid)return;
-  const mTheme=(typeof curTheme!=='undefined'&&(curTheme==='eink'||curTheme==='sepia'))?'neutral':'dark';
+  const mTheme=(typeof curTheme!=='undefined'&&(curTheme==='eink'||curTheme==='sepia'||curTheme==='mono-light'))?'neutral':'dark';
   try{ mermaid.initialize({startOnLoad:false,theme:mTheme}); mermaid.run({querySelector:sel}); }catch(e){}
 }
 function aiRefresh(id){
@@ -1562,6 +1844,7 @@ function startEvents(){
       const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
       const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span><span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
       s.msgs.push({w:'a',h});
+      if(d.session==='side_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(d.session==='side_ai' && $('#outs')){
         const outBox=document.createElement('div'); outBox.className='out';
@@ -1688,7 +1971,7 @@ function renderKasalarHome(m){
       </div>
       <div class="ktool" onclick="setMode('plan')">
         <div class="ic">▦</div>
-        <div><b>Akademik Takvim</b><small>Vize, lab ve proje teslim planlayıcı</small></div>
+        <div><b>AgyCal</b><small>Akıllı takvim, doğal dil komutu &amp; sınav radarı</small></div>
       </div>
       <div class="ktool" onclick="setMode('ai')">
         <div class="ic">◆</div>
@@ -2393,6 +2676,7 @@ function renderMain(){
   if(active==='kasalar') renderKasalarHome(m);
   else if(isBlank(active)) renderBlankTab(m);
   else if(active.startsWith('note:')) renderVaultNote(m,active);
+  else if(active==='studychat') renderStudyChat(m);
   else if(active==='cal') renderCal(m);
   else if(active==='trafo') renderTrafoLab(m);
   else if(isAI(active)) renderAI(m);
@@ -2409,6 +2693,7 @@ const SK={
 };
 function runSkill(k){
   const s=SK[k]; if(!s)return;
+  if(curMode==='study'){ studioPendingTitle=s.h; if(active!=='studychat') openPage('studychat'); }
   rtab('ai');
   const promptText=s.prompt||(`/${k} — aktif not ve seçili kaynaklar üzerinde uygula.`);
   aiSend('side_ai',promptText,k);
@@ -2420,59 +2705,1469 @@ function wireDrop(){
   dz.addEventListener('drop',ev=>{if(ev.dataTransfer.files.length)return;ev.preventDefault();dz.classList.remove('hot');runSkill(ev.dataTransfer.getData('text/plain'));});
 }
 
-/* ---------- Gerçek Akademik Takvim ---------- */
+/* ---------- Google Takvim Esinli Akademik Takvim & Planlama Stüdyosu ---------- */
 let calEvents=[];
-async function renderCal(m){
-  try{ calEvents=await api('/api/calendar'); }catch(e){}
-  const byDay={};
-  calEvents.forEach(ev=>{ (byDay[ev.day]=byDay[ev.day]||[]).push(ev); });
-  const todayDate=new Date().getDate();
-  let h=`<div class="cal">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-      <div>
-        <h1>Akademik Takvim &amp; Sınav Planlayıcı <span class="gsync">● Veritabanına Bağlı</span></h1>
-        <div style="color:var(--mut)">Kasım 2026 · Sınav, Lab ve Proje Teslimleri (Tıklayıp silebilir veya yeni etkinlik ekleyebilirsin)</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input id="calDayIn" type="number" min="1" max="30" value="${todayDate}" style="width:64px;background:var(--bg);border:1px solid var(--line);color:var(--txt);padding:7px 8px;border-radius:8px;font:13px var(--mono)" title="Gün (1-30)">
-        <select id="calKindIn" style="background:var(--bg);border:1px solid var(--line);color:var(--txt);padding:7px 8px;border-radius:8px;font:13px var(--sans)">
-          <option value="exam">🔴 Sınav / Quiz</option>
-          <option value="lab">⚡ Lab Deneyi</option>
-          <option value="task">📘 Ödev / Çalışma</option>
-        </select>
-        <input id="calTitleIn" placeholder="Yeni sınav veya görev ekle…" style="width:220px;background:var(--bg);border:1px solid var(--line);color:var(--txt);padding:7px 10px;border-radius:8px;font:13px var(--sans)">
-        <button class="btn" style="padding:7px 14px" onclick="addCalEv()">＋ Ekle</button>
-      </div>
-    </div>
-    <div class="cgrid">`;
-  ['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'].forEach(d=>h+=`<div class="dh">${d}</div>`);
-  for(let i=0;i<6;i++)h+='<div></div>';
-  for(let d=1;d<=30;d++){
-    const isToday=(d===todayDate);
-    h+=`<div class="${isToday?'today':''}" onclick="$('#calDayIn').value=${d};$('#calTitleIn').focus()" style="cursor:pointer">
-      <span style="color:${isToday?'var(--cu)':'var(--mut)'};font-weight:${isToday?'600':'400'}">${d}${isToday?' · Bugün':''}</span>
-      ${(byDay[d]||[]).map(e=>`<div class="ev ${e.kind==='lab'?'g':''}" style="${e.kind==='exam'?'background:#e07a6a28;color:#ff9482;border:1px solid #e07a6a55':''}" onclick="event.stopPropagation();delCalEv(${e.id},'${e.title.replace(/'/g,"\\'")}')" title="Silmek için tıkla: ${e.title}">${e.title}</div>`).join('')}
+let calLoaded=false;
+const GCAL_MONTHS=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+const GCAL_MONTHS_SHORT=['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+const GCAL_DAYS=['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+const GCAL_DAYS_FULL=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+
+const GCAL_KINDS={
+  exam:{id:'exam',label:'Sınav / Vize / Quiz',icon:'🔴',solid:'#d93025',color:'#ff6b6b',bg:'#ff6b6b22',bd:'#ff6b6b88'},
+  lab:{id:'lab',label:'Lab & Deney',icon:'⚡',solid:'#188038',color:'#52b788',bg:'#52b78824',bd:'#52b78888'},
+  task:{id:'task',label:'Ödev & Proje Teslimi',icon:'📘',solid:'#e37400',color:'#e0a458',bg:'#e0a45824',bd:'#e0a45888'},
+  study:{id:'study',label:'Derin Çalışma / Pomodoro',icon:'🎯',solid:'#1a73e8',color:'#7aa2f7',bg:'#7aa2f724',bd:'#7aa2f788'},
+  lecture:{id:'lecture',label:'Ders / Amfi',icon:'🏛',solid:'#8e24aa',color:'#bb9af7',bg:'#bb9af720',bd:'#bb9af788'}
+};
+
+// Sabit Haftalık EEM Ders Programı (Pzt=1 .. Cum=5)
+const EEM_WEEKLY_SCHEDULE=[];
+
+const SEED_META_DEFAULTS={
+  3:{start:'19:00',end:'21:00',loc:'Çalışma Masası',desc:'Blok diyagram indirgeme, Mason kazanç formülü ve Routh-Hurwitz soru çözümü.'},
+  6:{start:'13:30',end:'16:00',loc:'Elektrik Makineleri Lab',desc:'3 fazlı transformatör bağlantı grupları (Dy11/Yy0), boşta ve kısa devre deney föyü.'},
+  9:{start:'15:00',end:'17:00',loc:'Proje Atölyesi',desc:'İHA itki sistemi, BLDC motor-ESC seçimi ve güç bütçesi ara raporu teslimi.'},
+  12:{start:'14:00',end:'16:00',loc:'D-204 / Kütüphane',desc:'Townsend & Streamer mekanizmaları, Paschen yasası ve kısmi deşarj (PD) not tekrarı.'},
+  18:{start:'10:00',end:'12:00',loc:'Amfi B-102',desc:'VİZE SINAVI: Transfer fonksiyonu, Routh-Hurwitz kararlılık kriteri, kararlı hal hatası ve köklerin yer eğrisi.'},
+  20:{start:'14:00',end:'16:00',loc:'Amfi A-201',desc:'VİZE SINAVI: Gazlarda/sıvılarda/katılarda delinme, küre elektrotlar, darbe gerilimi üreteçleri.'},
+  24:{start:'10:30',end:'12:00',loc:'EM Laboratuvarı',desc:'Tek fazlı ve 3 fazlı transformatör eşdeğer devre, fazör diyagramı ve verim/regülasyon sözlü sınavı.'}
+};
+
+const GCAL={
+  view:localStorage.getItem('agydesk_gcal_view')||'month', // 'day' | 'week' | 'month' | 'agenda' | 'semester'
+  cursor:gcalTodayISO(), // YYYY-MM-DD
+  miniMonth:null, // Date object for mini calendar month
+  sideOpen:localStorage.getItem('agydesk_gcal_side')!=='0',
+  showSchedule:localStorage.getItem('agydesk_gcal_sched')!=='0',
+  search:'',
+  agendaFilter:'all', // 'all' | 'exam' | 'pending' | 'done'
+  kasaFilter:'all',
+  kinds:{exam:true,lab:true,task:true,study:true,lecture:true},
+  editingId:null,
+  pomo:{sec:25*60,total:25*60,running:false,timer:null,mode:'25 dk Odak',taskTitle:'Yüksek Gerilim & Kontrol Vize Hazırlığı'}
+};
+
+function gcalPad(n){ return String(n).padStart(2,'0'); }
+function gcalToISO(d){ return `${d.getFullYear()}-${gcalPad(d.getMonth()+1)}-${gcalPad(d.getDate())}`; }
+function gcalFromISO(s){
+  const [y,m,d]=(s||'2026-11-12').split('-').map(Number);
+  return new Date(y||2026,(m||11)-1,d||12,12,0,0);
+}
+function gcalTodayISO(){
+  const now=new Date();
+  return gcalToISO(now);
+}
+function gcalDowMon(d){
+  // Pazartesi=0 .. Pazar=6
+  return (d.getDay()+6)%7;
+}
+function gcalStartOfWeek(d){
+  const c=new Date(d.getFullYear(),d.getMonth(),d.getDate(),12,0,0);
+  c.setDate(c.getDate()-gcalDowMon(c));
+  return c;
+}
+function gcalAddDays(d,n){
+  const c=new Date(d.getFullYear(),d.getMonth(),d.getDate(),12,0,0);
+  c.setDate(c.getDate()+n);
+  return c;
+}
+function gcalMin(hhmm){
+  if(!hhmm||!hhmm.includes(':')) return 9*60;
+  const [h,m]=hhmm.split(':').map(Number);
+  return (isNaN(h)?9:h)*60+(isNaN(m)?0:m);
+}
+function gcalFmtMin(m){
+  const c=Math.max(0,Math.min(23*60+59,Math.round(m)));
+  return `${gcalPad(Math.floor(c/60))}:${gcalPad(c%60)}`;
+}
+function gcalDiffDays(isoA,isoB){
+  const a=gcalFromISO(isoA), b=gcalFromISO(isoB);
+  return Math.round((a-b)/(86400*1000));
+}
+function gcalKasaTitle(k){
+  if(!k||k==='all') return 'Genel Akademik';
+  const found=(window.kasalarData||[]).find(x=>x.key===k);
+  return found?found.title:k.replace(/_/g,' ');
+}
+
+function gcalFmtDateHuman(iso){
+  const d=gcalFromISO(iso);
+  return `${GCAL_DAYS_FULL[d.getDay()]}, ${d.getDate()} ${GCAL_MONTHS[d.getMonth()]}`;
+}
+
+function parseCalEvent(raw){
+  let meta={};
+  let kasaStr=raw.kasa||'';
+  if(kasaStr.trim().startsWith('{')){
+    try{ meta=JSON.parse(kasaStr); kasaStr=meta.kasa||''; }catch(e){}
+  }
+  const dayNum=Math.max(1,Math.min(31,Number(raw.day)||12));
+  const seedDef=SEED_META_DEFAULTS[dayNum]||{};
+  const kind=GCAL_KINDS[raw.kind]?raw.kind:(GCAL_KINDS[meta.kind]?meta.kind:'task');
+  const defStart=kind==='exam'?'10:00':kind==='lab'?'13:30':kind==='study'?'20:00':'15:00';
+  const defEnd=kind==='exam'?'12:00':kind==='lab'?'16:00':kind==='study'?'21:30':'16:30';
+  const date=meta.date||`2026-11-${gcalPad(dayNum)}`;
+  return {
+    id:raw.id,
+    day:dayNum,
+    date,
+    title:raw.title||'Etkinlik',
+    kind,
+    kasa:kasaStr||'',
+    start:meta.start||seedDef.start||defStart,
+    end:meta.end||seedDef.end||defEnd,
+    allDay:!!meta.allDay,
+    loc:meta.loc||seedDef.loc||(kind==='exam'?'Sınav Amfisi':kind==='lab'?'Laboratuvar':''),
+    desc:meta.desc||seedDef.desc||'',
+    guests:meta.guests||'',
+    meet:meta.meet||'',
+    repeat:meta.repeat||'Yinelenmez',
+    notify:meta.notify||'Bir gün önce şu saatte: 5pm bildir',
+    done:!!meta.done,
+    recurring:false
+  };
+}
+
+function packCalMeta(ev){
+  return JSON.stringify({
+    kasa:ev.kasa||'',
+    date:ev.date,
+    start:ev.start||'10:00',
+    end:ev.end||'11:30',
+    allDay:!!ev.allDay,
+    loc:ev.loc||'',
+    desc:ev.desc||'',
+    guests:ev.guests||'',
+    meet:ev.meet||'',
+    repeat:ev.repeat||'Yinelenmez',
+    notify:ev.notify||'Bir gün önce şu saatte: 5pm bildir',
+    done:!!ev.done,
+    kind:ev.kind||'task'
+  });
+}
+
+function getAllEventsForDate(isoDate){
+  const list=calEvents.filter(e=>e.date===isoDate && GCAL.kinds[e.kind]!==false);
+  if(GCAL.showSchedule && GCAL.kinds.lecture!==false){
+    const d=gcalFromISO(isoDate);
+    const dow=d.getDay(); // 0=Paz, 1=Pzt..6=Cmt
+    // Sadece akademik dönem ayları için haftalık dersleri üret
+    EEM_WEEKLY_SCHEDULE.filter(s=>s.dow===dow).forEach((s,idx)=>{
+      list.push({
+        id:`lec_${isoDate}_${idx}`,
+        day:d.getDate(),
+        date:isoDate,
+        title:s.title,
+        kind:'lecture',
+        kasa:s.kasa,
+        start:s.start,
+        end:s.end,
+        allDay:false,
+        loc:s.loc,
+        desc:s.desc,
+        done:false,
+        recurring:true
+      });
+    });
+  }
+  return list.filter(e=>{
+    if(GCAL.kasaFilter!=='all' && e.kasa!==GCAL.kasaFilter) return false;
+    if(GCAL.search){
+      const q=GCAL.search.toLowerCase();
+      const hay=`${e.title} ${e.loc||''} ${e.desc||''} ${gcalKasaTitle(e.kasa)}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a,b)=>gcalMin(a.start)-gcalMin(b.start));
+}
+
+async function loadCalEvents(force=false){
+  if(!calLoaded||force){
+    try{
+      const rows=await api('/api/calendar');
+      if(Array.isArray(rows)) calEvents=rows.map(parseCalEvent);
+      calLoaded=true;
+    }catch(e){
+      if(!calEvents.length){ calEvents=[]; }
+    }
+  }
+}
+
+document.addEventListener('click',()=>{const d=document.getElementById('gcalViewDd');if(d)d.classList.remove('open')});
+function gcalSetView(v){
+  GCAL.view=v;
+  localStorage.setItem('agydesk_gcal_view',v);
+  renderCal($('#main'),false);
+}
+function gcalToggleSide(){
+  GCAL.sideOpen=!GCAL.sideOpen;
+  localStorage.setItem('agydesk_gcal_side',GCAL.sideOpen?'1':'0');
+  const el=$('.gcal');
+  if(el) el.classList.toggle('no-side',!GCAL.sideOpen);
+}
+function gcalToggleSchedule(){
+  GCAL.showSchedule=!GCAL.showSchedule;
+  localStorage.setItem('agydesk_gcal_sched',GCAL.showSchedule?'1':'0');
+  renderCal($('#main'),false);
+  toast(GCAL.showSchedule?'🎓 Haftalık EEM ders programı katmanı açıldı':'🎓 Haftalık ders programı katmanı gizlendi');
+}
+function gcalGoToday(){
+  GCAL.cursor=gcalTodayISO();
+  GCAL.miniMonth=gcalFromISO(GCAL.cursor);
+  renderCal($('#main'),false);
+}
+function gcalStep(dir){
+  const d=gcalFromISO(GCAL.cursor);
+  if(GCAL.view==='day') d.setDate(d.getDate()+dir);
+  else if(GCAL.view==='week') d.setDate(d.getDate()+dir*7);
+  else if(GCAL.view==='month') d.setMonth(d.getMonth()+dir);
+  else if(GCAL.view==='agenda') d.setMonth(d.getMonth()+dir);
+  else if(GCAL.view==='semester') d.setMonth(d.getMonth()+dir*4);
+  GCAL.cursor=gcalToISO(d);
+  GCAL.miniMonth=new Date(d.getFullYear(),d.getMonth(),1,12,0,0);
+  renderCal($('#main'),false);
+}
+function gcalSelectDate(iso,switchView=null){
+  GCAL.cursor=iso;
+  GCAL.miniMonth=gcalFromISO(iso);
+  if(switchView) GCAL.view=switchView;
+  renderCal($('#main'),false);
+}
+function gcalStepMini(dir){
+  const m=GCAL.miniMonth||gcalFromISO(GCAL.cursor);
+  GCAL.miniMonth=new Date(m.getFullYear(),m.getMonth()+dir,1,12,0,0);
+  renderCal($('#main'),false);
+}
+function gcalToggleKind(k){
+  GCAL.kinds[k]=!GCAL.kinds[k];
+  renderCal($('#main'),false);
+}
+function gcalHeaderTitle(){
+  const d=gcalFromISO(GCAL.cursor);
+  if(GCAL.view==='day'){
+    return `${d.getDate()} ${GCAL_MONTHS[d.getMonth()]} ${d.getFullYear()} · ${GCAL_DAYS_FULL[d.getDay()]}`;
+  }
+  if(GCAL.view==='week'){
+    const s=gcalStartOfWeek(d), e=gcalAddDays(s,6);
+    if(s.getMonth()===e.getMonth()) return `${s.getDate()} – ${e.getDate()} ${GCAL_MONTHS[s.getMonth()]} ${s.getFullYear()}`;
+    return `${s.getDate()} ${GCAL_MONTHS_SHORT[s.getMonth()]} – ${e.getDate()} ${GCAL_MONTHS_SHORT[e.getMonth()]} ${e.getFullYear()}`;
+  }
+  if(GCAL.view==='semester'){
+    return `Güz – Kış Akademik Dönemi (${d.getFullYear()})`;
+  }
+  return `${GCAL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function renderMiniCal(){
+  const m=GCAL.miniMonth||gcalFromISO(GCAL.cursor);
+  const y=m.getFullYear(), mo=m.getMonth();
+  const first=new Date(y,mo,1,12,0,0);
+  const startOffset=gcalDowMon(first);
+  const startDate=gcalAddDays(first,-startOffset);
+  const todayIso=gcalTodayISO();
+  let cells='';
+  GCAL_DAYS.forEach(dn=>{ cells+=`<div class="gmini-dh">${dn[0]}</div>`; });
+  for(let i=0;i<42;i++){
+    const cur=gcalAddDays(startDate,i);
+    const iso=gcalToISO(cur);
+    const isOther=cur.getMonth()!==mo;
+    const isToday=iso===todayIso;
+    const isSel=iso===GCAL.cursor;
+    const dayEvs=calEvents.filter(e=>e.date===iso);
+    const dots=dayEvs.slice(0,3).map(e=>`<i style="background:${(GCAL_KINDS[e.kind]||GCAL_KINDS.task).color}"></i>`).join('');
+    cells+=`<div class="gmini-d ${isOther?'dim':''} ${isSel?'sel':''} ${isToday?'today':''}" onclick="gcalSelectDate('${iso}')">
+      <span>${cur.getDate()}</span>
+      ${dots?`<div class="gmini-dots">${dots}</div>`:''}
     </div>`;
   }
-  m.innerHTML=h+'</div></div>';
+  return `<div class="gmini">
+    <div class="gmini-hd">
+      <span>${GCAL_MONTHS[mo]} ${y}</span>
+      <div style="display:flex;gap:2px">
+        <button class="gcal-icbtn" style="width:22px;height:22px" onclick="gcalStepMini(-1)" title="Önceki Ay">◀</button>
+        <button class="gcal-icbtn" style="width:22px;height:22px" onclick="gcalStepMini(1)" title="Sonraki Ay">▶</button>
+      </div>
+    </div>
+    <div class="gmini-grid">${cells}</div>
+  </div>`;
 }
-async function addCalEv(){
-  const day=+$('#calDayIn').value;
-  const kind=$('#calKindIn').value;
-  const title=$('#calTitleIn').value.trim();
-  if(!title||day<1||day>30){ $('#calTitleIn').focus(); return; }
-  try{
-    await api('/api/calendar',{day,title,kind,kasa:currentKasa});
-    renderCal($('#main'));
-    toast(`▦ ${day} Kasım'a eklendi: ${title}`);
-  }catch(e){ alert(e.message); }
+
+function renderExamRadar(){
+  const todayIso=gcalTodayISO();
+  const upcoming=calEvents
+    .filter(e=>!e.done && (e.kind==='exam'||e.kind==='lab'||e.kind==='task') && gcalDiffDays(e.date,todayIso)>=-1)
+    .sort((a,b)=>a.date.localeCompare(b.date)||gcalMin(a.start)-gcalMin(b.start))
+    .slice(0,5);
+  if(!upcoming.length){
+    return `<div style="font-size:12px;color:var(--mut);padding:6px 4px">Yaklaşan sınav veya teslim bulunmuyor.</div>`;
+  }
+  return upcoming.map(e=>{
+    const diff=gcalDiffDays(e.date,todayIso);
+    const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+    const badgeTxt=diff<0?'Dün':diff===0?'BUGÜN!':diff===1?'Yarın':`${diff} gün kaldı`;
+    const pct=Math.max(8,Math.min(100,Math.round((14-Math.min(14,Math.max(0,diff)))/14*100)));
+    return `<div class="gcal-cd" onclick="openCalModal(${e.id})" title="${e.title} · ${e.date} ${e.start}">
+      <div class="gcal-cd-top">
+        <span>${k.icon} ${e.title}</span>
+        <span class="gcal-cd-badge" style="background:${k.solid};color:#fff;border:1px solid ${k.solid}">${badgeTxt}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font:10.5px var(--mono);color:var(--mut)">
+        <span>${e.date.split('-').reverse().slice(0,2).join('.')} · ${e.start}</span>
+        <span>${gcalKasaTitle(e.kasa).slice(0,18)}</span>
+      </div>
+      <div class="gcal-cd-bar"><i style="width:${pct}%;background:${k.color}"></i></div>
+    </div>`;
+  }).join('');
 }
-async function delCalEv(id,title){
-  if(!confirm(`"${title}" etkinliğini takvimden silmek istiyor musun?`)) return;
+
+function renderMonthStage(){
+  const d=gcalFromISO(GCAL.cursor);
+  const y=d.getFullYear(), mo=d.getMonth();
+  const first=new Date(y,mo,1,12,0,0);
+  const startOffset=gcalDowMon(first);
+  const startDate=gcalAddDays(first,-startOffset);
+  const todayIso=gcalTodayISO();
+
+  let hdr=GCAL_DAYS.map(dn=>`<div>${dn}</div>`).join('');
+  let cells='';
+  for(let i=0;i<42;i++){
+    const cur=gcalAddDays(startDate,i);
+    const iso=gcalToISO(cur);
+    const isOther=cur.getMonth()!==mo;
+    const isToday=iso===todayIso;
+    const isWknd=cur.getDay()===0||cur.getDay()===6;
+    const evs=getAllEventsForDate(iso);
+    const dayLabel=(cur.getDate()===1||i===0)?`${cur.getDate()} ${GCAL_MONTHS_SHORT[cur.getMonth()]}`:cur.getDate();
+    cells+=`<div class="gmcell ${isOther?'other':''} ${isWknd?'wknd':''} ${isToday?'today':''}" data-date="${iso}"
+      onclick="gcalCellClick(event,'${iso}')"
+      ondblclick="openCalModal(null,'${iso}')"
+      ondragover="gcalDragOver(event)"
+      ondragleave="gcalDragLeave(event)"
+      ondrop="gcalDropOnDay(event,'${iso}')">
+      <div class="gmcell-top">
+        <span class="gmcell-num" onclick="event.stopPropagation();gcalSelectDate('${iso}','day')" title="Günlük görünüme git">${dayLabel}</span>
+        ${isToday?`<span style="font:700 9.5px var(--mono);color:var(--cu)">BUGÜN</span>`:(evs.length?`<span style="font:10px var(--mono);opacity:.6">${evs.length}</span>`:'')}
+      </div>
+      <div class="gmcell-evs">
+        ${evs.map(e=>{
+          const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+          const safeTitle=e.title.replace(/"/g,'&quot;');
+          return `<div class="gev-pill ${e.done?'done':''}" draggable="${!e.recurring}"
+            ondragstart="gcalDragStart(event,'${e.id}')"
+            onclick="event.stopPropagation();openCalModal('${e.id}')"
+            style="background:${k.solid};color:#fff;border-left-color:transparent"
+            title="${e.start}–${e.end} · ${safeTitle}${e.loc?' ('+e.loc+')':''}">
+            <b>${e.start}</b><span>${e.title}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+  return `<div class="gmonth">
+    <div class="gmonth-hdr">${hdr}</div>
+    <div class="gmonth-grid">${cells}</div>
+  </div>`;
+}
+
+function layoutOverlappingEvents(evs){
+  // Çakışan saatli etkinlikleri yan yana sütunlara böler (Google Calendar algoritması)
+  const sorted=[...evs].sort((a,b)=>gcalMin(a.start)-gcalMin(b.start)||(gcalMin(b.end)-gcalMin(a.end)));
+  const clusters=[];
+  let curCluster=[], clusterEnd=-1;
+  sorted.forEach(e=>{
+    const s=gcalMin(e.start), en=Math.max(s+30,gcalMin(e.end));
+    if(curCluster.length && s<clusterEnd){
+      curCluster.push(e);
+      clusterEnd=Math.max(clusterEnd,en);
+    }else{
+      if(curCluster.length) clusters.push(curCluster);
+      curCluster=[e];
+      clusterEnd=en;
+    }
+  });
+  if(curCluster.length) clusters.push(curCluster);
+
+  const positioned=[];
+  clusters.forEach(cl=>{
+    const cols=[];
+    cl.forEach(e=>{
+      const s=gcalMin(e.start), en=Math.max(s+30,gcalMin(e.end));
+      let placed=false;
+      for(let c=0;c<cols.length;c++){
+        if(cols[c]<=s){
+          cols[c]=en;
+          positioned.push({ev:e,col:c,totalCols:0});
+          placed=true;
+          break;
+        }
+      }
+      if(!placed){
+        cols.push(en);
+        positioned.push({ev:e,col:cols.length-1,totalCols:0});
+      }
+    });
+    const nCols=cols.length;
+    positioned.slice(-cl.length).forEach(p=>{ p.totalCols=nCols; });
+  });
+  return positioned;
+}
+
+function renderTimeGrid(daysList,isSingleDay=false){
+  const START_H=7, END_H=23; // 07:00 .. 23:00 (16 saat * 60px = 960px)
+  const todayIso=gcalTodayISO();
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  const colCls=isSingleDay?'cols-1':'cols-7';
+
+  let topHdr=`<div class="gw-tz">GMT+3</div>`;
+  let allDayCells=`<div class="gw-ad-lbl">TÜM GÜN</div>`;
+  daysList.forEach(d=>{
+    const iso=gcalToISO(d);
+    const isToday=iso===todayIso;
+    const dn=GCAL_DAYS[gcalDowMon(d)];
+    topHdr+=`<div class="gw-dh ${isToday?'today':''}" onclick="gcalSelectDate('${iso}','day')" title="Günlük görünüme geç">
+      <div class="dn">${dn}</div>
+      <div class="dd">${d.getDate()}</div>
+    </div>`;
+    const allEvs=getAllEventsForDate(iso);
+    const adEvs=allEvs.filter(e=>e.allDay||e.kind==='exam');
+    allDayCells+=`<div class="gw-ad-cell">
+      ${adEvs.map(e=>{
+        const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+        return `<div class="gev-pill ${e.done?'done':''}" onclick="openCalModal('${e.id}')" style="background:${k.solid};color:#fff;border-left-color:transparent">
+          <span>${k.icon} ${e.title}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  });
+
+  let timeLabels='';
+  for(let h=START_H;h<END_H;h++){
+    timeLabels+=`<div class="gw-tlbl">${h===START_H?'':`${gcalPad(h)}:00`}</div>`;
+  }
+
+  let colsHtml='';
+  daysList.forEach(d=>{
+    const iso=gcalToISO(d);
+    const isToday=iso===todayIso;
+    let slots='';
+    for(let h=START_H;h<END_H;h++){
+      const hh=`${gcalPad(h)}:00`;
+      slots+=`<div class="gw-slot" onclick="openCalModal(null,'${iso}','${hh}')"
+        ondragover="gcalDragOver(event)"
+        ondragleave="gcalDragLeave(event)"
+        ondrop="gcalDropOnSlot(event,'${iso}',${h})"
+        title="${iso} ${hh} — Etkinlik eklemek için tıkla"></div>`;
+    }
+    const evs=getAllEventsForDate(iso).filter(e=>!e.allDay);
+    const pos=layoutOverlappingEvents(evs);
+    const evBlocks=pos.map(({ev,col,totalCols})=>{
+      const k=GCAL_KINDS[ev.kind]||GCAL_KINDS.task;
+      const sMin=Math.max(START_H*60,gcalMin(ev.start));
+      const eMin=Math.min(END_H*60,Math.max(sMin+35,gcalMin(ev.end)));
+      const topPx=Math.max(0,(sMin-START_H*60));
+      const heightPx=Math.max(28,(eMin-sMin)-2);
+      const widthPct=100/totalCols;
+      const leftPct=col*widthPct;
+      return `<div class="gw-ev ${ev.recurring?'lec':''} ${ev.done?'done':''}"
+        draggable="${!ev.recurring}"
+        ondragstart="gcalDragStart(event,'${ev.id}')"
+        onclick="event.stopPropagation();openCalModal('${ev.id}')"
+        style="top:${topPx}px;height:${heightPx}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 5px);background:${k.solid};color:#fff;border:1px solid ${k.solid}">
+        <div class="et">${ev.start} – ${ev.end}</div>
+        <div class="en">${k.icon} ${ev.title}</div>
+        ${heightPx>=48&&ev.loc?`<div class="el">📍 ${ev.loc}</div>`:''}
+        ${heightPx>=68&&ev.kasa?`<div class="el">❖ ${gcalKasaTitle(ev.kasa)}</div>`:''}
+      </div>`;
+    }).join('');
+
+    let nowLine='';
+    if(isToday && nowMin>=START_H*60 && nowMin<=END_H*60){
+      const nowTop=nowMin-START_H*60;
+      nowLine=`<div class="gw-now" style="top:${nowTop}px"><span class="gw-now-tag">${gcalPad(now.getHours())}:${gcalPad(now.getMinutes())}</span></div>`;
+    }
+    colsHtml+=`<div class="gw-col ${isToday?'today':''}">${slots}${evBlocks}${nowLine}</div>`;
+  });
+
+  return `<div class="gweek">
+    <div class="gweek-top ${colCls}">${topHdr}</div>
+    <div class="gw-allday ${colCls}">${allDayCells}</div>
+    <div class="gweek-scroll" id="gweekScroll">
+      <div class="gweek-grid ${colCls}" style="height:${(END_H-START_H)*60}px">
+        <div class="gw-times">${timeLabels}</div>
+        ${colsHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderWeekStage(){
+  const start=gcalStartOfWeek(gcalFromISO(GCAL.cursor));
+  const days=Array.from({length:7},(_,i)=>gcalAddDays(start,i));
+  return renderTimeGrid(days,false);
+}
+
+function renderDayStage(){
+  const cur=gcalFromISO(GCAL.cursor);
+  const iso=GCAL.cursor;
+  const dayEvs=getAllEventsForDate(iso);
+  const p=GCAL.pomo;
+  const pct=Math.round((p.sec/Math.max(1,p.total))*100);
+  const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+
+  // O günkü ders kasalarına ait notları bul
+  const activeKasas=new Set(dayEvs.map(e=>e.kasa).filter(Boolean));
+  const relatedNotes=Object.entries(window.pages||{}).filter(([id,pg])=>id.startsWith('note:')&&(activeKasas.size?activeKasas.has(pg.kasa):true)).slice(0,6);
+
+  return `<div class="gday-wrap">
+    ${renderTimeGrid([cur],true)}
+    <div class="gday-cockpit">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font:600 11px var(--mono);color:var(--cu);text-transform:uppercase">GÜNLÜK ODAK KOKPİTİ</div>
+          <div style="font-size:16px;font-weight:600">${cur.getDate()} ${GCAL_MONTHS[cur.getMonth()]} ${GCAL_DAYS_FULL[cur.getDay()]}</div>
+        </div>
+        <button class="gcal-btn pri" onclick="openCalModal(null,'${iso}','14:00')">＋ Saat Ekle</button>
+      </div>
+
+      <!-- Pomodoro Odak Sayacı -->
+      <div class="gpomo">
+        <div class="gpomo-ring" id="gpomoRing" style="--pp:${pct}">
+          <span class="gpomo-time" id="gpomoTime">${mm}:${ss}</span>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+          <div style="font:600 11px var(--mono);color:var(--cu)">⏱ POMODORO ÇALIŞMA SAYACI · ${p.mode}</div>
+          <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.taskTitle}">🎯 ${p.taskTitle}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">
+            <button class="gcal-btn ${p.running?'on':''}" onclick="gcalPomoToggle()">${p.running?'⏸ Duraklat':'▶ Başlat'}</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(25,'25 dk Odak')">25 dk</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(50,'50 dk Derin')">50 dk</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(5,'5 dk Mola')">Mola</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Seçili Günün Görev & Etkinlik Listesi -->
+      <div class="gcal-sec">
+        <div class="gcal-sec-hd"><span>GÜNÜN PLANI (${dayEvs.length})</span><span style="color:var(--cu);cursor:pointer" onclick="gcalAskAiForDay('${iso}')">✨ AI ile Günü Planla</span></div>
+        ${dayEvs.length?dayEvs.map(e=>{
+          const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+          return `<div class="gag-card" style="padding:8px 11px" onclick="openCalModal('${e.id}')">
+            ${!e.recurring?`<input type="checkbox" ${e.done?'checked':''} onclick="event.stopPropagation();gcalToggleDone(${e.id})" style="accent-color:var(--cu);cursor:pointer">`:`<span class="gag-dot" style="background:${k.color}"></span>`}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12.5px;font-weight:600;${e.done?'text-decoration:line-through;opacity:.55':''}">${k.icon} ${e.title}</div>
+              <div style="font:11px var(--mono);color:var(--mut)">${e.start}–${e.end}${e.loc?' · 📍 '+e.loc:''}</div>
+            </div>
+            <button class="gcal-icbtn" onclick="event.stopPropagation();gcalStartPomoFor('${e.title.replace(/'/g,"\\'")}')" title="Bu görev için Pomodoro başlat">⏱</button>
+          </div>`;
+        }).join(''):`<div style="padding:14px;border:1px dashed var(--line);border-radius:10px;color:var(--mut);font-size:12.5px;text-align:center">Bu gün için kayıtlı sınav veya görev yok. Zaman çizelgesinde bir saate tıklayarak ekleyebilirsin.</div>`}
+      </div>
+
+      <!-- İlgili Kasa Notları -->
+      <div class="gcal-sec">
+        <div class="gcal-sec-hd"><span>İLGİLİ DERS NOTLARI &amp; KAYNAKLAR</span></div>
+        ${relatedNotes.map(([id,pg])=>`
+          <div class="gag-card" style="padding:7px 10px" onclick="openPage('${id}',true,{newTab:true})">
+            <span>${pg.i||'📄'}</span>
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">${pg.t}</div>
+            <span style="font:10px var(--mono);color:var(--cu)">${pg.folder||''} ↗</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAgendaStage(){
+  const todayIso=gcalTodayISO();
+  let list=calEvents.filter(e=>GCAL.kinds[e.kind]!==false);
+  if(GCAL.kasaFilter!=='all') list=list.filter(e=>e.kasa===GCAL.kasaFilter);
+  if(GCAL.agendaFilter==='exam') list=list.filter(e=>e.kind==='exam'||e.kind==='lab');
+  if(GCAL.agendaFilter==='pending') list=list.filter(e=>!e.done);
+  if(GCAL.agendaFilter==='done') list=list.filter(e=>e.done);
+  if(GCAL.search){
+    const q=GCAL.search.toLowerCase();
+    list=list.filter(e=>`${e.title} ${e.loc||''} ${e.desc||''} ${gcalKasaTitle(e.kasa)}`.toLowerCase().includes(q));
+  }
+  list.sort((a,b)=>a.date.localeCompare(b.date)||gcalMin(a.start)-gcalMin(b.start));
+
+  const byDate={};
+  list.forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
+  const dates=Object.keys(byDate).sort();
+
+  return `<div class="gagenda">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line)">
+      <div>
+        <h2 style="font-size:20px;letter-spacing:-.02em">📋 Akademik Planlama &amp; Sınav Ajandası</h2>
+        <div style="font-size:12.5px;color:var(--mut)">Tüm vize, lab, proje teslimi ve çalışma bloklarının kronolojik yol haritası</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div class="gcal-seg">
+          <button class="${GCAL.agendaFilter==='all'?'on':''}" onclick="GCAL.agendaFilter='all';renderCal($('#main'),false)">Tümü (${calEvents.length})</button>
+          <button class="${GCAL.agendaFilter==='exam'?'on':''}" onclick="GCAL.agendaFilter='exam';renderCal($('#main'),false)">🔴 Sınav &amp; Lab</button>
+          <button class="${GCAL.agendaFilter==='pending'?'on':''}" onclick="GCAL.agendaFilter='pending';renderCal($('#main'),false)">⏳ Bekleyenler</button>
+          <button class="${GCAL.agendaFilter==='done'?'on':''}" onclick="GCAL.agendaFilter='done';renderCal($('#main'),false)">✓ Tamamlananlar</button>
+        </div>
+        <button class="gcal-btn pri" onclick="gcalAskAiStudyPlan()">✨ AI Çalışma Programı Çıkar</button>
+      </div>
+    </div>
+    ${dates.length?dates.map(iso=>{
+      const d=gcalFromISO(iso);
+      const diff=gcalDiffDays(iso,todayIso);
+      const isToday=diff===0;
+      const relTxt=diff===0?'BUGÜN':diff===1?'YARIN':diff===-1?'DÜN':diff>1?`${diff} gün sonra`:`${Math.abs(diff)} gün önce`;
+      return `<div class="gag-day">
+        <div class="gag-date ${isToday?'today':''}">
+          <span class="dnum">${d.getDate()}</span>
+          <div>
+            <div class="dmeta">${GCAL_MONTHS_SHORT[d.getMonth()]} · ${GCAL_DAYS[gcalDowMon(d)]}</div>
+            <div style="font:600 10.5px var(--mono);color:${isToday?'var(--cu)':diff>0&&diff<=7?'#ff6b6b':'var(--mut)'}">${relTxt}</div>
+          </div>
+        </div>
+        <div class="gag-list">
+          ${byDate[iso].map(e=>{
+            const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+            return `<div class="gag-card" onclick="openCalModal('${e.id}')">
+              <input type="checkbox" ${e.done?'checked':''} onclick="event.stopPropagation();gcalToggleDone(${e.id})" style="accent-color:var(--cu);width:15px;height:15px;cursor:pointer" title="Tamamlandı olarak işaretle">
+              <span class="gag-dot" style="background:${k.color}"></span>
+              <span class="gag-time">${e.allDay?'Tüm Gün':`${e.start} – ${e.end}`}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:13.5px;${e.done?'text-decoration:line-through;opacity:.55':''}">${k.icon} ${e.title}</div>
+                ${e.desc?`<div style="font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.desc}</div>`:''}
+              </div>
+              ${e.loc?`<span style="font:11px var(--mono);color:var(--mut);padding:2px 7px;background:var(--bg2);border-radius:6px;white-space:nowrap">📍 ${e.loc}</span>`:''}
+              ${e.kasa?`<span class="pdf-badge" onclick="event.stopPropagation();enterKasa('${e.kasa}','write')" title="Dersin kasasına git">❖ ${gcalKasaTitle(e.kasa)}</span>`:''}
+              <button class="gcal-btn" style="padding:3px 8px;font-size:11px" onclick="event.stopPropagation();gcalPrepWithAi(${e.id})" title="AI ile bu sınava/göreve çalış">✨ Hazırlan</button>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }).join(''):`<div style="padding:40px;text-align:center;color:var(--mut)">Seçili filtreye uygun etkinlik bulunamadı.</div>`}
+  </div>`;
+}
+
+function renderSemesterStage(){
+  const baseYear=gcalFromISO(GCAL.cursor).getFullYear();
+  const semMonths=[
+    {y:baseYear,m:9},  // Ekim
+    {y:baseYear,m:10}, // Kasım
+    {y:baseYear,m:11}, // Aralık
+    {y:baseYear+1,m:0} // Ocak
+  ];
+  const exams=calEvents.filter(e=>e.kind==='exam').length;
+  const labs=calEvents.filter(e=>e.kind==='lab').length;
+  const tasks=calEvents.filter(e=>e.kind==='task'||e.kind==='study').length;
+  const doneCount=calEvents.filter(e=>e.done).length;
+  const todayIso=gcalTodayISO();
+
+  const monthCards=semMonths.map(({y,m})=>{
+    const first=new Date(y,m,1,12,0,0);
+    const offset=gcalDowMon(first);
+    const start=gcalAddDays(first,-offset);
+    let cells=GCAL_DAYS.map(d=>`<div class="gmini-dh">${d[0]}</div>`).join('');
+    for(let i=0;i<42;i++){
+      const cur=gcalAddDays(start,i);
+      const iso=gcalToISO(cur);
+      const isOther=cur.getMonth()!==m;
+      const evs=calEvents.filter(e=>e.date===iso);
+      const hasExam=evs.some(e=>e.kind==='exam');
+      const hasLab=evs.some(e=>e.kind==='lab');
+      const hasTask=evs.length>0;
+      const bg=isOther?'transparent':hasExam?'#ff6b6b38':hasLab?'#52b78838':hasTask?'#e0a45835':'transparent';
+      const bd=iso===todayIso?'2px solid var(--cu)':hasExam?'1px solid #ff6b6b':hasLab?'1px solid #52b788':'0';
+      cells+=`<div class="gmini-d ${isOther?'dim':''}" style="background:${bg};border:${bd}" onclick="gcalSelectDate('${iso}','month')" title="${iso}${evs.length?' · '+evs.map(x=>x.title).join(', '):''}">${cur.getDate()}</div>`;
+    }
+    return `<div class="gmini" style="padding:14px">
+      <div class="gmini-hd" style="font-size:14px;margin-bottom:10px">
+        <span>${GCAL_MONTHS[m]} ${y}</span>
+        <span style="font:11px var(--mono);color:var(--cu)">${calEvents.filter(e=>e.date.startsWith(`${y}-${gcalPad(m+1)}`)).length} etkinlik</span>
+      </div>
+      <div class="gmini-grid" style="gap:4px">${cells}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="gsem">
+    <div>
+      <h2 style="font-size:21px;letter-spacing:-.02em">🎓 Akademik Dönem Haritası &amp; Yoğunluk Radarı</h2>
+      <div style="font-size:12.5px;color:var(--mut)">4 aylık Güz/Kış dönemi sınav yoğunluğu ısı haritası — bir güne tıklayarak o aya/güne odaklanabilirsin</div>
+    </div>
+    <div class="gsem-stats">
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">TOPLAM SINAV / VİZE</span><b style="color:#ff6b6b">${exams}</b><small style="color:var(--mut)">Kırmızı işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">LAB &amp; DENEY</span><b style="color:#52b788">${labs}</b><small style="color:var(--mut)">Yeşil işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">ÖDEV &amp; ÇALIŞMA BLOĞU</span><b style="color:#e0a458">${tasks}</b><small style="color:var(--mut)">Kehribar işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">TAMAMLAMA ORANI</span><b style="color:var(--ok)">${calEvents.length?Math.round(doneCount/calEvents.length*100):0}%</b><small style="color:var(--mut)">${doneCount}/${calEvents.length} tamamlandı</small></div>
+    </div>
+    <div class="gsem-months">${monthCards}</div>
+  </div>`;
+}
+
+async function renderCal(m,fetchApi=true){
+  if(!m) m=$('#main');
+  if(fetchApi) await loadCalEvents(false);
+  if(!GCAL.miniMonth) GCAL.miniMonth=gcalFromISO(GCAL.cursor);
+  if(typeof renderTabs==='function') renderTabs();
+
+  const stageHtml=GCAL.view==='day'?renderDayStage()
+    :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='agenda'?renderAgendaStage()
+    :GCAL.view==='semester'?renderSemesterStage()
+    :renderMonthStage();
+
+  const p=GCAL.pomo;
+  const pomoMm=gcalPad(Math.floor(p.sec/60)), pomoSs=gcalPad(p.sec%60);
+  const nowDt=new Date();
+  const curMonShort=GCAL_MONTHS[nowDt.getMonth()].slice(0,3).toUpperCase();
+  const conflicts=gcalDetectConflicts();
+
+  m.innerHTML=`<div class="gcal ${GCAL.sideOpen?'':'no-side'}">
+    <!-- Üst AgyCal Araç Çubuğu -->
+    <div class="gcal-top">
+      <button class="gcal-icbtn" onclick="gcalToggleSide()" title="Sol Mini Takvim &amp; Filtre Panelini Aç/Kapat">☰</button>
+      <div class="gcal-brand">
+        <div class="gic">
+          <div class="gic-m">${curMonShort}</div>
+          <div class="gic-d">${nowDt.getDate()}</div>
+        </div>
+        <span class="gcal-brand-txt"><b>Agy</b><span>Cal</span></span>
+        <span class="gcal-brand-badge">PRO</span>
+      </div>
+      <div class="gcal-nav">
+        <button class="gcal-btn" onclick="gcalGoToday()" title="Bugüne Git (Kısayol: T)">Bugün</button>
+        <button class="gcal-icbtn" onclick="gcalStep(-1)" title="Önceki Dönem">◀</button>
+        <button class="gcal-icbtn" onclick="gcalStep(1)" title="Sonraki Dönem">▶</button>
+      </div>
+      <div class="gcal-title">${gcalHeaderTitle()}</div>
+
+      ${conflicts.length?`<span class="acal-tab-pill exam" style="padding:3px 8px;font-size:11px;cursor:pointer" onclick="gcalSelectDate('${conflicts[0].date}','day')" title="${conflicts.map(c=>c.label).join(' | ')}">⚠️ ${conflicts.length} Saat Çakışması</span>`:''}
+
+      <span style="flex:1"></span>
+
+      <div class="gcal-search">
+        <i>🔍</i>
+        <input id="gcalSearchIn" value="${GCAL.search.replace(/"/g,'&quot;')}" placeholder="AgyCal'de ara…" oninput="GCAL.search=this.value;renderCalStageOnly()">
+      </div>
+
+      <button class="gcal-btn ${GCAL.showSchedule?'on':''}" onclick="gcalToggleSchedule()" title="Haftalık sabit EEM ders programını takvimde göster/gizle">🎓 Ders Programı</button>
+
+      <button class="gcal-btn ${p.running?'on':''}" onclick="gcalSetView('day')" title="Günlük Odak &amp; Pomodoro Sayacı">⏱ <span id="gcalTopPomo">${pomoMm}:${pomoSs}</span></button>
+
+      <button class="gcal-btn" onclick="gcalExportICS()" title="AgyCal takvimini .ics olarak indir (Google/Apple/Telefon Takvimine aktar)">📲 .ics</button>
+
+      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();document.getElementById('gcalViewDd').classList.toggle('open')" title="Görünüm Değiştir (D/W/M/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
+
+      <button class="gcal-btn pri" onclick="openCalModal(null,GCAL.cursor)" title="Yeni Etkinlik / Sınav Oluştur (Kısayol: C)">＋ Oluştur</button>
+    </div>
+
+    <!-- AgyCal Doğal Dil Sihirli Komut Çubuğu -->
+    <div class="gcal-smartbar">
+      <div class="gcal-smart-in">
+        <span style="color:var(--cu);font-size:14px">⚡</span>
+        <input id="gcalSmartInput" placeholder="AgyCal Sihirli Ekle: &quot;Cuma 14:00 Yüksek Gerilim Lab #lab @D-204&quot; veya &quot;20 Kasım 09:00 Makinalar Quiz&quot; yazıp Enter'a bas (Kısayol: Q)" oninput="gcalSmartPreview(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();gcalSmartSubmit();}">
+        <button class="gcal-btn pri" style="padding:3px 9px;font-size:11.5px" onclick="gcalSmartSubmit()">Ekle ↵</button>
+      </div>
+      <div class="gcal-smart-prev" id="gcalSmartPrev">
+        <span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>
+      </div>
+    </div>
+
+    <!-- Gövde: Sol Mini Takvim + Ana Görünüm Sahnesi -->
+    <div class="gcal-body">
+      <aside class="gcal-side">
+        <button class="gcal-create-big" onclick="openCalModal(null,GCAL.cursor)">
+          <span style="font-size:18px;line-height:1">＋</span>
+          <span>Yeni Sınav / Etkinlik</span>
+        </button>
+
+        ${renderMiniCal()}
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd">
+            <span>🔥 YAKLAŞAN SINAV RADARI</span>
+            <span style="color:var(--ok)">● Canlı</span>
+          </div>
+          ${renderExamRadar()}
+        </div>
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd"><span>TAKVİMLERİM (KATEGORİLER)</span></div>
+          ${Object.values(GCAL_KINDS).map(k=>{
+            const on=GCAL.kinds[k.id]!==false;
+            const cnt=k.id==='lecture'?EEM_WEEKLY_SCHEDULE.length+' ders/hf':calEvents.filter(e=>e.kind===k.id).length;
+            return `<div class="gcal-flt ${on?'':'off'}" onclick="gcalToggleKind('${k.id}')">
+              <span class="chk" style="background:${k.color}">✓</span>
+              <span style="flex:1">${k.icon} ${k.label}</span>
+              <small style="font:10.5px var(--mono);color:var(--mut)">${cnt}</small>
+            </div>`;
+          }).join('')}
+        </div>
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd"><span>DERS KASASI FİLTRESİ</span></div>
+          <select class="gmodal-in" style="padding:5px 8px;font-size:12px" onchange="GCAL.kasaFilter=this.value;renderCal($('#main'),false)">
+            <option value="all" ${GCAL.kasaFilter==='all'?'selected':''}>❖ Tüm Ders Kasaları</option>
+            ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${GCAL.kasaFilter===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+          </select>
+        </div>
+
+        <button class="gcal-btn" style="width:100%;justify-content:center;border-color:var(--cu);color:var(--cu);margin-top:auto" onclick="gcalAskAiStudyPlan()">
+          ✨ Bu Haftayı AI ile Planla
+        </button>
+      </aside>
+
+      <div class="gcal-stage" id="gcalStage">
+        ${stageHtml}
+      </div>
+    </div>
+
+    <!-- Etkinlik Oluşturma / Düzenleme / Detay Modalı -->
+    <div class="gmodal-bg" id="gcalModalBg" onclick="if(event.target.id==='gcalModalBg')closeCalModal()">
+      <div class="gmodal" id="gcalModal"></div>
+    </div>
+  </div>`;
+}
+
+function renderCalStageOnly(){
+  const st=$('#gcalStage');
+  if(!st) return;
+  st.innerHTML=GCAL.view==='day'?renderDayStage()
+    :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='agenda'?renderAgendaStage()
+    :GCAL.view==='semester'?renderSemesterStage()
+    :renderMonthStage();
+}
+
+function gcalCellClick(ev,iso){
+  GCAL.cursor=iso;
+  $$('.gmcell').forEach(c=>c.style.outline=c.dataset.date===iso?'1.5px solid var(--cu)':'');
+}
+
+/* --- Sürükle & Bırak (Drag & Drop) ile Etkinlik Taşıma --- */
+let gcalDraggedId=null;
+function gcalDragStart(ev,id){
+  gcalDraggedId=id;
+  ev.dataTransfer.setData('text/gcal',String(id));
+  ev.dataTransfer.effectAllowed='move';
+}
+function gcalDragOver(ev){
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect='move';
+  ev.currentTarget.classList.add('drop-hot');
+}
+function gcalDragLeave(ev){
+  ev.currentTarget.classList.remove('drop-hot');
+}
+async function gcalDropOnDay(ev,targetIso){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drop-hot');
+  const id=Number(ev.dataTransfer.getData('text/gcal')||gcalDraggedId);
+  const item=calEvents.find(x=>x.id===id);
+  if(!item||item.date===targetIso) return;
+  item.date=targetIso;
+  item.day=gcalFromISO(targetIso).getDate();
+  await persistCalEventUpdate(item);
+  toast(`▦ "${item.title}" → ${targetIso} tarihine taşındı`);
+}
+async function gcalDropOnSlot(ev,targetIso,hour){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drop-hot');
+  const id=Number(ev.dataTransfer.getData('text/gcal')||gcalDraggedId);
+  const item=calEvents.find(x=>x.id===id);
+  if(!item) return;
+  const dur=Math.max(30,gcalMin(item.end)-gcalMin(item.start));
+  const newStart=hour*60;
+  item.date=targetIso;
+  item.day=gcalFromISO(targetIso).getDate();
+  item.start=gcalFmtMin(newStart);
+  item.end=gcalFmtMin(newStart+dur);
+  await persistCalEventUpdate(item);
+  toast(`▦ "${item.title}" → ${targetIso} ${item.start} saatine taşındı`);
+}
+
+async function persistCalEventUpdate(item){
   try{
-    await api('/api/calendar/'+id,null,'DELETE');
-    renderCal($('#main'));
+    if(item.id && typeof item.id==='number'){
+      await api('/api/calendar/'+item.id,null,'DELETE').catch(()=>{});
+    }
+    const saved=await api('/api/calendar',{
+      day:item.day,
+      title:item.title,
+      kind:item.kind,
+      kasa:packCalMeta(item)
+    });
+    if(saved&&saved.id) item.id=saved.id;
   }catch(e){}
+  renderCal($('#main'),false);
+}
+
+/* --- Etkinlik Oluşturma / Düzenleme Modalı (Google Takvim Birebir UI) --- */
+function openCalModal(evId=null,defaultDate=null,defaultStart=null){
+  const bg=$('#gcalModalBg'), box=$('#gcalModal');
+  if(!bg||!box) return;
+  box.style.transform='';
+  let ev=null;
+  if(evId!==null && evId!==undefined){
+    ev=calEvents.find(x=>String(x.id)===String(evId));
+    if(!ev && String(evId).startsWith('lec_')){
+      const parts=String(evId).split('_');
+      const iso=parts[1];
+      const all=getAllEventsForDate(iso);
+      ev=all.find(x=>String(x.id)===String(evId));
+    }
+  }
+  const isRec=ev&&ev.recurring;
+  const isEdit=!!(ev&&!isRec);
+  GCAL.editingId=isEdit?ev.id:null;
+
+  const dateVal=ev?ev.date:(defaultDate||GCAL.cursor||gcalTodayISO());
+  const hasExplicitTime=!!(ev||defaultStart);
+  const startVal=ev?ev.start:(defaultStart||'10:00');
+  const endVal=ev?ev.end:gcalFmtMin(gcalMin(startVal)+60);
+  const kindVal=ev?ev.kind:'exam';
+  const kasaVal=ev?ev.kasa:(currentKasa!=='all'?currentKasa:'');
+  const locVal=ev?(ev.loc||''):'';
+  const descVal=ev?(ev.desc||''):'';
+  const guestsVal=ev?(ev.guests||''):'';
+  const meetVal=ev?(ev.meet||''):'';
+  const repeatVal=ev?(ev.repeat||'Yinelenmez'):'Yinelenmez';
+  const notifyVal=ev?(ev.notify||'Bir gün önce şu saatte: 5pm bildir'):'Bir gün önce şu saatte: 5pm bildir';
+  const titleVal=ev?ev.title:'';
+  const humanDate=gcalFmtDateHuman(dateVal);
+  const curKindObj=GCAL_KINDS[kindVal]||GCAL_KINDS.exam;
+
+  if(isRec){
+    const k=GCAL_KINDS[ev.kind]||GCAL_KINDS.lecture;
+    box.innerHTML=`
+      <div class="gm-top" onmousedown="gcalStartModalDrag(event)">
+        <span class="gm-handle" title="Taşı">＝</span>
+        <button class="gm-close" onclick="closeCalModal()" title="Kapat">✕</button>
+      </div>
+      <div class="gm-title-wrap">
+        <div style="font:600 20px var(--sans);color:var(--txt);padding-bottom:6px;border-bottom:2px solid ${k.color}">${k.icon} ${ev.title}</div>
+      </div>
+      <div class="gm-rows" style="padding:8px 20px 14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;font:12.5px var(--mono);color:var(--cu);margin-bottom:8px">
+          <span>📅 ${humanDate}</span><span>·</span><span>⏰ ${ev.start} – ${ev.end}</span><span>·</span><span>📍 ${ev.loc||'Amfi'}</span>
+        </div>
+        <div style="font-size:13.5px;color:var(--txt);line-height:1.55;margin-bottom:10px">${ev.desc||'Haftalık sabit EEM ders programı bloğu.'}</div>
+        <div style="padding:10px 12px;background:var(--bg);border-radius:10px;font-size:12px;color:var(--mut)">
+          💡 Bu blok haftalık EEM ders programından otomatik yansıtılmaktadır.
+        </div>
+      </div>
+      <div class="gm-foot">
+        <button class="gm-more-btn" onclick="closeCalModal();enterKasa('${ev.kasa}','write')">❖ Ders Kasasını Aç</button>
+        <div style="display:flex;gap:8px">
+          <button class="gm-pill-btn" onclick="closeCalModal();gcalStartPomoFor('${ev.title.replace(/'/g,"\\'")}')">⏱ Pomodoro</button>
+          <button class="gm-save-btn" onclick="closeCalModal();rtab('ai');aiSend('side_ai','${ev.title} dersinin bu haftaki konuları (${ev.desc}) için sınav odaklı özet ve çalışma soruları hazırla.')">✨ AI ile Çalış</button>
+        </div>
+      </div>`;
+    bg.classList.add('show');
+    return;
+  }
+
+  box.innerHTML=`
+    <!-- Üst Sürükleme Çubuğu (= ve ✕) -->
+    <div class="gm-top" onmousedown="gcalStartModalDrag(event)">
+      <span class="gm-handle" title="Paneli sürükle">＝</span>
+      <div style="display:flex;align-items:center;gap:4px">
+        ${isEdit?`
+          <button class="gm-close" onclick="closeCalModal();gcalPrepWithAi(${ev.id})" title="AI ile Sınava Hazırlan" style="font-size:14px">✨</button>
+          <button class="gm-close" onclick="deleteCalFromModal(${ev.id})" title="Etkinliği Sil" style="color:var(--err);font-size:14px">🗑</button>
+        `:''}
+        <button class="gm-close" onclick="closeCalModal()" title="Kapat (Esc)">✕</button>
+      </div>
+    </div>
+
+    <!-- Başlık ve Zaman Ekle (Mavi alt çizgili) -->
+    <div class="gm-title-wrap">
+      <input class="gm-title-in" id="gmTitle" placeholder="Başlık ve zaman ekle" value="${titleVal.replace(/"/g,'&quot;')}" onkeydown="if(event.key==='Enter')saveCalFromModal()">
+    </div>
+
+    <!-- Etkinlik / Görev / Sınav / Lab Sekmeleri -->
+    <div class="gm-tabs" id="gmKindWrap">
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='exam'?'on':''}" data-k="exam" onclick="gcalSetModalKind('exam')">Etkinlik / Sınav</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='task'?'on':''}" data-k="task" onclick="gcalSetModalKind('task')">Görev</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='lab'?'on':''}" data-k="lab" onclick="gcalSetModalKind('lab')">Lab Deneyi</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='study'?'on':''}" data-k="study" onclick="gcalSetModalKind('study')">Çalışma</button>
+    </div>
+
+    <!-- İkonlu Google Calendar Satırları -->
+    <div class="gm-rows">
+      <!-- 1. Saat / Tarih Satırı -->
+      <div class="gm-r align-top" onclick="gcalExpandTimeRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <span id="gmDateHuman" style="font-weight:500">${humanDate} &nbsp;–&nbsp; ${humanDate}</span>
+            <button type="button" class="gm-pill-btn" id="gmAddTimeBtn" style="display:${hasExplicitTime?'none':'inline-block'}" onclick="event.stopPropagation();gcalExpandTimeRow(true)">Zaman ekle</button>
+          </div>
+          <div class="gm-sub" id="gmRepeatSub">${repeatVal}${hasExplicitTime?` · ${startVal} – ${endVal}`:''}</div>
+          <div id="gmTimeExpand" style="display:${hasExplicitTime?'flex':'none'};flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center" onclick="event.stopPropagation()">
+            <input type="date" class="gmodal-in" id="gmDate" value="${dateVal}" style="width:138px" onchange="$('#gmDateHuman').innerHTML=gcalFmtDateHuman(this.value)+' &nbsp;–&nbsp; '+gcalFmtDateHuman(this.value)">
+            <input type="time" class="gmodal-in" id="gmStart" value="${startVal}" style="width:98px">
+            <span style="color:var(--mut)">–</span>
+            <input type="time" class="gmodal-in" id="gmEnd" value="${endVal}" style="width:98px">
+            <select class="gmodal-in" id="gmRepeat" style="width:130px;font-size:12px" onchange="$('#gmRepeatSub').textContent=this.value">
+              <option value="Yinelenmez" ${repeatVal==='Yinelenmez'?'selected':''}>Yinelenmez</option>
+              <option value="Her hafta" ${repeatVal==='Her hafta'?'selected':''}>Her hafta</option>
+              <option value="Her gün" ${repeatVal==='Her gün'?'selected':''}>Her gün</option>
+              <option value="Sınav haftası boyunca" ${repeatVal==='Sınav haftası boyunca'?'selected':''}>Sınav haftası boyunca</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Davetli / Çalışma Grubu Ekle -->
+      <div class="gm-r" onclick="$('#gmGuests')?.focus()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmGuests" placeholder="Davetli ekle" value="${guestsVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 3. Google Meet / Canlı AI Çalışma Görüşmesi Ekle -->
+      <div class="gm-r" onclick="gcalToggleMeetRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24" style="stroke:none">
+            <rect x="2" y="6" width="13" height="12" rx="2.5" fill="#fbbc04"/>
+            <path d="M15 9.5l5-3.5v12l-5-3.5v-5z" fill="#34a853"/>
+            <rect x="2" y="6" width="6" height="6" rx="1.5" fill="#ea4335"/>
+            <rect x="9" y="12" width="6" height="6" rx="1" fill="#4285f4"/>
+          </svg>
+        </div>
+        <div class="gm-rbody">
+          <div id="gmMeetTxt" style="color:${meetVal?'#4c8df6':'var(--mut)'};font-weight:${meetVal?'500':'400'}">${meetVal||'Google Meet video konferans görüşmesi ekle'}</div>
+          <input type="hidden" id="gmMeet" value="${meetVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 4. Konum Ekle -->
+      <div class="gm-r" onclick="$('#gmLoc')?.focus()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmLoc" placeholder="konum ekle" value="${locVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 5. Açıklama veya Google Drive / Kasa Eki Ekle -->
+      <div class="gm-r align-top" onclick="gcalExpandDescRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="18" y2="18"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmDescShort" placeholder="açıklama veya Google Drive eki ekle" value="${descVal.replace(/"/g,'&quot;')}" style="display:${descVal?'none':'block'}" onfocus="gcalExpandDescRow()">
+          <div id="gmDescWrap" style="display:${descVal?'flex':'none'};flex-direction:column;gap:6px" onclick="event.stopPropagation()">
+            <textarea class="gmodal-in" id="gmDesc" rows="2" placeholder="Açıklama, sınav konuları veya çalışma notu ekle…" style="resize:vertical">${descVal.replace(/</g,'&lt;')}</textarea>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select class="gmodal-in" style="font-size:11.5px;padding:4px 8px" onchange="if(this.value){const ta=$('#gmDesc');ta.value=(ta.value?ta.value+'\\n':'')+'📎 Ekli Kasa Notu: [['+this.value+']]';this.value='';}">
+                <option value="">📎 AgyDesk Kasasından Not / PDF Ekle…</option>
+                ${Object.entries(window.pages||{}).filter(([id])=>id.startsWith('note:')).slice(0,25).map(([id,p])=>`<option value="${id.slice(5)}">${p.folder?p.folder+' · ':''}${p.t}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Takvim Sahibi / Kasa & Bildirim Satırı -->
+      <div class="gm-r align-top" onclick="gcalExpandKasaRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="gmOwnerName" style="font-weight:500">Cavit ÖZGEN${kasaVal?' · '+gcalKasaTitle(kasaVal):''}</span>
+            <span class="gm-dot" id="gmColorDot" style="background:${curKindObj.color}" onclick="event.stopPropagation();gcalCycleModalKind()" title="Renk / Kategori değiştir"></span>
+          </div>
+          <div class="gm-sub" id="gmNotifySub">Uygun · Varsayılan görünürlük · ${notifyVal}</div>
+          <div id="gmKasaExpand" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
+            <select class="gmodal-in" id="gmKasa" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmOwnerName').textContent='Cavit ÖZGEN'+(this.value?' · '+gcalKasaTitle(this.value):'')">
+              <option value="">Genel Akademik Takvim</option>
+              ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${kasaVal===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+            </select>
+            <select class="gmodal-in" id="gmNotify" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmNotifySub').textContent='Uygun · Varsayılan görünürlük · '+this.value">
+              <option value="Bir gün önce şu saatte: 5pm bildir" ${notifyVal.includes('5pm')?'selected':''}>Bir gün önce: 5pm bildir</option>
+              <option value="30 dakika önce bildir" ${notifyVal.includes('30')?'selected':''}>30 dakika önce bildir</option>
+              <option value="1 saat önce bildir" ${notifyVal.includes('1 saat')?'selected':''}>1 saat önce bildir</option>
+              <option value="Sınav sabahı 08:00 bildir" ${notifyVal.includes('08:00')?'selected':''}>Sınav sabahı 08:00 bildir</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alt Çubuk: Diğer seçenekler & Mavi Kaydet Butonu -->
+    <div class="gm-foot">
+      ${isEdit && ev.kasa?`<button type="button" class="gm-more-btn" onclick="closeCalModal();enterKasa('${ev.kasa}','write')">❖ Ders Kasası</button>`:'<span></span>'}
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        <button type="button" class="gm-more-btn" onclick="gcalShowAllModalOptions()">Diğer seçenekler</button>
+        <button type="button" class="gm-save-btn" onclick="saveCalFromModal()">Kaydet</button>
+      </div>
+    </div>`;
+  bg.classList.add('show');
+  setTimeout(()=>$('#gmTitle')?.focus(),40);
+}
+
+function gcalSetModalKind(kid){
+  $$('.gm-kbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===kid));
+  const dot=$('#gmColorDot');
+  if(dot && GCAL_KINDS[kid]) dot.style.background=GCAL_KINDS[kid].color;
+}
+function gcalCycleModalKind(){
+  const order=['exam','task','lab','study'];
+  const cur=$('.gm-kbtn.on')?.dataset.k||'exam';
+  const next=order[(order.indexOf(cur)+1)%order.length];
+  gcalSetModalKind(next);
+}
+function gcalExpandTimeRow(focusTime=false){
+  const ex=$('#gmTimeExpand'), btn=$('#gmAddTimeBtn');
+  if(ex) ex.style.display='flex';
+  if(btn) btn.style.display='none';
+  if(focusTime) $('#gmStart')?.focus();
+}
+function gcalExpandDescRow(){
+  const s=$('#gmDescShort'), w=$('#gmDescWrap');
+  if(s) s.style.display='none';
+  if(w){ w.style.display='flex'; $('#gmDesc')?.focus(); }
+}
+function gcalExpandKasaRow(){
+  const ex=$('#gmKasaExpand');
+  if(ex) ex.style.display=ex.style.display==='none'?'flex':'none';
+}
+function gcalToggleMeetRow(){
+  const inp=$('#gmMeet'), txt=$('#gmMeetTxt');
+  if(!inp||!txt) return;
+  if(inp.value){
+    inp.value='';
+    txt.textContent='Google Meet video konferans görüşmesi ekle';
+    txt.style.color='var(--mut)';
+    txt.style.fontWeight='400';
+  }else{
+    const code='agy-'+Math.random().toString(36).slice(2,5)+'-'+Math.random().toString(36).slice(2,6);
+    inp.value=`meet.google.com/${code}`;
+    txt.textContent=`🎥 ${inp.value} (Canlı Çalışma Odası Eklendi)`;
+    txt.style.color='#4c8df6';
+    txt.style.fontWeight='500';
+  }
+}
+function gcalShowAllModalOptions(){
+  gcalExpandTimeRow();
+  gcalExpandDescRow();
+  const ex=$('#gmKasaExpand');
+  if(ex) ex.style.display='flex';
+}
+function gcalStartModalDrag(ev){
+  if(ev.target.closest('button')) return;
+  const box=$('#gcalModal'); if(!box) return;
+  const rect=box.getBoundingClientRect();
+  const startX=ev.clientX, startY=ev.clientY;
+  const curTx=parseFloat(box.dataset.tx||'0'), curTy=parseFloat(box.dataset.ty||'0');
+  const onMove=e=>{
+    const nx=curTx+(e.clientX-startX), ny=curTy+(e.clientY-startY);
+    box.dataset.tx=nx; box.dataset.ty=ny;
+    box.style.transform=`translate(${nx}px, ${ny}px)`;
+  };
+  const onUp=()=>{
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+  };
+  window.addEventListener('mousemove',onMove);
+  window.addEventListener('mouseup',onUp);
+}
+
+function closeCalModal(){
+  const box=$('#gcalModal');
+  if(box){ box.style.transform=''; box.dataset.tx='0'; box.dataset.ty='0'; }
+  $('#gcalModalBg')?.classList.remove('show');
+  GCAL.editingId=null;
+}
+
+async function saveCalFromModal(){
+  const title=($('#gmTitle')?.value||'').trim()||'(Başlıksız etkinlik)';
+  const kindBtn=$('.gm-kbtn.on');
+  const kind=kindBtn?kindBtn.dataset.k:'exam';
+  const date=$('#gmDate')?.value||GCAL.cursor||gcalTodayISO();
+  const start=$('#gmStart')?.value||'10:00';
+  const end=$('#gmEnd')?.value||'11:00';
+  const kasa=$('#gmKasa')?.value||'';
+  const loc=($('#gmLoc')?.value||'').trim();
+  const desc=(($('#gmDesc')?.value||$('#gmDescShort')?.value)||'').trim();
+  const guests=($('#gmGuests')?.value||'').trim();
+  const meet=($('#gmMeet')?.value||'').trim();
+  const repeat=$('#gmRepeat')?.value||'Yinelenmez';
+  const notify=$('#gmNotify')?.value||'Bir gün önce şu saatte: 5pm bildir';
+  const day=gcalFromISO(date).getDate();
+
+  let item=GCAL.editingId?calEvents.find(x=>x.id===GCAL.editingId):null;
+  if(item){
+    Object.assign(item,{title,kind,date,day,start,end,kasa,loc,desc,guests,meet,repeat,notify});
+    await persistCalEventUpdate(item);
+    toast(`✓ "${title}" güncellendi`);
+  }else{
+    const newEv={id:Date.now(),day,date,title,kind,kasa,start,end,allDay:false,loc,desc,guests,meet,repeat,notify,done:false};
+    try{
+      const saved=await api('/api/calendar',{day,title,kind,kasa:packCalMeta(newEv)});
+      if(saved&&saved.id) newEv.id=saved.id;
+    }catch(e){}
+    calEvents.push(newEv);
+    GCAL.cursor=date;
+    renderCal($('#main'),false);
+    toast(`▦ Takvime eklendi: ${title}`);
+  }
+  closeCalModal();
+}
+
+async function deleteCalFromModal(id){
+  const ev=calEvents.find(x=>x.id===id);
+  if(!ev) return;
+  try{ await api('/api/calendar/'+id,null,'DELETE'); }catch(e){}
+  calEvents=calEvents.filter(x=>x.id!==id);
+  closeCalModal();
+  renderCal($('#main'),false);
+  toast(`🗑 "${ev.title}" silindi`);
+}
+
+async function gcalToggleDone(id){
+  const ev=calEvents.find(x=>x.id===id);
+  if(!ev) return;
+  ev.done=!ev.done;
+  await persistCalEventUpdate(ev);
+  toast(ev.done?`✓ "${ev.title}" tamamlandı!`:`↺ "${ev.title}" tekrar aktif edildi`);
+}
+
+/* --- Pomodoro, Doğal Dil Motoru (.ics) & AI Entegrasyonu --- */
+function gcalDetectConflicts(){
+  const out=[];
+  const byDate={};
+  calEvents.filter(e=>!e.done).forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
+  Object.entries(byDate).forEach(([dt,list])=>{
+    if(list.length<2) return;
+    const sorted=[...list].sort((a,b)=>(a.start||'09:00').localeCompare(b.start||'09:00'));
+    for(let i=0;i<sorted.length-1;i++){
+      const a=sorted[i], b=sorted[i+1];
+      if((a.end||'10:00')>(b.start||'09:00')){
+        out.push({date:dt,label:`${dt}: "${a.title}" (${a.start}-${a.end}) ile "${b.title}" (${b.start}-${b.end}) çakışıyor`});
+      }
+    }
+  });
+  return out;
+}
+
+function gcalParseNaturalLanguage(raw){
+  let txt=String(raw||'').trim();
+  if(!txt) return null;
+  let date=GCAL.cursor||gcalTodayISO();
+  let start='10:00', end='11:00', kind='task', loc='', kasa='';
+  const now=gcalFromISO(gcalTodayISO());
+
+  // 1) Konum (@D-204 veya @Amfi-2)
+  const locM=txt.match(/@([^\s#]+)/);
+  if(locM){ loc=locM[1].replace(/_/g,' '); txt=txt.replace(locM[0],'').trim(); }
+
+  // 2) Etiket (#sınav, #lab, #görev, #çalışma)
+  const tagM=txt.match(/#(sınav|sinav|vize|quiz|lab|deney|görev|gorev|ödev|odev|çalışma|calisma)/i);
+  if(tagM){
+    const tg=tagM[1].toLowerCase();
+    if(/sınav|sinav|vize|quiz/.test(tg)) kind='exam';
+    else if(/lab|deney/.test(tg)) kind='lab';
+    else if(/çalışma|calisma/.test(tg)) kind='study';
+    else kind='task';
+    txt=txt.replace(tagM[0],'').trim();
+  }
+
+  // 3) Saat aralığı (14:00-16:00 veya 14:00)
+  const timeM=txt.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3])[:.]([0-5]\d))?\b/);
+  if(timeM){
+    const h1=gcalPad(Number(timeM[1])), m1=timeM[2];
+    start=`${h1}:${m1}`;
+    if(timeM[3]!==undefined){
+      end=`${gcalPad(Number(timeM[3]))}:${timeM[4]}`;
+    }else{
+      end=`${gcalPad(Math.min(23,Number(timeM[1])+1))}:${m1}`;
+    }
+    txt=txt.replace(timeM[0],'').trim();
+  }
+
+  // 4) Tarih ("bugün", "yarın", haftanın günleri, veya "19 Kasım")
+  const low=txt.toLowerCase();
+  const monthNames=['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+  const dmMatch=txt.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames.join('|')})\\b`,'i'));
+  if(dmMatch){
+    const dNum=Number(dmMatch[1]);
+    const mIdx=monthNames.indexOf(dmMatch[2].toLowerCase());
+    if(mIdx!==-1) date=`${now.getFullYear()}-${gcalPad(mIdx+1)}-${gcalPad(dNum)}`;
+    txt=txt.replace(dmMatch[0],'').trim();
+  }else if(/\bbugün\b/i.test(txt)){
+    date=gcalTodayISO();
+    txt=txt.replace(/\bbugün\b/i,'').trim();
+  }else if(/\byarın\b/i.test(txt)){
+    const d=new Date(now); d.setDate(d.getDate()+1); date=gcalToISO(d);
+    txt=txt.replace(/\byarın\b/i,'').trim();
+  }else{
+    const dayMap=[['pazartesi|pzt',0],['salı|sali|sal',1],['çarşamba|carsamba|çar',2],['perşembe|persembe|per',3],['cuma|cum',4],['cumartesi|cmt',5],['pazar|paz',6]];
+    for(const [pat,targetMonIdx] of dayMap){
+      const rx=new RegExp(`\\b(${pat})\\b`,'i');
+      const m=txt.match(rx);
+      if(m){
+        const curMonIdx=gcalMonIdx(now);
+        let delta=(targetMonIdx-curMonIdx+7)%7;
+        if(delta===0) delta=7;
+        const d=new Date(now); d.setDate(d.getDate()+delta);
+        date=gcalToISO(d);
+        txt=txt.replace(m[0],'').trim();
+        break;
+      }
+    }
+  }
+
+  // 5) Otomatik Kategori & Ders Kasası Çıkarımı
+  const fullLow=(txt+' '+raw).toLowerCase();
+  if(!tagM){
+    if(/vize|final|quiz|sınav|sözlü/.test(fullLow)) kind='exam';
+    else if(/lab|deney|föy/.test(fullLow)) kind='lab';
+    else if(/tekrar|pomodoro|çalışma/.test(fullLow)) kind='study';
+  }
+  if(/makina|trafo|senkron|asenkron/.test(fullLow)) kasa='elektrik-makinalari';
+  else if(/kontrol|pid|bode|nyquist|kök/.test(fullLow)) kasa='kontrol-sistemleri';
+  else if(/yüksek gerilim|yg|manevra|izolatör|delinme/.test(fullLow)) kasa='yuksek-gerilim';
+  else if(/iha|tasarım|seçmeli|otonom/.test(fullLow)) kasa='secmeli-tasarim';
+  else if(/güç|bara|yük akışı/.test(fullLow)) kasa='guc-sistemleri';
+
+  const title=txt.replace(/\s+/g,' ').trim()||'(Başlıksız etkinlik)';
+  return {title,date,start,end,kind,loc,kasa};
+}
+
+function gcalSmartPreview(val){
+  const box=$('#gcalSmartPrev');
+  if(!box) return;
+  const p=gcalParseNaturalLanguage(val);
+  if(!p){
+    box.innerHTML=`<span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>`;
+    return;
+  }
+  const kObj=GCAL_KINDS[p.kind]||GCAL_KINDS.task;
+  box.innerHTML=`
+    <span class="gcal-smart-chip" style="border-color:${kObj.color}66;color:${kObj.color}">${kObj.icon} ${kObj.label}</span>
+    <span class="gcal-smart-chip">📅 ${p.date}</span>
+    <span class="gcal-smart-chip">🕒 ${p.start}–${p.end}</span>
+    ${p.loc?`<span class="gcal-smart-chip">📍 ${p.loc}</span>`:''}
+    ${p.kasa?`<span class="gcal-smart-chip" style="color:var(--cu)">📘 ${gcalKasaTitle(p.kasa)}</span>`:''}
+  `;
+}
+
+async function gcalSmartSubmit(){
+  const inp=$('#gcalSmartInput');
+  if(!inp||!inp.value.trim()) return;
+  const p=gcalParseNaturalLanguage(inp.value);
+  if(!p) return;
+  const day=gcalFromISO(p.date).getDate();
+  const newEv={id:Date.now(),day,date:p.date,title:p.title,kind:p.kind,kasa:p.kasa,start:p.start,end:p.end,allDay:false,loc:p.loc,desc:'',guests:'',meet:'',repeat:'Yinelenmez',notify:'Bir gün önce şu saatte: 5pm bildir',done:false};
+  try{
+    const saved=await api('/api/calendar',{day,title:p.title,kind:p.kind,kasa:packCalMeta(newEv)});
+    if(saved&&saved.id) newEv.id=saved.id;
+  }catch(e){}
+  calEvents.push(newEv);
+  GCAL.cursor=p.date;
+  inp.value='';
+  renderCal($('#main'),false);
+  toast(`⚡ AgyCal Sihirli Ekle: "${p.title}" (${p.date} ${p.start})`);
+}
+
+function gcalExportICS(){
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//AgyDesk//AgyCal PRO//TR','CALSCALE:GREGORIAN','X-WR-CALNAME:AgyCal Akademik Takvim'];
+  const fmtDt=(iso,hm)=>iso.replace(/-/g,'')+'T'+(hm||'09:00').replace(':','')+'00';
+  calEvents.forEach(ev=>{
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:agycal-${ev.id}@agydesk.local`,
+      `DTSTAMP:${fmtDt(gcalTodayISO(),'09:00')}`,
+      `DTSTART:${fmtDt(ev.date,ev.start||'09:00')}`,
+      `DTEND:${fmtDt(ev.date,ev.end||'10:00')}`,
+      `SUMMARY:${(ev.title||'').replace(/[,;\\]/g,' ')}`,
+      ev.loc?`LOCATION:${ev.loc.replace(/[,;\\]/g,' ')}`:'',
+      ev.desc?`DESCRIPTION:${ev.desc.replace(/\n/g,'\\n')}`:'',
+      'BEGIN:VALARM','TRIGGER:-PT60M','ACTION:DISPLAY','DESCRIPTION:AgyCal Hatırlatıcı','END:VALARM',
+      'END:VEVENT'
+    );
+  });
+  lines.push('END:VCALENDAR');
+  const blob=new Blob([lines.filter(Boolean).join('\r\n')],{type:'text/calendar;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`AgyCal-${gcalTodayISO()}.ics`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('📲 AgyCal .ics takvim dosyası indirildi (Google/Apple Takvim ile uyumlu)');
+}
+
+function gcalUpdatePomoDom(){
+  const p=GCAL.pomo;
+  const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+  const pct=Math.round((p.sec/Math.max(1,p.total))*100);
+  const topEl=$('#gcalTopPomo'); if(topEl) topEl.textContent=`${mm}:${ss}`;
+  const tabEl=$('#acalTabPomo'); if(tabEl) tabEl.textContent=`⏱ ${mm}:${ss}`;
+  const tEl=$('#gpomoTime'); if(tEl) tEl.textContent=`${mm}:${ss}`;
+  const rEl=$('#gpomoRing'); if(rEl) rEl.style.setProperty('--pp',pct);
+}
+function gcalPomoToggle(){
+  const p=GCAL.pomo;
+  if(p.running){
+    clearInterval(p.timer); p.timer=null; p.running=false;
+  }else{
+    p.running=true;
+    p.timer=setInterval(()=>{
+      if(p.sec>0){ p.sec--; gcalUpdatePomoDom(); }
+      else{
+        clearInterval(p.timer); p.timer=null; p.running=false;
+        toast(`🔔 Pomodoro tamamlandı: ${p.taskTitle}! Harika iş çıkardın.`);
+        renderCal($('#main'),false);
+      }
+    },1000);
+  }
+  renderCal($('#main'),false);
+}
+function gcalPomoReset(mins,modeName){
+  const p=GCAL.pomo;
+  if(p.timer) clearInterval(p.timer);
+  p.running=false; p.timer=null;
+  p.total=mins*60; p.sec=mins*60; p.mode=modeName;
+  renderCal($('#main'),false);
+}
+function gcalStartPomoFor(title){
+  GCAL.pomo.taskTitle=title;
+  GCAL.view='day';
+  gcalPomoReset(25,'25 dk Odak');
+  gcalPomoToggle();
+  toast(`⏱ "${title}" için 25 dk Pomodoro başlatıldı`);
+}
+
+function gcalPrepWithAi(evId){
+  const ev=calEvents.find(x=>x.id===evId);
+  if(!ev) return;
+  if(ev.kasa && ev.kasa!=='all'){
+    currentKasa=ev.kasa;
+    rebuildTreeAndSources();
+  }
+  rtab('ai');
+  aiSend('side_ai',`Takvimimdeki şu sınav/görev için (${ev.date} ${ev.start}, ${ev.title}${ev.desc?' — Konular: '+ev.desc:''}) adım adım çalışma planı, kritik formüller ve çıkabilecek 3 klasik sınav sorusu hazırla.`);
+}
+
+function gcalAskAiForDay(iso){
+  const evs=getAllEventsForDate(iso);
+  const summary=evs.map(e=>`- ${e.start}–${e.end}: ${e.title} (${gcalKasaTitle(e.kasa)})`).join('\n')||'Boş gün';
+  rtab('ai');
+  aiSend('side_ai',`${iso} tarihli günlük programım şöyle:\n${summary}\n\nBu günü en verimli şekilde geçirmem için saatlik Pomodoro çalışma blokları ve tekrar stratejisi öner.`);
+}
+
+function gcalAskAiStudyPlan(){
+  const upcoming=calEvents.filter(e=>!e.done).sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`- ${e.date} (${e.start}): [${(GCAL_KINDS[e.kind]||GCAL_KINDS.task).label}] ${e.title} (${gcalKasaTitle(e.kasa)})`).join('\n');
+  rtab('ai');
+  aiSend('side_ai',`Akademik takvimimdeki yaklaşan sınav, lab ve teslimlerim:\n${upcoming}\n\nBana bugünden başlayarak vize ve teslimlere eksiksiz yetişmemi sağlayacak, hangi gün hangi dersin hangi konusuna kaç saat çalışmam gerektiğini gösteren akıllı bir haftalık çalışma tablosu çıkar.`);
 }
 
 /* ---------- Filtre simülasyonu ---------- */
@@ -2739,6 +4434,68 @@ function renderTrafoLab(m){
   });
 }
 
+/* ---------- NotebookLM tarzı: ortada sohbet, sağda Studio ---------- */
+const STUDIO_KEY='agydesk_studio_notes';
+let studioNotes=[]; try{ studioNotes=JSON.parse(localStorage.getItem(STUDIO_KEY)||'[]'); }catch(e){}
+let studioPendingTitle=null, studioOpenId=null;
+const STUDIO_TILES=[['ozet','☰'],['fisle','▤'],['whisper','✎'],['teardown','◈'],['spice','∿'],['pcb','▦']];
+function saveStudio(){ try{ localStorage.setItem(STUDIO_KEY,JSON.stringify(studioNotes.slice(0,100))); }catch(e){} }
+function studioAdd(title,md,html){
+  studioNotes.unshift({id:'sn'+Date.now(),t:title,md:md||'',h:html||mdToHtml(md||''),ts:Date.now()});
+  saveStudio(); renderStudio();
+}
+function studioSaveMsg(i){
+  const m=ai.side_ai.msgs[i]; if(!m) return;
+  const d=document.createElement('div'); d.innerHTML=m.h; d.querySelectorAll('.route').forEach(x=>x.remove());
+  const txt=d.textContent.trim();
+  studioAdd(txt.slice(0,48)||'Not',txt,d.innerHTML);
+  toast('📌 Studio notlarına kaydedildi');
+}
+function studioDel(id){ studioNotes=studioNotes.filter(n=>n.id!==id); saveStudio(); renderStudio(); }
+function studioCopy(id){ const n=studioNotes.find(x=>x.id===id); if(n&&navigator.clipboard) navigator.clipboard.writeText(n.md||n.t); }
+function studioToggle(id){ studioOpenId=(studioOpenId===id)?null:id; renderStudio(); }
+function renderStudio(){
+  const b=$('#rb-studio'); if(!b) return;
+  b.innerHTML=`<div class="rview-head"><span>✦</span><b>Studio</b></div><div class="st-wrap">
+    <div class="st-h"><span>Oluştur</span></div>
+    <div class="st-grid">${STUDIO_TILES.map(([k,ic])=>`<button class="st-tile" onclick="runSkill('${k}')"><span class="ic">${ic}</span>${SK[k].h}</button>`).join('')}</div>
+    <div class="st-h"><span>Notlar</span><span>${studioNotes.length}</span></div>
+    ${studioNotes.length?studioNotes.map(n=>`<div class="st-card"><div class="t" onclick="studioToggle('${n.id}')">${studioOpenId===n.id?'▾':'▸'} ${n.t.replace(/</g,'&lt;')}</div>${studioOpenId===n.id?`<div class="full">${n.h}</div>`:`<div class="pv">${(n.md||'').replace(/[<#*]/g,'').slice(0,220)}</div>`}<div class="ft"><span>${new Date(n.ts).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span><span style="flex:1"></span><button onclick="studioCopy('${n.id}')" title="Kopyala">⧉</button><button onclick="studioDel('${n.id}')" title="Sil">🗑</button></div></div>`).join(''):`<div class="st-empty">Oluşturulan çıktılar ve 📌 ile kaydettiğin yanıtlar burada birikir.</div>`}
+  </div>`;
+}
+function studioSend(q){
+  q=(q||'').trim(); if(!q) return;
+  studioPendingTitle=null; aiSend('side_ai',q);
+}
+function renderStudyChat(m){
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
+    <div class="sc-body" id="scChat"></div>
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-box"><textarea id="scIn" rows="1" placeholder="Kaynaklarına bir şey sor…"></textarea><span class="sc-n" id="scN"></span><button class="sc-go" id="scGo" title="Gönder">➤</button></div></div></div>`;
+  const i=$('#scIn'), go=()=>{ const v=i.value; i.value=''; autoGrow(i); studioSend(v); };
+  $('#scGo').onclick=go;
+  i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
+  i.oninput=()=>autoGrow(i);
+  updateSideAiCtx(); renderStudyChatBody(); i.focus();
+}
+function renderStudyChatBody(){
+  const c=$('#scChat'); if(!c||active!=='studychat') return;
+  const s=ai.side_ai; if(!s) return;
+  const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
+  const n=getCheckedSources().length;
+  let h='';
+  if(!msgs.length&&!s.running){
+    h=`<div class="sc-hero"><div class="big">Kaynaklarınla sohbet</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
+  }else{
+    h=msgs.map(({x,i})=>x.w==='me'?`<div class="sc-msg me">${x.h}</div>`:`<div class="sc-msg a">${x.h}<div class="sc-act"><button onclick="studioSaveMsg(${i})">📌 Nota kaydet</button></div></div>`).join('');
+    if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
+  }
+  c.innerHTML=`<div class="sc-col">${h}</div>`;
+  c.scrollTop=c.scrollHeight;
+  const st=$('#scStop'); if(st) st.style.display=(s.running||s.pending)?'inline-flex':'none';
+  const ch=$('#scChips');
+  if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
+  runMermaid('#scChat .mermaid');
+}
 /* ---------- Sohbet / yönlendirici (Sağ Panel Gerçek AI) ---------- */
 function chat(who,html){
   ai.side_ai.msgs.push({w:who==='me'?'me':'a',h:html});
@@ -2773,7 +4530,7 @@ function togglePane(side){
 function leftHeaderAct(){
   if(curMode==='ai'){ newSession(); return; }
   const allOpen=tree.every(g=>g.open);
-  tree.forEach(g=>{g.open=!allOpen;});
+  tree.forEach(g=>{g.open=!allOpen;TREE_OPEN[(g.id||'')+'|'+g.n]=g.open;});
   renderTree();
 }
 $$('.rt').forEach(t=>t.onclick=()=>{
@@ -2784,6 +4541,7 @@ $$('.rt').forEach(t=>t.onclick=()=>{
   if(t.dataset.rt==='props') updateRightProps();
 });
 function rtab(n){
+  if(n==='ai'&&curMode==='study') n='studio';
   $('#rtabsBar').style.display='';
   viewerPrev=null;
   const el=$(`.rt[data-rt=${n}]`);
@@ -2848,11 +4606,13 @@ function layoutMode(m){
     const act=$('#leftActBtn');
     if(act){ act.textContent=sess?'＋':'↕'; act.title=sess?'Yeni AI oturumu':'Klasörleri daralt/genişlet'; }
   };
-  $('.rt[data-rt=ai]').style.display=(m==='ai')?'none':'';
+  $('.rt[data-rt=ai]').style.display=(m==='ai'||m==='study')?'none':'';
+  $('.rt[data-rt=studio]').style.display=(m==='study')?'':'none';
+  if(m!=='study'&&$('.rt[data-rt=studio].on')){ const a=$('.rt[data-rt=ai]'); if(a)a.click(); }
   if(m==='kasalar'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='write'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
-  if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');rtab('ai');}
-  if(m==='plan'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');renderStudio();rtab('studio');}
+  if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
   syncPaneBtns();
 }
@@ -2865,7 +4625,8 @@ function setMode(m){
   if(m==='kasalar')openPage('kasalar');
   if(m==='plan')openPage('cal');
   if(m==='ai'){const cur=isAI(active)?active:(openTabs.find(isAI)||'ai1'); openPage(cur);}
-  if((m==='write'||m==='study')&&(isAI(active)||active==='kasalar')){
+  if(m==='study') openPage('studychat');
+  else if(m==='write'&&(isAI(active)||active==='kasalar')){
     const o=openTabs.find(x=>!isAI(x)&&x!=='kasalar')||firstVaultTab();
     openPage(o);
   }
@@ -2899,7 +4660,7 @@ const cmds=[
  ['Odak modu (Tam Ekran)','Ctrl+.',()=>toggleZen()],
  ['Yaz moduna geç','',()=>setMode('write')],
  ['Çalış (NotebookLM) moduna geç','',()=>setMode('study')],
- ['Akademik Takvimi aç','',()=>setMode('plan')],
+ ['AgyCal Akıllı Takvimi aç','',()=>setMode('plan')],
  ['Trafo Lab Analizörünü aç','',()=>openPage('trafo')],
  ['RC Filtre Simülatörünü aç','',()=>openPage('sim')],
  ['Skill menüsünü aç','',()=>rtab('skills')],
@@ -2934,8 +4695,20 @@ document.addEventListener('keydown',e=>{
   }
   if(e.key==='Tab'&&e.shiftKey&&!e.ctrlKey&&isAI(active)){e.preventDefault();cycleMode(active);return;}
   if(e.key==='Escape'){
+    if($('#gcalModalBg')?.classList.contains('show')){ closeCalModal(); return; }
     if(app.classList.contains('zen')){ toggleZen(); return; }
     closePal(); closeKasaModal();
+  }
+  if(active==='cal'&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&!['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)&&!e.target.isContentEditable&&!$('#gcalModalBg')?.classList.contains('show')){
+    const k=e.key.toLowerCase();
+    if(k==='d'){e.preventDefault();gcalSetView('day');return;}
+    if(k==='w'){e.preventDefault();gcalSetView('week');return;}
+    if(k==='m'){e.preventDefault();gcalSetView('month');return;}
+    if(k==='a'){e.preventDefault();gcalSetView('agenda');return;}
+    if(k==='y'){e.preventDefault();gcalSetView('semester');return;}
+    if(k==='t'){e.preventDefault();gcalGoToday();return;}
+    if(k==='c'){e.preventDefault();openCalModal(null,GCAL.cursor);return;}
+    if(k==='q'){e.preventDefault();$('#gcalSmartInput')?.focus();return;}
   }
   if(e.altKey&&!e.ctrlKey&&!e.shiftKey&&(e.key==='n'||e.key==='N')){e.preventDefault();openNewNoteModal();return;}
   if((e.ctrlKey||e.altKey)&&!e.shiftKey&&/^[1-9]$/.test(e.key)){
@@ -3059,6 +4832,8 @@ const THEMES = [
   { id: 'tokyo', name: 'Tokyo Night', desc: 'Modern mavi-mor siber tonlar', dot: '#7aa2f7', cat: 'dark' },
   { id: 'gruvbox', name: 'Gruvbox Retro', desc: 'Sıcak sepyamsı koyu mod', dot: '#d79921', cat: 'dark' },
   { id: 'cyberpunk', name: 'Cyberpunk Neon', desc: 'Canlı pembe & mor kontrast', dot: '#f72585', cat: 'dark' },
+  { id: 'mono-dark', name: 'Saf Siyah-Beyaz', desc: 'Sade, Obsidian & NotebookLM tarzı', dot: '#ffffff', cat: 'dark' },
+  { id: 'mono-light', name: 'Saf Beyaz-Siyah (Açık)', desc: 'Sade kâğıt beyazı, siyah vurgu', dot: '#000000', cat: 'light' },
   { id: 'eink', name: 'E-Ink Kağıt (Açık)', desc: 'Sıfır parlama, kitap okuma', dot: '#1b4a2c', cat: 'light' },
   { id: 'sepia', name: 'Papirüs Sepya (Açık)', desc: 'Yumuşak sıcak gündüz modu', dot: '#874218', cat: 'light' }
 ];
@@ -3220,7 +4995,7 @@ function initRailDrag(){
 
 /* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
 initThemes(); initTextPrefs(); initRailDrag();
-setMode('kasalar'); loadVault(); loadChats();
+setMode('kasalar'); loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
 </script>
 </body>
 </html>

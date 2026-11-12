@@ -40,23 +40,8 @@ pub fn init() {
     let n_ev: i64 = c
         .query_row("SELECT COUNT(*) FROM cal_events", [], |r| r.get(0))
         .unwrap_or(0);
-    if n_ev == 0 {
-        let seeds = [
-            (3, "Kontrol Sistemleri Quiz Çalışma", "exam", "Kontrol_Sistemlerine_Giris"),
-            (6, "Elektrik Makinaları Lab: 3 Fazlı Trafo", "lab", "Elektrik_Makineleri_Lab"),
-            (9, "Seçmeli Tasarım İHA Raporu", "task", "Secmeli_Tasarim"),
-            (12, "Yüksek Gerilim Manevra & Deşarj Tekrarı", "task", "Yuksek_Gerilim_Teknigi"),
-            (18, "VİZE: Kontrol Sistemlerine Giriş", "exam", "Kontrol_Sistemlerine_Giris"),
-            (20, "VİZE: Yüksek Gerilim Tekniği", "exam", "Yuksek_Gerilim_Teknigi"),
-            (24, "Elektrik Makinaları Lab Sözlü Quiz", "exam", "Elektrik_Makineleri_Lab"),
-        ];
-        for (day, title, kind, kasa) in seeds {
-            let _ = c.execute(
-                "INSERT INTO cal_events(day,title,kind,kasa) VALUES(?1,?2,?3,?4)",
-                params![day, title, kind, kasa],
-            );
-        }
-    }
+    // seeds removed
+    let _ = n_ev;
 }
 
 pub fn add_chat_msg(session: &str, w: &str, h: &str) {
