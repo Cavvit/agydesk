@@ -1071,15 +1071,20 @@ function renderTree(){
     if(x.k){kids=document.createElement('div');kids.className='kids'+(x.open?' show':'');host.appendChild(kids);build(x.k,kids);}
     d.onclick=e=>{
       if(x.k){d.classList.toggle('open');kids.classList.toggle('show');}
-      if(x.id&&!side)openPage(x.id);
+      if(x.id&&(e.ctrlKey||e.metaKey)){ openPage(x.id,true,{newTab:true}); return; }
+      if(x.id&&!side)openPage(x.id,false,{replace:true});
       if(x.id&&side){
-        if(e.ctrlKey||e.metaKey){ openPage(x.id,true); return; }
+        if(isBlank(active)){ openPage(x.id,true,{replace:true}); return; }
         const p=pages[x.id];
         openRightViewer(p?p.rel:x.id.slice(5),p?p.t:x.n);
       }
     };
+    if(x.id){
+      d.onmousedown=e=>{ if(e.button===1) e.preventDefault(); };
+      d.onauxclick=e=>{ if(e.button===1){ e.preventDefault(); e.stopPropagation(); openPage(x.id,true,{newTab:true}); } };
+    }
     if(x.id&&side){
-      d.ondblclick=e=>{ e.stopPropagation(); openPage(x.id,true); };
+      d.ondblclick=e=>{ e.stopPropagation(); openPage(x.id,true,{replace:true}); };
     }
   });
   build(tree,root);
@@ -1202,14 +1207,30 @@ function closeRightViewer(){
   }
   syncPaneBtns();
 }
-function openPage(id,forceTab=false){
+const isBlank=id=>String(id).startsWith('blank:');
+let blankN=0;
+function newBlankTab(){
+  blankN++;
+  const id='blank:'+blankN;
+  const i=openTabs.indexOf(active);
+  openTabs.splice(i===-1?openTabs.length:i+1,0,id);
+  openPage(id);
+}
+/* opts.replace: aktif sekmenin içeriğini değiştir (Obsidian tıklama) · opts.newTab: her zaman yeni sekme (orta tık) */
+function openPage(id,forceTab=false,opts={}){
   if(isAI(id)&&!ai[id])return;
   const p=pages[id];
   if(!forceTab&&!openTabs.includes(id)&&((p&&p.ext&&SIDE_EXT.includes(p.ext))||(String(id).startsWith('note:')&&isSideDoc(id)))){
     openRightViewer(p?p.rel:id.slice(5),p?p.t:'');
     return;
   }
-  if(!openTabs.includes(id))openTabs.push(id);
+  if(!openTabs.includes(id)){
+    const ai_=openTabs.indexOf(active);
+    const canReplace=opts.replace&&!opts.newTab&&ai_!==-1&&!isAI(active)&&active!=='kasalar'&&!isAI(id);
+    if(canReplace) openTabs[ai_]=id;
+    else if(opts.newTab&&ai_!==-1) openTabs.splice(ai_+1,0,id);
+    else openTabs.push(id);
+  }
   active=id;
   if(p&&p.kasa&&currentKasa!=='all'&&currentKasa!==p.kasa){
     currentKasa=p.kasa;
@@ -1231,7 +1252,7 @@ function closeTab(id){
   renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();
 }
 const isAI=id=>id.startsWith('ai');
-const pg=id=>isAI(id)?{t:(ai[id]?ai[id].title:id),i:'◆'}:(pages[id]||{t:id,i:'📝'});
+const pg=id=>isAI(id)?{t:(ai[id]?ai[id].title:id),i:'◆'}:(isBlank(id)?{t:'Yeni sekme',i:'📄'}:(pages[id]||{t:id,i:'📝'}));
 let draggedTabId=null, isTabDragging=false;
 function moveActiveTab(dir){
   const idx=openTabs.indexOf(active);
@@ -1327,10 +1348,10 @@ function renderTabs(){
     d.onauxclick=e=>{ if(e.button===1){e.preventDefault();closeTab(id);} };
     t.appendChild(d);
   });
-  const a=document.createElement('div');a.className='tab-add';a.title=curMode==='ai'?'Yeni AI oturumu':'Yeni Not Ekle (Alt+N)';a.textContent='＋';
+  const a=document.createElement('div');a.className='tab-add';a.title=curMode==='ai'?'Yeni AI oturumu':'Yeni boş sekme (Ctrl+T)';a.textContent='＋';
   a.onclick=()=>{
     if(curMode==='ai'){newSession();return;}
-    openNewNoteModal();
+    newBlankTab();
   };
   t.appendChild(a);
   const n=Object.values(ai).filter(s=>s.running).length;
@@ -2334,9 +2355,21 @@ async function saveActiveNote(id){
     renderMain();
   }catch(e){ alert('Kaydetme hatası: '+e.message); }
 }
+function renderBlankTab(m){
+  const lk='display:block;color:var(--cu);cursor:pointer;padding:5px 0;font-size:14px';
+  m.innerHTML=`<div style="height:100%;min-height:60vh;display:flex;align-items:center;justify-content:center">
+    <div style="text-align:left;min-width:240px">
+      <div style="font-size:12px;color:var(--mut);margin-bottom:10px">Sol panelden bir dosya seç · orta tık: yeni sekme</div>
+      <span style="${lk}" onclick="openNewNoteModal()">Yeni not oluştur (Alt+N)</span>
+      <span style="${lk}" onclick="openPal()">Dosyaya git (Ctrl+K)</span>
+      <span style="${lk}" onclick="openPage('kasalar')">Kasalar ana ekranı</span>
+      <span style="${lk}" onclick="closeTab(active)">Sekmeyi kapat (Ctrl+W)</span>
+    </div></div>`;
+}
 function renderMain(){
   const m=$('#main');
   if(active==='kasalar') renderKasalarHome(m);
+  else if(isBlank(active)) renderBlankTab(m);
   else if(active.startsWith('note:')) renderVaultNote(m,active);
   else if(active==='cal') renderCal(m);
   else if(active==='trafo') renderTrafoLab(m);
@@ -2859,7 +2892,7 @@ function cycleTab(dir){
 function palRender(q=''){
   const l=$('#palList'); l.innerHTML='';
   const ql=q.toLowerCase().trim();
-  const noteItems=Object.entries(pages).filter(([id,p])=>id.startsWith('note:')&&(p.t.toLowerCase().includes(ql)||(p.folder||'').toLowerCase().includes(ql))).slice(0,8).map(([id,p])=>[`${p.i||'📝'} ${p.folder?p.folder+' · ':''}${p.t}`,p.ext==='.pdf'?'PDF Sekmesi':'Not',()=>openPage(id,true)]);
+  const noteItems=Object.entries(pages).filter(([id,p])=>id.startsWith('note:')&&(p.t.toLowerCase().includes(ql)||(p.folder||'').toLowerCase().includes(ql))).slice(0,8).map(([id,p])=>[`${p.i||'📝'} ${p.folder?p.folder+' · ':''}${p.t}`,p.ext==='.pdf'?'PDF Sekmesi':'Not',()=>openPage(id,true,{replace:true})]);
   const allCmds=ql?[...noteItems,...cmds.filter(c=>c[0].toLowerCase().includes(ql))]:cmds;
   allCmds.forEach((c,i)=>{
     const d=document.createElement('div'); d.className='pi'+(i==0?' sel':''); d.innerHTML=`<span>${c[0]}</span><kbd>${c[1]}</kbd>`;
@@ -2896,6 +2929,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='PageDown'){e.preventDefault();cycleTab(1);return;}
   if(e.key==='PageUp'){e.preventDefault();cycleTab(-1);return;}
   if(e.key==='w'||e.key==='W'){e.preventDefault();closeTab(active);return;}
+  if((e.key==='t'||e.key==='T')&&!e.shiftKey){e.preventDefault();newBlankTab();return;}
   if(e.key==='k'||e.key==='K'){e.preventDefault();openPal();}
   if(e.key==='b'||e.key==='B'){e.preventDefault();togglePane('left');}
   if(e.key==='j'||e.key==='J'){e.preventDefault();togglePane('right');}
