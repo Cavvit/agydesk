@@ -199,7 +199,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .out .oh{background:var(--bg);padding:6px 12px;font:11px var(--mono);color:var(--cu);display:flex;justify-content:space-between}
 .out .ob{padding:12px 14px;font-size:13.5px}
 @keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.cal{padding:32px;max-width:900px;margin:0 auto}
+.cal{padding:32px;width:100%;box-sizing:border-box;max-width:900px;margin:0 auto}
 .cal h1{font-size:28px;letter-spacing:-.02em;margin-bottom:4px}
 .cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:18px}
 .cgrid>div{background:var(--bg2);min-height:78px;padding:6px 8px;font-size:12px}
@@ -208,7 +208,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .ev{margin-top:4px;padding:2px 6px;border-radius:4px;font-size:11px;background:var(--cu-d);color:var(--cu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ev.g{background:#7bc47f22;color:var(--ok)}
 .gsync{display:inline-flex;gap:6px;align-items:center;font:11px var(--mono);color:var(--ok);margin-left:10px}
-.sim{padding:28px;display:grid;gap:16px;max-width:900px;margin:0 auto}
+.sim{padding:28px;display:grid;gap:16px;width:100%;box-sizing:border-box;max-width:900px;margin:0 auto}
 .sim h1{font-size:28px;letter-spacing:-.02em}
 canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;display:block}
 .sl{display:flex;gap:12px;align-items:center;font:12px var(--mono);color:var(--mut)}
@@ -389,7 +389,7 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .tpop.show{display:flex;flex-direction:column;gap:6px;animation:in .16s ease}
 /* ----- Metin ayarları (Notion tarzı): font + ölçek + tam genişlik ----- */
 .main{--sans:var(--cfont,'Instrument Sans',system-ui,sans-serif);font-family:var(--sans)}
-.main>*{zoom:var(--tz,1)}
+html.tz-on .main>*{zoom:var(--tz,1)}
 body.fw-full .doc{max-width:none}
 .fpop{left:56px;bottom:80px;width:300px}
 .fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
@@ -3135,7 +3135,7 @@ function applyTextPrefs(){
   curTz=Math.min(TZ_MAX,Math.max(TZ_MIN,Math.round(curTz*20)/20));
   const f=FONTS.find(x=>x.id===curFont)||FONTS[0];
   document.documentElement.style.setProperty('--cfont',f.v);
-  document.documentElement.style.setProperty('--tz',curTz);
+  document.documentElement.style.setProperty('--tz',curTz);document.documentElement.classList.toggle('tz-on',+curTz!==1);
   document.body.classList.toggle('fw-full',fullW);
   localStorage.setItem('agydesk_font',f.id);
   localStorage.setItem('agydesk_tz',curTz);
