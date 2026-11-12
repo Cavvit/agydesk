@@ -7,7 +7,7 @@
 <link rel="icon" type="image/png" href="/agydesk_logo.png">
 <link rel="shortcut icon" href="/favicon.ico">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Lora:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -384,6 +384,23 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .kmodal input:focus,.kmodal select:focus,.kmodal textarea:focus{border-color:var(--cu)}
 .tpop{position:fixed;left:56px;bottom:36px;width:400px;max-width:calc(100vw - 72px);max-height:calc(100vh - 54px);overflow-y:auto;overflow-x:hidden;background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:12px;z-index:75;display:none;box-shadow:0 18px 48px #000a;backdrop-filter:blur(6px);box-sizing:border-box}
 .tpop.show{display:flex;flex-direction:column;gap:6px;animation:in .16s ease}
+/* ----- Metin ayarları (Notion tarzı): font + ölçek + tam genişlik ----- */
+.main{--sans:var(--cfont,'Instrument Sans',system-ui,sans-serif);font-family:var(--sans)}
+.main>*{zoom:var(--tz,1)}
+body.fw-full .doc{max-width:none}
+.fpop{left:56px;bottom:80px;width:300px}
+.fgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.fbtn{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 4px;color:var(--txt);cursor:pointer;text-align:center;font-size:20px;line-height:1.1}
+.fbtn small{display:block;font:500 10.5px var(--mono);color:var(--mut);margin-top:4px}
+.fbtn:hover{border-color:var(--cu)}.fbtn.active{border-color:var(--cu);background:var(--cu-d)}
+.fsize{display:flex;align-items:center;gap:8px}
+.fsize input[type=range]{flex:1;accent-color:var(--cu)}
+.fsize button,.frow button{background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--txt);cursor:pointer;padding:4px 10px;font:500 12px var(--mono)}
+.fsize button:hover,.frow button:hover{border-color:var(--cu)}
+.frow{display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:4px 2px}
+.fsw{width:34px;height:19px;border-radius:10px;background:var(--line);position:relative;cursor:pointer;border:0;padding:0}
+.fsw::after{content:'';position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--txt);transition:left .15s}
+.fsw.on{background:var(--cu)}.fsw.on::after{left:17px}
 .tpop-head{display:flex;align-items:center;justify-content:space-between;padding-bottom:6px;border-bottom:1px solid var(--line);font:600 11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
 .tpop-sec{font:600 10px var(--mono);text-transform:uppercase;letter-spacing:.05em;color:var(--mut);padding:4px 2px 2px}
 .tgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -450,12 +467,14 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
     <button class="rbtn" data-mode="ai" data-tip="Tam Ekran AI Oturumları">◆</button>
     <div class="sp"></div>
     <button class="rbtn" id="themeBtn" data-tip="Görünüm ve Tema Seçici">◑</button>
+    <button class="rbtn" id="fontBtn" data-tip="Yazı tipi ve boyutu (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
     <button class="rbtn" id="zenBtn" data-tip="Odak modu (Ctrl+.)">◐</button>
     <button class="rbtn" id="palBtn" data-tip="Komut paleti (Ctrl+K)">⌘</button>
     <div class="uring" id="uring" style="--p:100" title="AI kullanım & kalan haklar"><span id="uringTxt">100%</span></div>
   </nav>
   <div class="upop" id="upop"></div>
   <div class="tpop" id="tpop"></div>
+  <div class="tpop fpop" id="fpop"></div>
 
   <!-- SOL -->
   <aside class="left" id="left"><div class="pane-in">
@@ -3083,6 +3102,7 @@ function renderThemePop() {
 function openThemePop() {
   const pop = $('#tpop');
   if (!pop) return;
+  $('#fpop')?.classList.remove('show');
   renderThemePop();
   pop.classList.toggle('show');
 }
@@ -3098,8 +3118,62 @@ function initThemes() {
   });
 }
 
+/* ---------- Metin ayarları (Notion tarzı) ---------- */
+const FONTS=[
+  {id:'sans',n:'Varsayılan',v:"'Instrument Sans',system-ui,sans-serif",s:'Ag'},
+  {id:'serif',n:'Serif',v:"'Lora',Georgia,Cambria,'Times New Roman',serif",s:'Ag'},
+  {id:'mono',n:'Mono',v:"'JetBrains Mono',ui-monospace,Consolas,monospace",s:'Ag'}
+];
+const TZ_MIN=0.8, TZ_MAX=1.8;
+let curFont=localStorage.getItem('agydesk_font')||'sans';
+let curTz=parseFloat(localStorage.getItem('agydesk_tz'))||1;
+let fullW=localStorage.getItem('agydesk_fullw')==='1';
+function applyTextPrefs(){
+  curTz=Math.min(TZ_MAX,Math.max(TZ_MIN,Math.round(curTz*20)/20));
+  const f=FONTS.find(x=>x.id===curFont)||FONTS[0];
+  document.documentElement.style.setProperty('--cfont',f.v);
+  document.documentElement.style.setProperty('--tz',curTz);
+  document.body.classList.toggle('fw-full',fullW);
+  localStorage.setItem('agydesk_font',f.id);
+  localStorage.setItem('agydesk_tz',curTz);
+  localStorage.setItem('agydesk_fullw',fullW?'1':'0');
+  renderFontPop();
+}
+function setFont(id){curFont=id;applyTextPrefs();}
+function setTz(v){curTz=+v;applyTextPrefs();}
+function stepTz(d){curTz+=d*0.1;applyTextPrefs();}
+function toggleFullW(){fullW=!fullW;applyTextPrefs();}
+function renderFontPop(){
+  const pop=$('#fpop'); if(!pop)return;
+  pop.innerHTML=`
+    <div class="tpop-head"><span>Aa Yazı ayarları</span><span style="font-size:10.5px;color:var(--cu)">%${Math.round(curTz*100)}</span></div>
+    <div class="tpop-sec">Yazı tipi</div>
+    <div class="fgrid">${FONTS.map(f=>`<button class="fbtn ${f.id===curFont?'active':''}" style="font-family:${f.v}" onclick="setFont('${f.id}')">${f.s}<small>${f.n}</small></button>`).join('')}</div>
+    <div class="tpop-sec" style="margin-top:6px">Yazı boyutu</div>
+    <div class="fsize"><button onclick="stepTz(-1)" title="Küçült (Ctrl −)">A−</button>
+      <input type="range" min="${TZ_MIN}" max="${TZ_MAX}" step="0.05" value="${curTz}" oninput="setTz(this.value)">
+      <button onclick="stepTz(1)" title="Büyüt (Ctrl +)">A+</button>
+      <button onclick="setTz(1)" title="Sıfırla (Ctrl 0)">⟲</button></div>
+    <div class="frow" style="margin-top:6px"><span>Tam genişlik</span><button class="fsw ${fullW?'on':''}" onclick="toggleFullW()" title="Not sayfasını tüm genişliğe yay"></button></div>
+    <div style="font:11px var(--mono);color:var(--mut)">Kısayol: Ctrl + / Ctrl − / Ctrl 0</div>`;
+}
+function initTextPrefs(){
+  applyTextPrefs();
+  const b=$('#fontBtn');
+  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
+  const fp=$('#fpop'); if(fp) fp.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{ if(!e.target.closest('#fontBtn')) $('#fpop')?.classList.remove('show'); });
+  document.addEventListener('keydown',e=>{
+    if(!(e.ctrlKey||e.metaKey)||e.altKey) return;
+    if(e.key==='+'||e.key==='='){e.preventDefault();stepTz(1);}
+    else if(e.key==='-'||e.key==='_'){e.preventDefault();stepTz(-1);}
+    else if(e.key==='0'){e.preventDefault();setTz(1);}
+  });
+  document.addEventListener('wheel',e=>{ if(e.ctrlKey){e.preventDefault();stepTz(e.deltaY<0?1:-1);} },{passive:false});
+}
+
 /* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
-initThemes();
+initThemes(); initTextPrefs();
 setMode('kasalar'); loadVault(); loadChats();
 </script>
 </body>
