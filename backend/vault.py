@@ -19,6 +19,10 @@ FOLDER_NAMES = {
     "Kontrol_Sistemlerine_Giris": "Kontrol Sistemlerine Giriş",
     "Secmeli_Tasarim": "Seçmeli Tasarım",
     "Yuksek_Gerilim_Teknigi": "Yüksek Gerilim Tekniği",
+    "Haberlesme_Lab": "Haberleşme Laboratuvarı",
+    "Kontrol_Lab": "Kontrol Laboratuvarı",
+    "Katihal_Elektronigi": "Katıhal Elektroniği",
+    "Universite_Secmeli_Beslenme": "Beslenme ve Sağlıklı Yaşam",
 }
 
 FOLDER_META = {
@@ -51,6 +55,30 @@ FOLDER_META = {
         "accent": "#7bc47f",
         "tag": "SAYZEK · İHA & Termal",
         "desc": "Termal kamera görüntü analizi, İHA verileriyle arazi sınıflandırma, değişim tespiti ve 5N1K proje raporları.",
+    },
+    "Haberlesme_Lab": {
+        "icon": "📡",
+        "accent": "#58a6ff",
+        "tag": "Haberleşme · Modülasyon & Fiber",
+        "desc": "AM/FM/PWM/FSK modülasyonu, spektrum analizi, fiber optik verici-alıcı ve anten deneyleri.",
+    },
+    "Kontrol_Lab": {
+        "icon": "🎛️",
+        "accent": "#3fb950",
+        "tag": "Kontrol Lab · PID & Tank",
+        "desc": "İkili su tankı seviye kontrolü, ısı akış sistemleri, araç hız kontrolü ve DC motor PID regülasyonu.",
+    },
+    "Katihal_Elektronigi": {
+        "icon": "⚛️",
+        "accent": "#bc8cff",
+        "tag": "Fizik & Yarıiletken · Kuantum & Bant",
+        "desc": "Kristal örgüler, Miller indisleri, Drude iletkenlik modeli, Fermi-Dirac dağılımı ve p-n eklem fiziği.",
+    },
+    "Universite_Secmeli_Beslenme": {
+        "icon": "🥑",
+        "accent": "#f1e05a",
+        "tag": "Üni Seçmeli · Beslenme & Metabolizma",
+        "desc": "Makro/mikro besin ögeleri, CHO, lipidler, proteinler, vitaminler ve sporcu beslenmesi rehberleri.",
     },
 }
 
@@ -425,6 +453,9 @@ def build_context_from_sources(rels: list[str], active_rel: str | None = None, m
                 if not txt:
                     blocks.append(f"[Ekli PDF Kaynağı (Görsel/Taranmış): {rel} — Dosya yolu: {p}]")
                     continue
+            elif ext in IMG_EXT:
+                blocks.append(f"[Ekli Görsel Kaynağı: {rel} ({ext}) — Dosya yolu: {p} (görmek için read_file / view_file kullan)]")
+                continue
             else:
                 blocks.append(f"[Ekli Kaynak Dosya: {rel} ({ext}) — Dosya yolu: {p}]")
                 continue
@@ -444,36 +475,52 @@ def build_context_from_sources(rels: list[str], active_rel: str | None = None, m
     return "[KASA KAYNAK BAĞLAMI — Yanıtını aşağıdaki gerçek ders notlarına ve kaynaklara dayandır:]\n" + "\n\n".join(blocks) + "\n--- [KAYNAK BAĞLAMI SONU] ---\n\n"
 
 
+def resolve_chat_images(rels: list[str]) -> list[Path]:
+    """Sohbete eklenen görsel yollarını doğrular ve mutlak Path listesi döndürür."""
+    out: list[Path] = []
+    for raw in (rels or [])[:8]:
+        clean = str(raw).strip()
+        if clean.startswith("note:"):
+            clean = clean[5:]
+        if not clean:
+            continue
+        try:
+            p = _safe_path(clean)
+        except Exception:
+            continue
+        if p.exists() and p.is_file() and p.suffix.lower() in IMG_EXT and p not in out:
+            out.append(p)
+    return out
+
+
+def build_image_prompt_block(paths: list[Path]) -> str:
+    if not paths:
+        return ""
+    lines = [f"- Görsel {i + 1}: {p}" for i, p in enumerate(paths)]
+    return (
+        "[KULLANICININ SOHBETE EKLEDİĞİ GÖRSELLER — Yanıtlamadan önce `read_file` / `view_file` "
+        "aracını kullanarak aşağıdaki görsel dosyalarını mutlaka açıp incele:]\n"
+        + "\n".join(lines)
+        + "\n[EK GÖRSELLER SONU]\n\n"
+    )
+
+
 def save_asset(note_rel: str, name: str, data: bytes) -> dict:
     """Görsel, PDF, DOCX veya MD dosyasını ilgili kasanın altına kaydeder."""
     ext = Path(name).suffix.lower()
-    allowed = ASSET_EXT | {".md", ".html"}
-    if ext not in allowed:
-        raise ValueError("Desteklenmeyen dosya türü (yalnızca MD, HTML, PDF, DOCX veya görsel)")
+    is_chat_img = note_rel.strip() == ".chat_images"
+    if is_chat_img:
+        if ext not in IMG_EXT:
+            raise ValueError("Sohbete yalnızca görsel dosyaları eklenebilir")
+    else:
+        allowed = ASSET_EXT | {".md", ".html"}
+        if ext not in allowed:
+            raise ValueError("Desteklenmeyen dosya türü (yalnızca MD, HTML, PDF, DOCX veya görsel)")
     if not data or len(data) > MAX_ASSET:
         raise ValueError("Dosya boş veya 50 MB sınırını aşıyor")
-    if note_rel:
-        clean_nr = note_rel[5:] if note_rel.startswith("note:") else note_rel
-        p_nr = _safe_path(clean_nr)
-        base = p_nr if p_nr.is_dir() else p_nr.parent
-    else:
-        folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]) if VAULT_DIR.exists() else []
-        base = folders[0] if folders else VAULT_DIR
-    if base == VAULT_DIR and VAULT_DIR.exists():
-        folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")])
-        if folders:
-            base = folders[0]
     stem = re.sub(r"[^\w\-]+", "_", Path(name).stem).strip("_")[:40] or "dosya"
-    is_dir_target = bool(note_rel and _safe_path(note_rel[5:] if note_rel.startswith("note:") else note_rel).is_dir())
-    if ext in (".md", ".html", ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt") and is_dir_target:
-        d = base
-        target = d / f"{stem}{ext}"
-        n = 1
-        while target.exists():
-            n += 1
-            target = d / f"{stem}_{n}{ext}"
-    else:
-        d = base / "_gorseller"
+    if is_chat_img:
+        d = VAULT_DIR / ".chat_images"
         d.mkdir(parents=True, exist_ok=True)
         stamp = int(time.time())
         target = d / f"{stem}_{stamp}{ext}"
@@ -481,6 +528,35 @@ def save_asset(note_rel: str, name: str, data: bytes) -> dict:
         while target.exists():
             n += 1
             target = d / f"{stem}_{stamp}_{n}{ext}"
+    else:
+        if note_rel:
+            clean_nr = note_rel[5:] if note_rel.startswith("note:") else note_rel
+            p_nr = _safe_path(clean_nr)
+            base = p_nr if p_nr.is_dir() else p_nr.parent
+        else:
+            folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")]) if VAULT_DIR.exists() else []
+            base = folders[0] if folders else VAULT_DIR
+        if base == VAULT_DIR and VAULT_DIR.exists():
+            folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")])
+            if folders:
+                base = folders[0]
+        is_dir_target = bool(note_rel and _safe_path(note_rel[5:] if note_rel.startswith("note:") else note_rel).is_dir())
+        if ext in (".md", ".html", ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt") and is_dir_target:
+            d = base
+            target = d / f"{stem}{ext}"
+            n = 1
+            while target.exists():
+                n += 1
+                target = d / f"{stem}_{n}{ext}"
+        else:
+            d = base / "_gorseller"
+            d.mkdir(parents=True, exist_ok=True)
+            stamp = int(time.time())
+            target = d / f"{stem}_{stamp}{ext}"
+            n = 1
+            while target.exists():
+                n += 1
+                target = d / f"{stem}_{stamp}_{n}{ext}"
     if not str(target.resolve()).startswith(str(VAULT_DIR.resolve())):
         raise ValueError("Geçersiz dosya yolu")
     target.write_bytes(data)

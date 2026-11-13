@@ -12,11 +12,11 @@ pub struct ProviderSpec {
 }
 
 pub const PROVIDERS: &[ProviderSpec] = &[
-    ProviderSpec { id: "claude-opus",   label: "Claude Opus 5.5",   limit: Some(40),  window_h: 5,  cloud: true },
-    ProviderSpec { id: "claude-sonnet", label: "Claude Sonnet 5.5", limit: Some(150), window_h: 5,  cloud: true },
-    ProviderSpec { id: "gemini-argon",  label: "Gemini 4 Argon",    limit: Some(100), window_h: 5,  cloud: true },
-    ProviderSpec { id: "gemini-flash",  label: "Gemini 3.8 Flash",  limit: Some(500), window_h: 24, cloud: true },
-    ProviderSpec { id: "local",         label: "Yerel (Ollama)",    limit: None,      window_h: 0,  cloud: false },
+    ProviderSpec { id: "claude-opus",     label: "Claude Opus 5.5",   limit: Some(40),  window_h: 5,  cloud: true },
+    ProviderSpec { id: "claude-sonnet",   label: "Claude Sonnet 5.5", limit: Some(150), window_h: 5,  cloud: true },
+    ProviderSpec { id: "gemini-argon",    label: "Gemini 4 Argon",    limit: Some(100), window_h: 5,  cloud: true },
+    ProviderSpec { id: "gemini-hydrogen", label: "Gemini 4 Hydrogen", limit: Some(500), window_h: 24, cloud: true },
+    ProviderSpec { id: "local",           label: "Yerel (Ollama)",    limit: None,      window_h: 0,  cloud: false },
 ];
 
 pub fn provider_spec(id: &str) -> &'static ProviderSpec {
@@ -112,13 +112,58 @@ pub static OLLAMA_URL: Lazy<String> = Lazy::new(|| {
     env::var("OLLAMA_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string())
 });
 
-pub fn model_for(provider: &str) -> String {
-    match provider {
-        "local" => env::var("AIWS_LOCAL_MODEL").unwrap_or_else(|_| "qwen2.5:14b".to_string()),
-        "gemini-flash" => env::var("AGY_FLASH_MODEL").unwrap_or_else(|_| "gemini-3.8-flash-low".to_string()),
-        "gemini-argon" => env::var("AGY_ARGON_MODEL").unwrap_or_else(|_| "gemini-4-argon-low".to_string()),
-        "claude-sonnet" => env::var("AGY_SONNET_MODEL").unwrap_or_else(|_| "claude-sonnet-5-5-low".to_string()),
-        "claude-opus" => env::var("AGY_OPUS_MODEL").unwrap_or_else(|_| "claude-opus-5-5-low".to_string()),
-        _ => "gemini-3.8-flash-low".to_string(),
+pub fn normalize_effort(effort: &str) -> &'static str {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "medium" => "medium",
+        "high" => "high",
+        "xhigh" => "xhigh",
+        _ => "low",
+    }
+}
+
+/// Only Gemini 4 Hydrogen exposes an xhigh variant in `agy models`; other cloud models cap at high.
+pub fn effective_effort(provider: &str, effort: &str) -> &'static str {
+    let norm = normalize_effort(effort);
+    if provider != "gemini-hydrogen" && norm == "xhigh" {
+        "high"
+    } else {
+        norm
+    }
+}
+
+pub fn model_for(provider: &str, effort: &str) -> String {
+    if provider == "local" {
+        return env::var("AIWS_LOCAL_MODEL").unwrap_or_else(|_| "qwen2.5:14b".to_string());
+    }
+    let eff = effective_effort(provider, effort);
+    let (env_key, base) = match provider {
+        "gemini-hydrogen" => ("AGY_HYDROGEN_MODEL", "gemini-4-hydrogen"),
+        "gemini-argon" => ("AGY_ARGON_MODEL", "gemini-4-argon"),
+        "claude-sonnet" => ("AGY_SONNET_MODEL", "claude-sonnet-5-5"),
+        "claude-opus" => ("AGY_OPUS_MODEL", "claude-opus-5-5"),
+        _ => ("AGY_HYDROGEN_MODEL", "gemini-4-hydrogen"),
+    };
+    if let Ok(v) = env::var(env_key) {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    format!("{}-{}", base, eff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_hydrogen_and_clamps_non_hydrogen_xhigh() {
+        assert_eq!(model_for("gemini-hydrogen", "low"), "gemini-4-hydrogen-low");
+        assert_eq!(model_for("gemini-hydrogen", "medium"), "gemini-4-hydrogen-medium");
+        assert_eq!(model_for("gemini-hydrogen", "high"), "gemini-4-hydrogen-high");
+        assert_eq!(model_for("gemini-hydrogen", "xhigh"), "gemini-4-hydrogen-xhigh");
+        assert_eq!(model_for("gemini-hydrogen", "unknown"), "gemini-4-hydrogen-low");
+        assert_eq!(model_for("gemini-argon", "xhigh"), "gemini-4-argon-high");
+        assert_eq!(model_for("claude-sonnet", "xhigh"), "claude-sonnet-5-5-high");
+        assert_eq!(model_for("claude-opus", "medium"), "claude-opus-5-5-medium");
     }
 }

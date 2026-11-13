@@ -39,19 +39,62 @@ FALLBACK_THRESHOLD = int(os.getenv("AIWS_FALLBACK_PCT", "85"))
 
 # Sağlayıcı limitleri (pencere içi istek kotası)
 PROVIDERS = {
-    "claude-opus":   {"label": "Claude Opus 5.5",    "limit": 40,  "window_h": 5,  "cloud": True},
-    "claude-sonnet": {"label": "Claude Sonnet 5.5",  "limit": 150, "window_h": 5,  "cloud": True},
-    "gemini-argon":  {"label": "Gemini 4 Argon",     "limit": 100, "window_h": 5,  "cloud": True},
-    "gemini-flash":  {"label": "Gemini 3.8 Flash",   "limit": 500, "window_h": 24, "cloud": True},
-    "local":         {"label": "Yerel (Ollama)",     "limit": None, "window_h": 0, "cloud": False},
+    "claude-opus":     {"label": "Claude Opus 5.5",   "limit": 40,   "window_h": 5,  "cloud": True},
+    "claude-sonnet":   {"label": "Claude Sonnet 5.5", "limit": 150,  "window_h": 5,  "cloud": True},
+    "gemini-argon":    {"label": "Gemini 4 Argon",    "limit": 100,  "window_h": 5,  "cloud": True},
+    "gemini-hydrogen": {"label": "Gemini 4 Hydrogen", "limit": 500,  "window_h": 24, "cloud": True},
+    "local":           {"label": "Yerel (Ollama)",    "limit": None, "window_h": 0,  "cloud": False},
+}
+
+_ENV_MODEL_OVERRIDES = {
+    "local": "AIWS_LOCAL_MODEL",
+    "gemini-hydrogen": "AGY_HYDROGEN_MODEL",
+    "gemini-argon": "AGY_ARGON_MODEL",
+    "claude-sonnet": "AGY_SONNET_MODEL",
+    "claude-opus": "AGY_OPUS_MODEL",
+}
+
+_BASE_MODELS = {
+    "gemini-hydrogen": "gemini-4-hydrogen",
+    "gemini-argon": "gemini-4-argon",
+    "claude-sonnet": "claude-sonnet-5-5",
+    "claude-opus": "claude-opus-5-5",
 }
 
 # agy models çıktısındaki gerçek model kimlikleri
 MODELS = {
     "local": os.getenv("AIWS_LOCAL_MODEL", "qwen2.5:14b"),
-    "gemini-flash": os.getenv("AGY_FLASH_MODEL", "gemini-3.8-flash-low"),
+    "gemini-hydrogen": os.getenv("AGY_HYDROGEN_MODEL", "gemini-4-hydrogen-low"),
     "gemini-argon": os.getenv("AGY_ARGON_MODEL", "gemini-4-argon-low"),
     "claude-sonnet": os.getenv("AGY_SONNET_MODEL", "claude-sonnet-5-5-low"),
     "claude-opus": os.getenv("AGY_OPUS_MODEL", "claude-opus-5-5-low"),
 }
+
+
+def normalize_effort(effort: str | None) -> str:
+    val = (effort or "low").strip().lower()
+    return val if val in ("low", "medium", "high", "xhigh") else "low"
+
+
+def effective_effort(provider: str, effort: str | None) -> str:
+    """Only Gemini 4 Hydrogen exposes an xhigh variant in `agy models`; other cloud models cap at high."""
+    norm = normalize_effort(effort)
+    if provider != "gemini-hydrogen" and norm == "xhigh":
+        return "high"
+    return norm
+
+
+def model_for(provider: str, effort: str | None = "low") -> str:
+    if provider == "local":
+        return MODELS["local"]
+    env_key = _ENV_MODEL_OVERRIDES.get(provider)
+    if env_key:
+        override = os.getenv(env_key, "").strip()
+        if override:
+            return override
+    eff = effective_effort(provider, effort)
+    base = _BASE_MODELS.get(provider, "gemini-4-hydrogen")
+    return f"{base}-{eff}"
+
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")

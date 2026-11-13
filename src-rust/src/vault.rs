@@ -92,6 +92,46 @@ static CUSTOM_FOLDERS: Lazy<Mutex<HashMap<String, FolderMeta>>> = Lazy::new(|| {
             desc: "Termal kamera görüntü analizi, İHA verileriyle arazi sınıflandırma, değişim tespiti ve 5N1K proje raporları.".to_string(),
         },
     );
+    m.insert(
+        "Haberlesme_Lab".to_string(),
+        FolderMeta {
+            label: "Haberleşme Laboratuvarı".to_string(),
+            icon: "📡".to_string(),
+            accent: "#58a6ff".to_string(),
+            tag: "Haberleşme · Modülasyon & Fiber".to_string(),
+            desc: "AM/FM/PWM/FSK modülasyonu, spektrum analizi, fiber optik verici-alıcı ve anten deneyleri.".to_string(),
+        },
+    );
+    m.insert(
+        "Kontrol_Lab".to_string(),
+        FolderMeta {
+            label: "Kontrol Laboratuvarı".to_string(),
+            icon: "🎛️".to_string(),
+            accent: "#3fb950".to_string(),
+            tag: "Kontrol Lab · PID & Tank".to_string(),
+            desc: "İkili su tankı seviye kontrolü, ısı akış sistemleri, araç hız kontrolü ve DC motor PID regülasyonu.".to_string(),
+        },
+    );
+    m.insert(
+        "Katihal_Elektronigi".to_string(),
+        FolderMeta {
+            label: "Katıhal Elektroniği".to_string(),
+            icon: "⚛️".to_string(),
+            accent: "#bc8cff".to_string(),
+            tag: "Fizik & Yarıiletken · Kuantum & Bant".to_string(),
+            desc: "Kristal örgüler, Miller indisleri, Drude iletkenlik modeli, Fermi-Dirac dağılımı ve p-n eklem fiziği.".to_string(),
+        },
+    );
+    m.insert(
+        "Universite_Secmeli_Beslenme".to_string(),
+        FolderMeta {
+            label: "Beslenme ve Sağlıklı Yaşam".to_string(),
+            icon: "🥑".to_string(),
+            accent: "#f1e05a".to_string(),
+            tag: "Üni Seçmeli · Beslenme & Metabolizma".to_string(),
+            desc: "Makro/mikro besin ögeleri, CHO, lipidler, proteinler, vitaminler ve sporcu beslenmesi rehberleri.".to_string(),
+        },
+    );
     Mutex::new(m)
 });
 
@@ -156,7 +196,11 @@ pub fn safe_path(rel: &str) -> Result<PathBuf, String> {
     if clean.contains("..") {
         return Err("Geçersiz dosya yolu".to_string());
     }
-    Ok(VAULT_DIR.join(clean))
+    let mut p = VAULT_DIR.clone();
+    for seg in clean.split('/').filter(|s| !s.is_empty()) {
+        p.push(seg);
+    }
+    Ok(p)
 }
 
 fn rel_posix(p: &Path) -> String {
@@ -886,6 +930,14 @@ pub fn build_context_from_sources(rels: &[String], active_rel: Option<&str>) -> 
                 .and_then(|v| v.get("html").and_then(|h| h.as_str()).map(|s| s.to_string()))
                 .map(|h| HTML_TAG_RE.replace_all(&h, " ").trim().to_string())
                 .unwrap_or_default()
+        } else if is_img_ext(&ext) {
+            blocks.push(format!(
+                "[Ekli Görsel Kaynağı: {} ({}) — Dosya yolu: {} (görmek için read_file / view_file kullan)]",
+                rel,
+                ext,
+                p.to_string_lossy()
+            ));
+            continue;
         } else {
             blocks.push(format!(
                 "[Ekli Kaynak Dosya: {} ({}) — Dosya yolu: {}]",
@@ -926,10 +978,62 @@ pub fn build_context_from_sources(rels: &[String], active_rel: Option<&str>) -> 
     )
 }
 
+pub fn resolve_chat_images(rels: &[String]) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for raw in rels.iter().take(8) {
+        let clean = raw.trim().strip_prefix("note:").unwrap_or(raw.trim());
+        if clean.is_empty() {
+            continue;
+        }
+        let Ok(p) = safe_path(clean) else { continue };
+        if !p.exists() || !p.is_file() || !is_img_ext(&ext_lower(&p)) {
+            continue;
+        }
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+pub fn build_image_prompt_block(paths: &[PathBuf]) -> String {
+    if paths.is_empty() {
+        return String::new();
+    }
+    let lines: Vec<String> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, p)| format!("- Görsel {}: {}", i + 1, p.to_string_lossy()))
+        .collect();
+    format!(
+        "[KULLANICININ SOHBETE EKLEDİĞİ GÖRSELLER — Yanıtlamadan önce `read_file` / `view_file` aracını kullanarak aşağıdaki görsel dosyalarını mutlaka açıp incele:]\n{}\n[EK GÖRSELLER SONU]\n\n",
+        lines.join("\n")
+    )
+}
+
+fn unique_timestamped_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|x| x.as_secs())
+        .unwrap_or(0);
+    let mut t = dir.join(format!("{}_{}{}", stem, stamp, ext));
+    let mut n = 1;
+    while t.exists() {
+        n += 1;
+        t = dir.join(format!("{}_{}_{}{}", stem, stamp, n, ext));
+    }
+    t
+}
+
 pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, String> {
     let name_path = Path::new(name);
     let ext = ext_lower(name_path);
-    if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
+    let is_chat_img = note_rel.trim() == ".chat_images";
+    if is_chat_img {
+        if !is_img_ext(&ext) {
+            return Err("Sohbete yalnızca görsel dosyaları eklenebilir".to_string());
+        }
+    } else if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
         return Err(
             "Desteklenmeyen dosya türü (yalnızca MD, HTML, PDF, DOCX veya görsel)".to_string(),
         );
@@ -938,50 +1042,46 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
         return Err("Dosya boş veya 50 MB sınırını aşıyor".to_string());
     }
 
-    let mut is_dir_target = false;
-    let base = if !note_rel.trim().is_empty() {
-        let clean_nr = note_rel.strip_prefix("note:").unwrap_or(note_rel);
-        let p_nr = safe_path(clean_nr)?;
-        if p_nr.is_dir() {
-            is_dir_target = true;
-            p_nr
-        } else {
-            p_nr.parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| VAULT_DIR.clone())
-        }
-    } else {
-        VAULT_DIR.clone()
-    };
-
     let stem_raw = name_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("dosya");
     let stem = slugify(stem_raw);
 
-    let target = if (ext == ".md" || ext == ".html" || is_doc_ext(&ext)) && is_dir_target {
-        let mut t = base.join(format!("{}{}", stem, ext));
-        let mut n = 1;
-        while t.exists() {
-            n += 1;
-            t = base.join(format!("{}_{}{}", stem, n, ext));
-        }
-        t
-    } else {
-        let d = base.join("_gorseller");
+    let target = if is_chat_img {
+        let d = VAULT_DIR.join(".chat_images");
         fs::create_dir_all(&d).map_err(|e| e.to_string())?;
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|x| x.as_secs())
-            .unwrap_or(0);
-        let mut t = d.join(format!("{}_{}{}", stem, stamp, ext));
-        let mut n = 1;
-        while t.exists() {
-            n += 1;
-            t = d.join(format!("{}_{}_{}{}", stem, stamp, n, ext));
+        unique_timestamped_path(&d, &stem, &ext)
+    } else {
+        let mut is_dir_target = false;
+        let base = if !note_rel.trim().is_empty() {
+            let clean_nr = note_rel.strip_prefix("note:").unwrap_or(note_rel);
+            let p_nr = safe_path(clean_nr)?;
+            if p_nr.is_dir() {
+                is_dir_target = true;
+                p_nr
+            } else {
+                p_nr.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| VAULT_DIR.clone())
+            }
+        } else {
+            VAULT_DIR.clone()
+        };
+
+        if (ext == ".md" || ext == ".html" || is_doc_ext(&ext)) && is_dir_target {
+            let mut t = base.join(format!("{}{}", stem, ext));
+            let mut n = 1;
+            while t.exists() {
+                n += 1;
+                t = base.join(format!("{}_{}{}", stem, n, ext));
+            }
+            t
+        } else {
+            let d = base.join("_gorseller");
+            fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+            unique_timestamped_path(&d, &stem, &ext)
         }
-        t
     };
 
     fs::write(&target, data).map_err(|e| e.to_string())?;

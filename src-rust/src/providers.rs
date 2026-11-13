@@ -1,4 +1,6 @@
-use crate::config::{model_for, provider_spec, AGY_BIN, OLLAMA_URL, WORKSPACE};
+use crate::config::{
+    effective_effort, model_for, provider_spec, AGY_BIN, OLLAMA_URL, VAULT_DIR, WORKSPACE,
+};
 use crate::router::CLOUD_CHAIN;
 use crate::store;
 use once_cell::sync::Lazy;
@@ -7,7 +9,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::os::windows::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -72,7 +74,23 @@ async fn mock_reply(provider: &str, prompt: &str, why: &str) -> (String, i64, bo
     )
 }
 
-async fn local_complete(prompt: &str) -> (String, i64, bool, Option<String>) {
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(((input.len() + 2) / 3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+async fn local_complete(prompt: &str, image_paths: &[PathBuf]) -> (String, i64, bool, Option<String>) {
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
         .build()
@@ -80,12 +98,25 @@ async fn local_complete(prompt: &str) -> (String, i64, bool, Option<String>) {
         return mock_reply("local", prompt, "HTTP istemci hatası").await;
     };
     let url = format!("{}/api/generate", &*OLLAMA_URL);
-    let body = json!({
-        "model": model_for("local"),
+    let mut body = json!({
+        "model": model_for("local", "low"),
         "prompt": prompt,
         "think": false,
         "stream": false
     });
+    if !image_paths.is_empty() {
+        let b64s: Vec<String> = image_paths
+            .iter()
+            .filter_map(|p| std::fs::read(p).ok())
+            .filter(|bytes| !bytes.is_empty() && bytes.len() <= 20 * 1024 * 1024)
+            .map(|bytes| encode_base64(&bytes))
+            .collect();
+        if !b64s.is_empty() {
+            if let Some(obj) = body.as_object_mut() {
+                obj.insert("images".to_string(), json!(b64s));
+            }
+        }
+    }
     if let Ok(resp) = client.post(url).json(&body).send().await {
         if resp.status().is_success() {
             if let Ok(j) = resp.json::<Value>().await {
@@ -105,6 +136,7 @@ async fn local_complete(prompt: &str) -> (String, i64, bool, Option<String>) {
 fn run_agy_sync<F>(
     session: &str,
     model: &str,
+    effort: &str,
     prompt: &str,
     mode: &str,
     conv_id: Option<&str>,
@@ -130,7 +162,7 @@ where
         "--model",
         model,
         "--effort",
-        "low",
+        effort,
         "--print-timeout",
         "300s",
     ]);
@@ -139,6 +171,9 @@ where
         cmd.arg("--dangerously-skip-permissions");
     } else {
         cmd.args(["--mode", "accept-edits"]);
+    }
+    if *VAULT_DIR != *WORKSPACE && VAULT_DIR.exists() {
+        cmd.arg("--add-dir").arg(&*VAULT_DIR);
     }
     if let Some(cid) = conv_id {
         if !cid.is_empty() {
@@ -162,6 +197,7 @@ where
     let mut chunks: Vec<String> = Vec::new();
     let mut tool_logs: Vec<String> = Vec::new();
     let mut final_resp: Option<String> = None;
+    let mut agy_err: Option<String> = None;
     let mut tokens: i64 = 0;
 
     if let Some(stdout) = child.stdout.take() {
@@ -190,26 +226,40 @@ where
                         if let Some(delta) = su.get("text_delta").and_then(|v| v.as_str()) {
                             chunks.push(delta.to_string());
                         }
-                        let mut tlabel = String::new();
-                        if let Some(tcalls) = su.get("tool_calls").and_then(|v| v.as_array()) {
-                            if let Some(t0) = tcalls.first() {
-                                let tname = t0.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-                                let args = t0.get("args");
-                                let tsum = args
-                                    .and_then(|a| {
-                                        a.get("toolSummary")
-                                            .or_else(|| a.get("Path"))
-                                            .and_then(|v| v.as_str())
-                                    })
-                                    .unwrap_or(tname)
-                                    .trim_matches('"');
-                                tlabel = format!("🛠 {}: {}", tname, tsum);
-                                if !tool_logs.contains(&tlabel) {
-                                    tool_logs.push(tlabel.clone());
-                                }
+                        if let Some(err) = su.get("error").and_then(|v| v.as_str()) {
+                            if !err.trim().is_empty() {
+                                agy_err = Some(err.trim().to_string());
                             }
                         }
+                        let mut tlabel = String::new();
+                        let pick_label = |tname: &str, obj: Option<&Value>| {
+                            let tsum = obj
+                                .and_then(|o| {
+                                    o.get("toolSummary")
+                                        .or_else(|| o.get("Path"))
+                                        .and_then(|v| v.as_str())
+                                })
+                                .unwrap_or(tname)
+                                .trim_matches('"');
+                            format!("🛠 {}: {}", tname, tsum)
+                        };
+                        if let Some(t0) = su
+                            .get("tool_calls")
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                        {
+                            let tname = t0.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                            tlabel = pick_label(tname, t0.get("args"));
+                        } else if let Some(tname) = su.get("tool_name").and_then(|v| v.as_str()) {
+                            tlabel = pick_label(
+                                tname,
+                                su.get("tool_info").and_then(|i| i.get("parameters")),
+                            );
+                        }
                         if !tlabel.is_empty() {
+                            if !tool_logs.contains(&tlabel) {
+                                tool_logs.push(tlabel.clone());
+                            }
                             on_step(tlabel);
                         } else if !stype.is_empty() {
                             let sidx = su.get("step_index").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -231,6 +281,21 @@ where
                         }
                         if let Some(rtxt) = res.get("response").and_then(|v| v.as_str()) {
                             final_resp = Some(rtxt.to_string());
+                        }
+                        if let Some(err) = res.get("error").and_then(|v| v.as_str()) {
+                            if !err.trim().is_empty() {
+                                agy_err = Some(err.trim().to_string());
+                            }
+                        } else if res
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s != "SUCCESS")
+                            .unwrap_or(false)
+                        {
+                            let st = res.get("status").and_then(|v| v.as_str()).unwrap_or("ERROR");
+                            if agy_err.is_none() {
+                                agy_err = Some(format!("agy durum: {}", st));
+                            }
                         }
                         if let Some(tot) = res
                             .get("usage")
@@ -255,6 +320,9 @@ where
         .unwrap_or_else(|| chunks.join(""))
         .trim()
         .to_string();
+    if text.is_empty() && agy_err.is_some() {
+        return Err(agy_err.unwrap());
+    }
     if text.is_empty() && !tool_logs.is_empty() {
         let start = tool_logs.len().saturating_sub(8);
         let items: Vec<String> = tool_logs[start..]
@@ -265,12 +333,12 @@ where
     }
     if text.is_empty() {
         let code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        if code != 0 {
-            let mut err_str = String::new();
-            if let Some(mut se) = child.stderr.take() {
-                let _ = std::io::Read::read_to_string(&mut se, &mut err_str);
-            }
-            let msg = err_str.trim();
+        let mut err_str = String::new();
+        if let Some(mut se) = child.stderr.take() {
+            let _ = std::io::Read::read_to_string(&mut se, &mut err_str);
+        }
+        let msg = err_str.trim();
+        if code != 0 || !msg.is_empty() {
             return Err(if msg.is_empty() {
                 format!("agy çıkış kodu: {}", code)
             } else {
@@ -284,8 +352,10 @@ where
 pub async fn complete<FS, FF>(
     mut provider: String,
     prompt: String,
+    image_paths: Vec<PathBuf>,
     session: String,
     mode: String,
+    effort: String,
     conv_id: Option<String>,
     on_step: FS,
     mut on_failover: FF,
@@ -296,16 +366,16 @@ where
 {
     if provider == "local" {
         if ollama_alive().await {
-            return Ok(local_complete(&prompt).await);
+            return Ok(local_complete(&prompt, &image_paths).await);
         }
         if agy_available() {
-            provider = "gemini-flash".to_string();
+            provider = "gemini-hydrogen".to_string();
             on_failover(
                 provider.clone(),
-                "Yerel Ollama kapalı → Gemini Flash (agy CLI)".to_string(),
+                "Yerel Ollama kapalı → Gemini 4 Hydrogen (agy CLI)".to_string(),
             );
         } else {
-            return Ok(local_complete(&prompt).await);
+            return Ok(local_complete(&prompt, &image_paths).await);
         }
     }
 
@@ -324,7 +394,8 @@ where
     let mut last_err: Option<String> = None;
 
     for (idx, prov) in chain.iter().enumerate() {
-        let model = model_for(prov);
+        let eff = effective_effort(prov, &effort);
+        let model = model_for(prov, eff);
         let sess_c = session.clone();
         let prompt_c = prompt.clone();
         let mode_c = mode.clone();
@@ -335,6 +406,7 @@ where
             run_agy_sync(
                 &sess_c,
                 &model,
+                eff,
                 &prompt_c,
                 &mode_c,
                 conv_c.as_deref(),
@@ -380,7 +452,21 @@ where
     }
 
     if last_err.is_some() {
-        return Ok(local_complete(&prompt).await);
+        return Ok(local_complete(&prompt, &image_paths).await);
     }
     Ok(mock_reply(&provider, &prompt, "beklenmeyen durum").await)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_base64;
+
+    #[test]
+    fn base64_encodes_standard_vectors() {
+        assert_eq!(encode_base64(b""), "");
+        assert_eq!(encode_base64(b"f"), "Zg==");
+        assert_eq!(encode_base64(b"fo"), "Zm8=");
+        assert_eq!(encode_base64(b"foo"), "Zm9v");
+        assert_eq!(encode_base64(b"foobar"), "Zm9vYmFy");
+    }
 }

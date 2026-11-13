@@ -2,6 +2,7 @@
 
 mod checkpoints;
 mod config;
+mod media;
 mod permissions;
 mod providers;
 mod router;
@@ -89,11 +90,16 @@ Diğer akış/blok şemalarını ```mermaid``` bloğu ile ver; düğüm etiketle
 #[derive(Deserialize, Clone)]
 struct RunReq {
     session: String,
+    #[serde(default)]
     text: String,
+    #[serde(default)]
+    images: Vec<String>,
     #[serde(default)]
     skill: Option<String>,
     #[serde(default = "default_mode")]
     mode: String,
+    #[serde(default = "default_effort")]
+    effort: String,
     #[serde(default)]
     allow: HashMap<String, bool>,
     #[serde(default)]
@@ -106,6 +112,10 @@ struct RunReq {
 
 fn default_mode() -> String {
     "y".to_string()
+}
+
+fn default_effort() -> String {
+    "low".to_string()
 }
 
 #[derive(Deserialize)]
@@ -404,32 +414,48 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
         }),
     );
     tokio::time::sleep(Duration::from_millis(120)).await;
+    let init_step = if dec.provider == "local" {
+        format!("{} çalışıyor… ({})", dec.label, dec.reason)
+    } else {
+        let eff = config::effective_effort(&dec.provider, &r.effort);
+        format!("{} ({}) çalışıyor… ({})", dec.label, eff, dec.reason)
+    };
     st.emit(
         "step",
         json!({
             "session": sess,
-            "step": format!("{} çalışıyor… ({})", dec.label, dec.reason)
+            "step": init_step
         }),
     );
 
     let conv_id = store::get_conv_id(&sess);
     let sources_c = r.sources.clone();
     let active_c = r.active_note.clone();
-    let src_ctx = tokio::task::spawn_blocking(move || {
-        vault::build_context_from_sources(&sources_c, active_c.as_deref())
+    let images_c = r.images.clone();
+    let (src_ctx, img_paths) = tokio::task::spawn_blocking(move || {
+        let sc = vault::build_context_from_sources(&sources_c, active_c.as_deref());
+        let imgs = vault::resolve_chat_images(&images_c);
+        (sc, imgs)
     })
     .await
     .unwrap_or_default();
 
-    let base_prompt = if src_ctx.is_empty() {
-        r.text.clone()
+    let img_ctx = vault::build_image_prompt_block(&img_paths);
+    let user_text = if r.text.trim().is_empty() && !img_paths.is_empty() {
+        "Eklenen görseli incele ve içeriğini açıkla.".to_string()
     } else {
-        format!("{}{}", src_ctx, r.text)
+        r.text.clone()
     };
+    let base_prompt = format!("{}{}{}", src_ctx, img_ctx, user_text);
     let prompt = if conv_id.is_none() {
         format!("{}{}", ws_hint(), base_prompt)
     } else {
         base_prompt
+    };
+    let log_text = if r.text.trim().is_empty() && !img_paths.is_empty() {
+        format!("[{} görsel]", img_paths.len())
+    } else {
+        r.text.clone()
     };
 
     let st_step = st.clone();
@@ -448,8 +474,10 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
     let res = providers::complete(
         dec.provider.clone(),
         prompt,
+        img_paths,
         sess.clone(),
         r.mode.clone(),
+        r.effort.clone(),
         conv_id,
         on_step,
         |new_p, why| {
@@ -465,6 +493,12 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
         dec.fallback = true;
     }
 
+    let used_effort: Option<&str> = if dec.provider == "local" {
+        None
+    } else {
+        Some(config::effective_effort(&dec.provider, &r.effort))
+    };
+
     match res {
         Ok((text, tokens, real, new_conv)) => {
             if let Some(ref cid) = new_conv {
@@ -476,7 +510,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
             let demo_suffix = if real { "" } else { ", DEMO" };
             store::add_log(
                 &sess,
-                &format!("✓ Tamamlandı ({}{}): {}", dec.label, demo_suffix, r.text),
+                &format!("✓ Tamamlandı ({}{}): {}", dec.label, demo_suffix, log_text),
                 "ok",
             );
             if st.tx.receiver_count() == 0 {
@@ -491,6 +525,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                     "tokens": tokens,
                     "conv_id": new_conv,
                     "route": dec,
+                    "effort": used_effort,
                     "quota": store::quota_status()
                 }),
             );
@@ -519,16 +554,27 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
 }
 
 async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
+    if r.text.trim().is_empty() && r.images.is_empty() {
+        return err_resp(
+            StatusCode::BAD_REQUEST,
+            "Mesaj veya görsel boş olamaz".to_string(),
+        );
+    }
     if let Ok(tasks) = st.tasks.lock() {
         if tasks.contains_key(&r.session) {
             return err_resp(StatusCode::CONFLICT, "Oturum meşgul".to_string());
         }
     }
+    let log_text = if r.text.trim().is_empty() {
+        format!("[{} görsel]", r.images.len())
+    } else {
+        r.text.clone()
+    };
     let risk = permissions::classify(&r.text, r.skill.as_deref());
     if !r.approved && permissions::needs_approval(&r.mode, risk, &r.allow) {
         store::add_log(
             &r.session,
-            &format!("⏸ Onay bekleniyor ({}): {}", risk, r.text),
+            &format!("⏸ Onay bekleniyor ({}): {}", risk, log_text),
             "w",
         );
         st.emit("log", json!({}));
@@ -537,7 +583,7 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
     if r.mode == "r" && risk == "risky" {
         store::add_log(
             &r.session,
-            &format!("⚠ YOLO: riskli işlem onaysız çalıştı: {}", r.text),
+            &format!("⚠ YOLO: riskli işlem onaysız çalıştı: {}", log_text),
             "w",
         );
     }
@@ -548,11 +594,11 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
             .ok()
             .flatten();
         if let Some(reference) = snap {
-            store::add_checkpoint(&r.session, &reference, &r.text);
+            store::add_checkpoint(&r.session, &reference, &log_text);
             let cp = store::pending_checkpoints(&r.session).len();
             store::add_log(
                 &r.session,
-                &format!("● Checkpoint alındı (#{}) → {}", cp, r.text),
+                &format!("● Checkpoint alındı (#{}) → {}", cp, log_text),
                 "ok",
             );
         } else {
@@ -564,10 +610,10 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
         }
     }
 
-    let dec = router::route(&r.text, r.skill.as_deref(), store::used_pct);
+    let dec = router::route(&r.text, r.skill.as_deref(), !r.images.is_empty(), store::used_pct);
     store::add_log(
         &r.session,
-        &format!("İş başladı → {}: {}", dec.label, r.text),
+        &format!("İş başladı → {}: {}", dec.label, log_text),
         "",
     );
     let cps_count = store::pending_checkpoints(&r.session).len();
@@ -615,6 +661,42 @@ async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json
     store::add_log(&r.session, "🧹 Oturum bağlamı sıfırlandı", "m");
     st.emit("log", json!({}));
     Json(json!({ "cleared": true }))
+}
+
+#[derive(Deserialize)]
+struct MediaStatusQuery {
+    #[serde(default)]
+    app: String,
+}
+
+#[derive(Deserialize)]
+struct MediaCmdReq {
+    action: String,
+    #[serde(default)]
+    app: String,
+}
+
+async fn media_status_ep(Query(q): Query<MediaStatusQuery>) -> Json<Value> {
+    let res = tokio::task::spawn_blocking(move || media::get_status(&q.app))
+        .await
+        .unwrap_or_else(|_| json!({"ok": false, "active": null, "sessions": []}));
+    Json(res)
+}
+
+async fn media_cmd_ep(Json(r): Json<MediaCmdReq>) -> Response {
+    let res = tokio::task::spawn_blocking(move || media::send_cmd(&r.action, &r.app))
+        .await
+        .unwrap_or_else(|_| json!({"ok": false, "error": "Medya görevi başarısız"}));
+    if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Json(res).into_response()
+    } else {
+        let msg = res
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Medya komutu başarısız")
+            .to_string();
+        err_resp(StatusCode::BAD_REQUEST, msg)
+    }
 }
 
 async fn undo_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Response {
@@ -690,14 +772,29 @@ fn run_native_window() {
         .build(&event_loop)
         .expect("Win32 penceresi oluşturulamadı");
 
-    let data_dir = std::env::temp_dir().join("agydesk_webview2_data");
-    let mut web_context = WebContext::new(Some(data_dir));
-    let _webview = WebViewBuilder::new(&window)
+    let primary_dir = std::env::temp_dir().join("agydesk_webview2_data");
+    let mut web_context = WebContext::new(Some(primary_dir));
+    let build_primary = WebViewBuilder::new(&window)
         .with_web_context(&mut web_context)
         .with_url(&url)
         .with_devtools(true)
-        .build()
-        .expect("WebView2 bileşeni başlatılamadı");
+        .build();
+
+    let (_webview, _fallback_ctx) = match build_primary {
+        Ok(wv) => (wv, None),
+        Err(_) => {
+            let fallback_dir =
+                std::env::temp_dir().join(format!("agydesk_webview2_data_{}", std::process::id()));
+            let mut fb_ctx = WebContext::new(Some(fallback_dir));
+            let wv = WebViewBuilder::new(&window)
+                .with_web_context(&mut fb_ctx)
+                .with_url(&url)
+                .with_devtools(true)
+                .build()
+                .expect("WebView2 bileşeni başlatılamadı");
+            (wv, Some(fb_ctx))
+        }
+    };
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -706,6 +803,7 @@ fn run_native_window() {
             ..
         } = event
         {
+            media::shutdown();
             *control_flow = ControlFlow::Exit;
         }
     });
@@ -751,6 +849,8 @@ fn build_router() -> Router {
         .route("/api/stop", post(stop_ep))
         .route("/api/clear", post(clear_ep))
         .route("/api/undo", post(undo_ep))
+        .route("/api/media/status", get(media_status_ep))
+        .route("/api/media/cmd", post(media_cmd_ep))
         .fallback_service(ServeDir::new(frontend_dir).append_index_html_on_directories(true))
         .layer(middleware::from_fn(no_cache_mw))
         .layer(CorsLayer::permissive())

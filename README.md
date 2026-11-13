@@ -24,7 +24,7 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8765
 ```
 
 ## Model & İzin Eşlemesi (`agy` CLI)
-- **Genel sohbet / orkestrasyon:** `gemini-3.8-flash-low` (`--thinking off`)
+- **Genel sohbet / orkestrasyon:** `gemini-4-hydrogen-{low|medium|high|xhigh}` (varsayılan `low`, sohbet başlığından seçilebilir)
 - **Mühendislik / simülasyon / kontrol:** `gemini-4-argon-low` (`--thinking off`)
 - **Kodlama / PCB / mimari:** `claude-sonnet-5-5-low` (`--thinking off`)
 - **Ağır matematik / ispat / konsey:** `claude-opus-5-5-low` (`--thinking off`)

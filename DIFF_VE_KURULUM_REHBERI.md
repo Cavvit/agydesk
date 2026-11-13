@@ -70,7 +70,7 @@ AgyDesk'in bu güncel sürümünde yapılan temel geliştirmeler:
 AgyDesk sohbet ekranı, doğrudan arkada çalışan `agy` oturumuna bağlıdır:
 
 ### Model Dağılımı (Thinking Kapalı / Düşük Gecikme Modu)
-- **Genel Sohbet / Not Analizi:** `gemini-3.8-flash-low` (`--thinking off`)
+- **Genel Sohbet / Not Analizi:** `gemini-4-hydrogen-{low|medium|high|xhigh}` (varsayılan `low`, arayüzden seçilebilir)
 - **Mühendislik / Kontrol / Simülasyon:** `gemini-4-argon-low` (`--thinking off`)
 - **Kodlama / PCB / Donanım:** `claude-sonnet-5-5-low` (`--thinking off`)
 - **Ağır Matematik / İspat:** `claude-opus-5-5-low` (`--thinking off`)

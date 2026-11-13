@@ -20,7 +20,7 @@ static CODE_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 pub const CLOUD_CHAIN: &[&str] = &[
-    "gemini-flash",
+    "gemini-hydrogen",
     "gemini-argon",
     "claude-sonnet",
     "claude-opus",
@@ -67,14 +67,18 @@ fn pick(text: &str, skill: Option<&str>) -> (&'static str, String) {
     if CODE_RE.is_match(text) {
         return ("claude-sonnet", "kodlama → Sonnet".to_string());
     }
-    ("gemini-flash", "genel sohbet → ana model".to_string())
+    ("gemini-hydrogen", "genel sohbet → ana model".to_string())
 }
 
-pub fn route<F>(text: &str, skill: Option<&str>, pct_of: F) -> Decision
+pub fn route<F>(text: &str, skill: Option<&str>, has_images: bool, pct_of: F) -> Decision
 where
     F: Fn(&str) -> u32,
 {
-    let (prov, reason) = pick(text, skill);
+    let (mut prov, mut reason) = pick(text, skill);
+    if has_images && prov == "local" {
+        prov = "gemini-hydrogen";
+        reason = "görsel analizi → multimodal bulut modeli".to_string();
+    }
     let spec = provider_spec(prov);
     let pct = if spec.cloud { pct_of(prov) } else { 0 };
     let threshold = *FALLBACK_THRESHOLD;
@@ -105,5 +109,23 @@ where
         label: spec.label.to_string(),
         reason,
         fallback: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upgrades_local_pick_when_images_present() {
+        let d = route("bu görseli özetle", None, true, |_| 0);
+        assert_eq!(d.provider, "gemini-hydrogen");
+        assert!(!d.fallback);
+    }
+
+    #[test]
+    fn keeps_local_when_no_images() {
+        let d = route("dersi özetle", None, false, |_| 0);
+        assert_eq!(d.provider, "local");
     }
 }

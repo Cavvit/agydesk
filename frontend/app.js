@@ -381,19 +381,86 @@ function rebuildTreeAndSources(){
   ];
   const sh=$('#sources');
   if(sh){
+    const prevScroll=sh.scrollTop;
     const srcs=currentKasa==='all'?allSources:allSources.filter(s=>s.kasa===currentKasa);
     const chkCount=srcs.filter(s=>checkedSources.has(s.rel)).length;
+    const allChk=srcs.length>0&&chkCount===srcs.length;
+    const someChk=chkCount>0&&chkCount<srcs.length;
     sh.innerHTML=`<div class="ph"><span>Kasadan Kaynaklar</span><span>${chkCount}/${srcs.length} seçili</span></div>`+
-      `<div style="display:flex;gap:6px;padding:0 10px 6px"><button class="hb" style="flex:1;padding:3px 6px;font-size:11px;border-color:color-mix(in srgb,var(--cu) 45%,transparent);color:var(--cu)" onclick="triggerAssetUpload()">📎 Dosya Ekle</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="openNewNoteModal()">＋ Yeni Not</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="toggleAllSources(true)">Tümü</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="toggleAllSources(false)">Temizle</button></div>`+
-      srcs.map(s=>{
-        const side=isSideDoc(s.rel||s.id);
-        const isChk=checkedSources.has(s.rel);
-        const lbl=currentKasa==='all'?s.title:(s.short_title||s.title);
-        const safeT=(s.title||'').replace(/'/g,'');
-        const act=side?`onclick="if(event.target.tagName!=='INPUT'&&!event.target.dataset.tabbtn){openRightViewer('${s.rel}','${safeT}')}" onmousedown="if(event.button===1)event.preventDefault()" onauxclick="if(event.button===1){event.preventDefault();event.stopPropagation();openPage('${s.id}',true,{newTab:true})}"`:`onclick="if(event.target.tagName!=='INPUT'){event.preventDefault();openPage('${s.id}')}"`;
-        const tabBtn=side?`<button class="ph-btn" data-tabbtn="1" style="width:18px;height:18px;font-size:10.5px;margin-left:auto;margin-right:4px" onclick="event.preventDefault();event.stopPropagation();openPage('${s.id}',true)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢</button>`:'';
-        return `<label class="src" style="cursor:pointer;gap:6px" ${act} title="${s.title}${side?' (Tıkla: Sağda önizle · Orta tuş veya ⤢: Sekmede aç)':''}"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${s.icon} ${lbl}</span>${tabBtn}<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-right:4px${side?'':';margin-left:auto'}" onclick="event.preventDefault();event.stopPropagation();deleteActiveNote('${s.id}')" title="Kasadan sil">🗑</button><input type="checkbox" data-src="${s.rel}" ${isChk?'checked':''} onchange="onSourceCheck('${s.rel}',this.checked)"></label>`;
-      }).join('');
+      `<div class="src-bar"><button class="hb" style="border-color:color-mix(in srgb,var(--cu) 45%,transparent);color:var(--cu)" onclick="triggerAssetUpload()">📎 Dosya Ekle</button><button class="hb" onclick="openNewNoteModal()">＋ Yeni Not</button><label class="src-all${srcs.length?'':' disabled'}" title="Tüm kaynakları seç / seçimleri kaldır"><span>Tümü</span><input type="checkbox" id="srcAllChk"></label></div>`;
+    const masterChk=sh.querySelector('#srcAllChk');
+    if(masterChk){
+      masterChk.checked=allChk;
+      masterChk.indeterminate=someChk;
+      masterChk.disabled=!srcs.length;
+      masterChk.onchange=()=>toggleAllSources(masterChk.checked);
+    }
+    srcs.forEach(s=>{
+      const side=isSideDoc(s.rel||s.id);
+      const isChk=checkedSources.has(s.rel);
+      const lbl=currentKasa==='all'?s.title:(s.short_title||s.title);
+      const row=document.createElement('div');
+      row.className='src';
+      row.style.cssText='cursor:pointer;gap:6px';
+      row.title=`${s.title}${side?' (Tıkla: Sağda önizle · Orta tuş veya ⤢: Sekmede aç)':' (Tıkla: Aç · Orta tuş: Yeni sekmede aç)'}`;
+      const span=document.createElement('span');
+      span.style.cssText='overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
+      span.textContent=`${s.icon} ${lbl}`;
+      row.appendChild(span);
+      if(side){
+        const tb=document.createElement('button');
+        tb.type='button';
+        tb.className='ph-btn';
+        tb.dataset.tabbtn='1';
+        tb.style.cssText='width:18px;height:18px;font-size:10.5px;margin-left:auto;margin-right:4px';
+        tb.title='AgyDesk içinde yeni sekmede tam ekran aç';
+        tb.textContent='⤢';
+        tb.onclick=e=>{
+          e.preventDefault();
+          e.stopPropagation();
+          openPage(s.id,true,{newTab:true});
+        };
+        row.appendChild(tb);
+      }
+      const del=document.createElement('button');
+      del.type='button';
+      del.className='ph-btn ti-del';
+      del.style.cssText=`width:18px;height:18px;font-size:11px;margin-right:4px${side?'':';margin-left:auto'}`;
+      del.title='Kasadan sil';
+      del.textContent='🗑';
+      del.onclick=e=>{
+        e.preventDefault();
+        e.stopPropagation();
+        deleteActiveNote(s.id);
+      };
+      row.appendChild(del);
+      const chk=document.createElement('input');
+      chk.type='checkbox';
+      chk.dataset.src=s.rel;
+      chk.checked=isChk;
+      chk.onclick=e=>e.stopPropagation();
+      chk.onchange=()=>onSourceCheck(s.rel,chk.checked);
+      row.appendChild(chk);
+      row.onclick=e=>{
+        if(e.target.closest('input,button')) return;
+        if(side){
+          openRightViewer(s.rel,s.title);
+        }else{
+          e.preventDefault();
+          openPage(s.id);
+        }
+      };
+      row.onmousedown=e=>{ if(e.button===1) e.preventDefault(); };
+      row.onauxclick=e=>{
+        if(e.button===1&&!e.target.closest('.ti-del,input')){
+          e.preventDefault();
+          e.stopPropagation();
+          openPage(s.id,true,{newTab:true});
+        }
+      };
+      sh.appendChild(row);
+    });
+    sh.scrollTop=prevScroll;
   }
   updateSideAiCtx();
 }
@@ -525,7 +592,7 @@ function renderTree(){
   });
   build(tree,root);
 }
-const SIDE_EXT=['.pdf','.docx','.doc','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'];
+const SIDE_EXT=['.pdf','.docx','.doc','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.avif'];
 function isSideDoc(relOrId){
   const s=String(relOrId||'').toLowerCase();
   if(SIDE_EXT.some(e=>s.endsWith(e)))return true;
@@ -566,7 +633,7 @@ function openDocInTab(relOrUrl,title){
   const id='note:'+cleanRel;
   if(!pages[id]){
     const ext=(cleanRel.includes('.')?cleanRel.slice(cleanRel.lastIndexOf('.')):'').toLowerCase();
-    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(ext)?'🖼':(/\.(docx?)$/i.test(ext)?'📘':'📄'));
+    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':(/\.(docx?)$/i.test(ext)?'📘':'📄'));
     const fKey=cleanRel.includes('/')?cleanRel.split('/')[0]:'';
     const kObj=kasalarData.find(k=>k.key===fKey);
     pages[id]={t:title||decodeURIComponent(cleanRel.split('/').pop()||cleanRel),i:ic,rel:cleanRel,folder:kObj?kObj.title:(fKey||'Obsidian Kasası'),kasa:fKey,ext:ext||'.pdf'};
@@ -607,7 +674,7 @@ async function openRightViewer(relOrUrl,title){
   $$('.rbody').forEach(el=>el.classList.toggle('on',el.id==='rb-viewer'));
   app.classList.remove('no-right');
   syncPaneBtns();
-  if(/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(low)){
+  if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(low)){
     const safeName=name.replace(/'/g,'');
     b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="openDocInTab('${cleanRel}','${safeName}')" title="AgyDesk içinde yeni sekmede tam boy aç"><div class="mono" style="font-size:11px;color:var(--mut)">${cleanRel} · <span class="link" onclick="openDocInTab('${cleanRel}','${safeName}')">⤢ Sekmede Tam Ekran Aç</span></div></div>`;
   }else if(low.endsWith('.pdf')){
@@ -809,15 +876,15 @@ function renderTabs(){
 /* ---------- AI oturumları ---------- */
 const DEFAULT_AI_WELCOME='Merhaba, bu sekme tam ekran AI çalışma alanı. Aktif kasa kaynakların ve notların otomatik bağlıdır. Uzun bir görev verip başka sekmeye geçebilirsin.';
 const ai={
-  ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null},
-  side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null}
+  ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
+  side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}
 };
 let aiN=1;
 function newSession(){
   aiN++;
   while(ai['ai'+aiN]) aiN++;
   const id='ai'+aiN;
-  ai[id]={title:'AI Oturumu '+aiN,msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null};
+  ai[id]={title:'AI Oturumu '+aiN,msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
   openPage(id);
 }
 function closeSession(id,ev){
@@ -832,7 +899,7 @@ function closeSession(id,ev){
   const realSessions=Object.keys(ai).filter(k=>k!=='side_ai');
   if(!realSessions.length){
     aiN=1;
-    ai.ai1={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null};
+    ai.ai1={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
   }
   if(!openTabs.length){
     const fallback=(curMode==='ai')?'ai1':'kasalar';
@@ -884,8 +951,100 @@ function renderSideAi(){
 function clearSideAi(){
   api('/api/clear',{session:'side_ai'}).catch(()=>{});
   ai.side_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
-  ai.side_ai.running=false; ai.side_ai.pending=null;
+  ai.side_ai.running=false; ai.side_ai.pending=null; ai.side_ai.attachments=[];
+  renderChatAttachments('side_ai');
   renderSideAi();
+}
+function escAttr(v){
+  return String(v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+const isChatImageFile=f=>f&&((f.type&&f.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
+function normalizedChatImgName(f){
+  const raw=(f&&f.name)||'';
+  if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(raw)) return raw;
+  const extMap={'image/jpeg':'.jpg','image/jpg':'.jpg','image/webp':'.webp','image/gif':'.gif','image/bmp':'.bmp','image/svg+xml':'.svg','image/avif':'.avif'};
+  const ext=extMap[(f&&f.type||'').toLowerCase()]||'.png';
+  const base=raw.replace(/\.[^.]+$/,'')||'ekran_goruntusu';
+  return base+ext;
+}
+let chatImgTarget=null;
+function pickChatImages(sessionId){
+  chatImgTarget=sessionId||'side_ai';
+  const inp=$('#chatImgIn');
+  if(inp){ inp.value=''; inp.click(); }
+}
+function handleChatImgSelect(files){
+  const target=chatImgTarget||'side_ai';
+  chatImgTarget=null;
+  if(files&&files.length) attachChatImages(target,files);
+}
+async function attachChatImages(sessionId,fileList){
+  const s=ai[sessionId]; if(!s) return;
+  if(!s.attachments) s.attachments=[];
+  const imgs=[...(fileList||[])].filter(isChatImageFile);
+  if(!imgs.length){ toast('Yalnızca görsel dosyaları (PNG, JPG, WebP, GIF) eklenebilir'); return; }
+  const left=Math.max(0,8-s.attachments.length);
+  if(!left){ toast('Tek mesajda en fazla 8 görsel gönderilebilir'); return; }
+  if(imgs.length>left) toast('İlk '+left+' görsel eklendi (maksimum 8)');
+  for(const f of imgs.slice(0,left)){
+    try{
+      const r=await fetch(`/api/upload?name=${encodeURIComponent(normalizedChatImgName(f))}&note=.chat_images`,{method:'POST',body:f});
+      if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
+      const u=await r.json();
+      s.attachments.push({rel:u.rel,name:u.name,url:'/api/raw/'+encodeURI(u.rel)});
+    }catch(e){ toast('⚠ Görsel yüklenemedi: '+e.message); }
+  }
+  renderChatAttachments(sessionId);
+}
+function removeChatAttachment(sessionId,idx){
+  const s=ai[sessionId]; if(!s||!s.attachments) return;
+  s.attachments.splice(idx,1);
+  renderChatAttachments(sessionId);
+}
+function renderChatAttachments(sessionId){
+  const s=ai[sessionId];
+  const list=(s&&s.attachments)||[];
+  const html=list.map((im,i)=>{
+    const sn=escAttr(im.name||'Görsel');
+    const sr=escAttr(im.rel||'');
+    const su=escAttr(im.url||('/api/raw/'+encodeURI(im.rel||'')));
+    return `<div class="att-chip"><img src="${su}" alt="${sn}" title="Önizle: ${sn}" data-rel="${sr}" data-name="${sn}" onclick="openRightViewer(this.dataset.rel,this.dataset.name)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.name)"><button class="att-x" type="button" data-sess="${escAttr(sessionId)}" onclick="removeChatAttachment(this.dataset.sess,${i})" title="Görseli kaldır">✕</button></div>`;
+  }).join('');
+  if(sessionId==='side_ai'){
+    const a=$('#sideAttach'); if(a) a.innerHTML=html;
+    const b=$('#scAttach'); if(b) b.innerHTML=html;
+  }else if(active===sessionId){
+    const c=$('#aiAttach'); if(c) c.innerHTML=html;
+  }
+}
+function wireChatDrop(el,getSessionId,onSkill){
+  if(!el) return;
+  const isSkillOk=ev=>onSkill&&!hasFiles(ev)&&ev.dataTransfer&&[...ev.dataTransfer.types].includes('text/plain');
+  ['dragenter','dragover'].forEach(evName=>el.addEventListener(evName,ev=>{
+    if(!hasFiles(ev)&&!isSkillOk(ev)) return;
+    ev.preventDefault();
+    el.classList.add('chat-hot');
+    if(el.id==='aidrop') el.classList.add('hot');
+  }));
+  el.addEventListener('dragleave',ev=>{
+    if(ev.target===el||!el.contains(ev.relatedTarget)){
+      el.classList.remove('chat-hot','hot');
+    }
+  });
+  el.addEventListener('drop',ev=>{
+    el.classList.remove('chat-hot','hot');
+    if(hasFiles(ev)){
+      ev.preventDefault(); ev.stopPropagation();
+      const imgs=[...(ev.dataTransfer.files||[])].filter(isChatImageFile);
+      if(imgs.length) attachChatImages(getSessionId(),imgs);
+      else toast('Sohbete yalnızca görsel dosyaları bırakılabilir (notlara belge eklemek için 📎 kullan)');
+      return;
+    }
+    if(isSkillOk(ev)){
+      ev.preventDefault();
+      onSkill(ev.dataTransfer.getData('text/plain'));
+    }
+  });
 }
 function runMermaid(sel,force=false){
   if(!window.mermaid)return;
@@ -914,12 +1073,39 @@ async function loadLog(){
   }catch(e){}
 }
 const renderLog=loadLog;
+const EFFORTS=[
+  {id:'low',label:'Low',tip:'Hızlı yanıt (varsayılan)'},
+  {id:'medium',label:'Medium',tip:'Dengeli hız ve analiz'},
+  {id:'high',label:'High',tip:'Yüksek akıl yürütme'},
+  {id:'xhigh',label:'XHigh',tip:'Maksimum derinlik (Gemini 4 Hydrogen)'}
+];
+let curEffort=localStorage.getItem('agydesk_effort')||'low';
+if(!EFFORTS.some(e=>e.id===curEffort)) curEffort='low';
+function effortOptionsHtml(){
+  return EFFORTS.map(e=>`<option value="${e.id}" title="${e.tip}"${e.id===curEffort?' selected':''}>${e.label}</option>`).join('');
+}
+function effortSelectHtml(){
+  return `<select class="eff-sel" onchange="setEffort(this.value)" title="Model düşünme derinliği (Effort)">${effortOptionsHtml()}</select>`;
+}
+function syncEffortSelects(){
+  $$('.eff-sel').forEach(el=>{
+    if(!el.options.length) el.innerHTML=effortOptionsHtml();
+    el.value=curEffort;
+  });
+}
+function setEffort(val){
+  if(!EFFORTS.some(e=>e.id===val)) return;
+  curEffort=val;
+  localStorage.setItem('agydesk_effort',val);
+  syncEffortSelects();
+}
 function setMode2(id,m){ ai[id].mode=m; logAct(id,`İzin modu → ${MODES[m].i} ${MODES[m].n}`,'m'); aiHead(id); renderTabs(); }
 function cycleMode(id){ const o=['g','y','r']; setMode2(id,o[(o.indexOf(ai[id].mode)+1)%3]); }
 function aiHead(id){
   const h=$('#aihead'); if(!h)return; const s=ai[id];
   h.innerHTML=`<div class="seg">${Object.entries(MODES).map(([k,m])=>`<button class="${s.mode===k?'on '+k:''}" onclick="setMode2('${id}','${k}')" title="${m.d}">${m.i} ${m.n}</button>`).join('')}</div>
    <span class="mdesc">${MODES[s.mode].d}</span><span style="flex:1"></span>
+   ${effortSelectHtml()}
    <button class="hb" ${s.checkpoints?'':'disabled'} onclick="aiUndo('${id}')">↶ Geri al (${s.checkpoints})</button>
    <button class="hb stop" ${s.running||s.pending?'':'disabled'} onclick="aiStop('${id}')">■ Dur</button>`;
 }
@@ -932,38 +1118,64 @@ function approve(id,yes){
   const s=ai[id],p=s.pending; if(!p)return;
   const alw=document.getElementById('alw-'+id); if(yes&&alw&&alw.checked){s.allow[p.risk]=true;}
   s.msgs=s.msgs.filter(m=>!m.ap); s.pending=null;
-  if(yes){logAct(id,`✓ Onaylandı: ${p.text}`,'ok'); aiSend(id,p.text,p.skill,true,true);}
-  else{s.msgs.push({w:'a',h:'✗ Reddedildi. İşlem yapılmadı.'}); logAct(id,`✗ Reddedildi: ${p.text}`,'w'); aiRefresh(id);}
+  if(yes){logAct(id,`✓ Onaylandı: ${p.text||'[Görsel]'}`,'ok'); aiSend(id,p.text,p.skill,true,true,p.images||[]);}
+  else{s.msgs.push({w:'a',h:'✗ Reddedildi. İşlem yapılmadı.'}); logAct(id,`✗ Reddedildi: ${p.text||'[Görsel]'}`,'w'); aiRefresh(id);}
 }
 function renderAI(m){
   const s=ai[active]; s.unread=false;
+  m.scrollTop=0;
   m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
-   <div class="aiin" id="aidrop"><div class="col"><div class="aihint">⬇ Skill kartını buraya bırak · / ile komut</div>
-   <div class="inp"><textarea id="aiInput" rows="1" placeholder="Bu oturuma bir görev ver…"></textarea><button class="btn" id="aiSend">Gönder</button></div></div></div></div>`;
+   <div class="aiin" id="aidrop"><div class="col"><div class="aihint">⬇ Skill kartını veya görseli buraya bırak · Ctrl+V yapıştır · / ile komut</div>
+   <div class="chat-att-bar ai-att-bar" id="aiAttach"></div>
+   <div class="inp"><button class="att-btn" id="aiImgBtn" type="button" onclick="pickChatImages('${active}')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="aiInput" rows="1" placeholder="Bu oturuma bir görev ver…"></textarea><button class="btn" id="aiSend">Gönder</button></div></div></div></div>`;
   aiHead(active);
-  const inp=$('#aiInput'),go=()=>{const v=inp.value.trim();if(v){inp.value='';autoGrow(inp);aiSend(active,v);}};
+  const inp=$('#aiInput'),go=()=>{
+    const cur=ai[active], v=inp.value;
+    if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length))return;
+    inp.value='';autoGrow(inp);aiSend(active,v);
+  };
   $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>autoGrow(inp); inp.focus();
-  const dz=$('#aidrop');
-  ['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('hot')}));
-  dz.addEventListener('dragleave',()=>dz.classList.remove('hot'));
-  dz.addEventListener('drop',ev=>{ev.preventDefault();dz.classList.remove('hot');const k=ev.dataTransfer.getData('text/plain');if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
+  wireChatDrop($('#aidrop'),()=>active,k=>{if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
+  wireChatDrop($('#aichat'),()=>active);
+  renderChatAttachments(active);
   const c=$('#aichat'); c.scrollTop=c.scrollHeight; renderSessions(); renderTabs(); runMermaid('#aichat .mermaid');
 }
-async function aiSend(id,text,skill,ok,resume){
-  const s=ai[id];
-  if(!skill&&text.startsWith('/')){const k=text.slice(1).split(' ')[0]; if(SK[k])skill=k;}
+async function aiSend(id,text,skill,ok,resume,explicitImgs){
+  const s=ai[id]; if(!s) return;
+  const rawText=String(text||'').trim();
+  if(!skill&&rawText.startsWith('/')){const k=rawText.slice(1).split(' ')[0]; if(SK[k])skill=k;}
   if(skill&&SK[skill]&&(SK[skill].kind==='cmd'||SK[skill].kind==='mode')){s.msgs.push({w:'me',h:'/'+skill});aiInstant(id,skill);return;}
   if(s.running||s.pending){s.msgs.push({w:'a',h:'Bu oturum meşgul veya onay bekliyor. Onayla ya da ■ Dur butonuna bas.'});aiRefresh(id);return;}
-  if(!ok){ s.msgs.push({w:'me',h:text.replace(/</g,'&lt;')}); api('/api/chats',{session:id,w:'me',h:text.replace(/</g,'&lt;')}).catch(()=>{}); }
-  if(id!=='side_ai'&&s.title.startsWith('AI Oturumu')) s.title=text.replace(/^Skill: /,'').slice(0,22);
+  const imgs=ok?(explicitImgs||[]):[...(s.attachments||[])];
+  if(!rawText&&!imgs.length) return;
+  if(!ok){
+    s.attachments=[];
+    renderChatAttachments(id);
+    const escTxt=rawText.replace(/</g,'&lt;').replace(/\n/g,'<br>');
+    const imgHtml=imgs.length?`<div class="chat-imgs">${imgs.map(im=>{
+      const sn=escAttr(im.name||'Görsel');
+      const sr=escAttr(im.rel||'');
+      const su=escAttr(im.url||('/api/raw/'+encodeURI(im.rel||'')));
+      return `<img class="chat-img" src="${su}" alt="${sn}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede aç" data-rel="${sr}" data-name="${sn}" onclick="openRightViewer(this.dataset.rel,this.dataset.name)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.name)">`;
+    }).join('')}</div>`:'';
+    const msgHtml=imgHtml+(escTxt?`<div>${escTxt}</div>`:'');
+    s.msgs.push({w:'me',h:msgHtml});
+    api('/api/chats',{session:id,w:'me',h:msgHtml}).catch(()=>{});
+  }
+  if(id!=='side_ai'&&s.title.startsWith('AI Oturumu')){
+    const ttl=(rawText||(imgs[0]&&imgs[0].name)||'Görsel analizi').replace(/^Skill: /,'');
+    s.title=ttl.slice(0,22);
+  }
   const actNote=String(active).startsWith('note:')?active.slice(5):null;
   let res;
   try{
     res=await api('/api/run',{
       session:id,
-      text,
+      text:rawText,
+      images:imgs.map(im=>im.rel),
       skill:skill||null,
       mode:s.mode,
+      effort:curEffort,
       allow:s.allow,
       approved:!!ok,
       sources:getCheckedSources(),
@@ -971,9 +1183,9 @@ async function aiSend(id,text,skill,ok,resume){
     });
   }catch(e){ s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
   if(res.status==='approval'){
-    s.pending={text,skill,risk:res.risk};
+    s.pending={text:rawText,skill,risk:res.risk,images:imgs};
     const why=res.risk==='risky'?'Riskli işlem (silme / dış gönderim / geri alınamaz)':'Dosya yazma / komut çalıştırma';
-    s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${text.replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
+    s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${(rawText||'[Görsel analizi]').replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
     aiRefresh(id); return;
   }
   s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label; aiRefresh(id);
@@ -988,10 +1200,11 @@ function startEvents(){
       s.running=false; if(d.quota)applyQuota(d.quota);
       linkifyAndOpen(d.reply);
       const r=d.route, c=r.provider==='local'?'l':'c', safe=mdToHtml(d.reply);
+      const effChip=d.effort?`<span class="chip">${d.effort}</span>`:'';
       const tok=d.tokens?`<span class="chip">${d.tokens} token</span>`:'';
       const badge=d.real?(r.provider==='local'?'':'<span class="chip c">agy CLI</span>'):'<span class="chip">Yerel</span>';
       const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
-      const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span><span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
+      const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span>${effChip}<span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
       s.msgs.push({w:'a',h});
       if(d.session==='side_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
@@ -1026,12 +1239,15 @@ async function loadChats(){
   try{
     const all=await api('/api/chats');
     Object.entries(all).forEach(([sid,msgs])=>{
-      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null}; }
+      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; }
       if(msgs&&msgs.length){
         ai[sid].msgs=msgs.map(m=>({w:m.w,h:(m.w==='a'&&m.h&&!String(m.h).trim().startsWith('<'))?mdToHtml(m.h):m.h}));
         if(sid!=='side_ai'){
           const firstMe=msgs.find(m=>m.w==='me');
-          if(firstMe) ai[sid].title=firstMe.h.replace(/<[^>]+>/g,'').slice(0,22);
+          if(firstMe){
+            const stripped=firstMe.h.replace(/<[^>]+>/g,'').trim();
+            ai[sid].title=(stripped||'Görsel analizi').slice(0,22);
+          }
         }
       }
     });
@@ -1375,7 +1591,7 @@ function updateRightProps(){
 }
 function scrollToHeading(text){
   const view=$('#mdView'); if(!view) return;
-  const els=[...view.querySelectorAll('h1,h2,h3')];
+  const els=[...view.querySelectorAll('.nblock-h1,.nblock-h2,.nblock-h3,h1,h2,h3')];
   const hit=els.find(el=>el.textContent.trim().toLowerCase().includes(text.toLowerCase()));
   if(hit) hit.scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -1731,37 +1947,1517 @@ async function renderVaultNote(m,id){
     return;
   }
   if(!noteCache[id]){
-    m.innerHTML=`<div class="doc"><div class="meta"><span class="spin"></span> Not yükleniyor: ${rel}…</div></div>`;
+    m.innerHTML=`<div class="doc notion-doc"><div class="notion-topbar"><span class="spin"></span> Not yükleniyor: ${rel}…</div></div>`;
     try{ noteCache[id]=await api('/api/note?rel='+encodeURIComponent(rel)); }
-    catch(e){ m.innerHTML=`<div class="doc"><h1>Not okunamadı</h1><p>${e.message}</p></div>`; return; }
+    catch(e){ m.innerHTML=`<div class="doc notion-doc"><h1>Not okunamadı</h1><p>${e.message}</p></div>`; return; }
   }
   const n=noteCache[id];
   updateRightProps();
+  const baseDir=n.rel.includes('/')?n.rel.slice(0,n.rel.lastIndexOf('/')):'';
+  notionState.noteId=id;
+  notionState.baseDir=baseDir;
+  notionState.blocks=parseNoteBlocks(n.content||'');
+
   const bodyHtml=editMode
-    ?`<textarea class="md-ed" id="mdEd">${n.content.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>`
-    :`<div id="mdView">${mdToHtml(n.content,n.rel.includes('/')?n.rel.slice(0,n.rel.lastIndexOf('/')):'')}</div>`;
-  m.innerHTML=`<div class="doc" id="doc">
-    <div class="meta">
-      <span class="link" onclick="openKasalarHome()" title="Kasalar Ana Ekranına Dön">❖ Kasalar</span><span>›</span>
-      <span class="link" onclick="enterKasa('${n.kasa||p.kasa||''}','write')">📘 ${n.folder}</span><span>·</span><span>${n.rel}</span>
-      <span style="flex:1"></span>
-      <button class="btn" style="padding:4px 11px;font-size:12px" onclick="triggerAssetUpload('${id}')" title="Bilgisayardan bu nota belge (PDF, Word) veya fotoğraf ekle">📎 Belge / Fotoğraf Ekle</button>
-      <button class="hb" onclick="openNewNoteModal('${n.kasa||p.kasa||''}')" title="Bu kasaya yeni not ekle (Alt+N)">＋ Yeni Not</button>
-      <button class="hb" onclick="toggleEditNote('${id}')">${editMode?'👁 Önizleme':'✎ Düzenle'}</button>
-      ${editMode?`<button class="btn" style="padding:4px 10px;font-size:12px" onclick="saveActiveNote('${id}')">💾 Kaydet</button>`:''}
-      <button class="hb" onclick="window.print()" title="Canon G3080 A4 İki Sütun Sınav Föyü Yazdır">🖨 A4 Yazdır</button>
-      <button class="hb stop" onclick="deleteActiveNote('${id}')" title="Notu Sil">🗑</button>
+    ?`<div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line);font:12px var(--mono);color:var(--mut)">
+        <span></> Ham Markdown Kaynak Kodu Modu</span>
+        <div style="display:flex;gap:6px">
+          <button class="notion-btn on" onclick="saveActiveNote('${id}')">✨ Notion Tuvaline Dön & Kaydet (Ctrl+S)</button>
+        </div>
+      </div>
+      <textarea class="md-ed" id="mdEd" oninput="scheduleRawMdAutoSave('${id}')">${n.content.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>`
+    :`<div id="mdView" class="notion-canvas ${notionState.locked?'locked':''}"></div>
+      <div class="notion-tail" onclick="notionAppendBottomBlock('${id}')">
+        <span style="color:var(--cu);font-weight:700">＋</span>
+        <span>Yeni blok eklemek için tıkla veya herhangi bir satırda <code style="color:var(--cu);background:var(--bg);padding:1px 5px;border-radius:4px">/</code> tuşuna bas…</span>
+      </div>`;
+
+  m.innerHTML=`<div class="doc notion-doc" id="doc">
+    <div class="notion-topbar">
+      <div class="notion-crumb">
+        <span class="nc-item" onclick="openKasalarHome()" title="Kasalar Ana Ekranına Dön">❖ Kasalar</span>
+        <span>/</span>
+        <span class="nc-item" onclick="enterKasa('${n.kasa||p.kasa||''}','write')">📘 ${n.folder}</span>
+        <span>/</span>
+        <span class="nc-cur">${p.t||n.rel.split('/').pop()}</span>
+      </div>
+      <span class="notion-lock-pill ${notionState.locked?'locked':''}" onclick="toggleNotionLock('${id}')" title="Notion tarzı kilitle / düzenlemeyi aç">
+        ${notionState.locked?'🔒 Kilitli (Salt Okunur)':'🔓 Doğrudan Düzenleme Açık'}
+      </span>
+      <span class="notion-save-pill saved" id="notionSavePill" onclick="flushNotionSave('${id}',true)" style="cursor:pointer" title="Değişiklikler anında otomatik kaydedilir (Tıkla veya Ctrl+S: Şimdi kaydet)">✓ Kaydedildi</span>
+      <div class="notion-actions">
+        <button class="notion-btn" onclick="openSlashFromTop('${id}')" title="Yeni blok ekle (Başlık, Callout, Matematik, Tablo, Mermaid, AI)">＋ Blok Ekle <small style="opacity:.65">/</small></button>
+        <button class="notion-btn" onclick="triggerAssetUpload('${id}')" title="Bilgisayardan belge (PDF, Word) veya fotoğraf ekle">📎 Ek Yükle</button>
+        <button class="notion-btn" onclick="openNewNoteModal('${n.kasa||p.kasa||''}')" title="Bu kasaya yeni not ekle (Alt+N)">＋ Yeni Not</button>
+        <button class="notion-btn ${editMode?'on':''}" onclick="toggleEditNote('${id}')" title="Notion Görsel Tuval ile Ham Markdown kodu arasında geçiş yap">${editMode?'✨ Notion Tuval':'</> Markdown'}</button>
+        <button class="notion-btn" onclick="window.print()" title="Canon G3080 A4 İki Sütun Sınav Föyü Yazdır">🖨 A4 Yazdır</button>
+        <button class="notion-btn danger" onclick="deleteActiveNote('${id}')" title="Notu Sil">🗑</button>
+      </div>
     </div>
     ${bodyHtml}
     <div class="drop" id="drop" onclick="triggerAssetUpload('${id}')" style="cursor:pointer">📎 <b>Bilgisayardan Belge / Fotoğraf Ekle (Tıkla veya Sürükle-Bırak)</b> · PDF, Word, Görsel veya sağdaki <b>Skill</b> kartlarını buraya bırak</div>
     <div id="outs"></div>
+    <div class="notion-minimap" id="notionMinimap"></div>
   </div>`;
+  ensureNotionOverlays();
+  if(!editMode){
+    renderNotionCanvasDOM();
+  }
   wireDrop();
   wireNoteImages(m,id);
-  if(!editMode&&window.mermaid){
-    runMermaid('#mdView .mermaid');
+}
+
+/* ============================================================================
+   AGYDESK NOTION BLOCK & LIVE WYSIWYG EDITOR ENGINE
+   ============================================================================ */
+const notionState={
+  noteId:null,
+  baseDir:'',
+  locked:false,
+  blocks:[],
+  saveTimer:null,
+  slashOpen:false,
+  slashBlockIdx:-1,
+  slashFilter:'',
+  slashSelIdx:0,
+  slashMode:'slash', // 'slash' | 'gutter' | 'menu'
+  dragIdx:null,
+  activeMathChip:null,
+  openEditorSet:new Set()
+};
+
+const CALLOUT_TYPES={
+  NOTE:{label:'BİLGİ',icon:'📘',title:'Kaynak ve Ders Bilgisi'},
+  IMPORTANT:{label:'ÖNEMLİ',icon:'🔥',title:'Kritik Tanım & Kural'},
+  WARNING:{label:'UYARI',icon:'⚠️',title:'Hoca Tuzağı & Dikkat'},
+  TIP:{label:'İPUCU',icon:'💡',title:'Pratik Çözüm Yolu'},
+  CAUTION:{label:'DİKKAT',icon:'🚨',title:'Kritik Uyarı'}
+};
+const CALLOUT_KEYS=Object.keys(CALLOUT_TYPES);
+
+const NOTION_SLASH_ITEMS=[
+  {id:'p',cat:'Temel Bloklar',ic:'¶',t:'Düz Metin / Paragraf',d:'Standart ders notu paragrafı',kbd:'Metin',kw:'metin paragraf text p'},
+  {id:'h1',cat:'Temel Bloklar',ic:'H1',t:'Ana Başlık 1',d:'Büyük sayfa veya ünite başlığı',kbd:'#',kw:'baslik 1 h1 heading title'},
+  {id:'h2',cat:'Temel Bloklar',ic:'H2',t:'Bölüm Başlığı 2',d:'Alt çizgili ana konu başlığı',kbd:'##',kw:'baslik 2 h2 bolum'},
+  {id:'h3',cat:'Temel Bloklar',ic:'H3',t:'Alt Başlık 3',d:'Vurgulu alt konu veya örnek başlığı',kbd:'###',kw:'baslik 3 h3 ornek'},
+  {id:'ul',cat:'Temel Bloklar',ic:'•',t:'Madde İşaretli Liste',d:'Sırasız madde listesi oluştur',kbd:'-',kw:'liste madde bullet ul'},
+  {id:'ol',cat:'Temel Bloklar',ic:'1.',t:'Numaralı Liste',d:'Adım adım sıralı liste oluştur',kbd:'1.',kw:'numarali liste sirali ol'},
+  {id:'todo',cat:'Temel Bloklar',ic:'☑',t:'Yapılacaklar (Checklist)',d:'İşaretlenebilir çalışma/görev kutusu',kbd:'[]',kw:'todo checklist gorev kutu'},
+  {id:'callout_NOTE',cat:'Bilgi Kutuları (Callout)',ic:'📘',t:'Bilgi Kutusu [!NOTE]',d:'Ders bilgisi, kaynak veya açıklama kartı',kbd:'!note',kw:'bilgi kutusu note callout'},
+  {id:'callout_IMPORTANT',cat:'Bilgi Kutuları (Callout)',ic:'🔥',t:'Önemli Tanım [!IMPORTANT]',d:'Teorem, kanun veya sınav tanım kutusu',kbd:'!imp',kw:'onemli tanim important teorem'},
+  {id:'callout_WARNING',cat:'Bilgi Kutuları (Callout)',ic:'⚠️',t:'Hoca Tuzağı / Uyarı [!WARNING]',d:'Sınavlarda sık yapılan hatalar ve tuzaklar',kbd:'!warn',kw:'uyari hoca tuzagi warning dikkat'},
+  {id:'callout_TIP',cat:'Bilgi Kutuları (Callout)',ic:'💡',t:'Pratik İpucu [!TIP]',d:'Kısa yol ve mühendislik pratiği',kbd:'!tip',kw:'ipucu tip pratik'},
+  {id:'math',cat:'Mühendislik & Akademik',ic:'∑',t:'Matematik Denklemi (LaTeX)',d:'Canlı KaTeX önizlemeli blok denklem ($$)',kbd:'$$',kw:'matematik denklem latex formül katex math'},
+  {id:'table',cat:'Mühendislik & Akademik',ic:'▦',t:'Tablo (Canlı Düzenlenebilir)',d:'Satır ve sütunları doğrudan düzenlenen tablo',kbd:'| |',kw:'tablo table karsilastirma'},
+  {id:'mermaid',cat:'Mühendislik & Akademik',ic:'◈',t:'Mermaid Akış / Blok Diyagramı',d:'Canlı çizilen akış şeması veya blok diyagram',kbd:'```m',kw:'mermaid diyagram sema akis'},
+  {id:'code',cat:'Mühendislik & Akademik',ic:'</>',t:'Kod Bloğu (C / STM32 / Python)',d:'Renklendirilmiş gömülü sistem & analiz kodu',kbd:'```',kw:'kod code c stm32 python matlab'},
+  {id:'quote',cat:'Mühendislik & Akademik',ic:'❝',t:'Alıntı Bloğu',d:'Kitap veya referans alıntısı',kbd:'>',kw:'alinti quote'},
+  {id:'hr',cat:'Mühendislik & Akademik',ic:'―',t:'Ayırıcı Çizgi',d:'Bölümler arası yatay çizgi',kbd:'---',kw:'cizgi ayirici divider hr'},
+  {id:'upload',cat:'Medya & AI',ic:'📎',t:'Belge / Fotoğraf Yükle',d:'Bilgisayardan PDF, Word veya görsel göm',kbd:'Ek',kw:'belge fotograf pdf resim yukle'},
+  {id:'ai_expand',cat:'Medya & AI',ic:'✨',t:'AI ile Konuyu Genişlet & Örnekle',d:'Bu konuya sınav sorusu ve detaylı açıklama üret',kbd:'AI',kw:'ai yapay zeka ornek soru acikla'}
+];
+
+let _blkUid=1;
+const nextBlkId=()=>'nb_'+(++_blkUid)+'_'+Math.random().toString(36).slice(2,6);
+const escHtml=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+function parseNoteBlocks(md){
+  const lines=String(md||'').replace(/\r\n/g,'\n').split('\n');
+  const blocks=[];
+  let i=0;
+  while(i<lines.length){
+    const ln=lines[i];
+    const trimmed=ln.trim();
+    if(!trimmed){ i++; continue; }
+
+    // 1. Fenced code / mermaid / sema
+    const fenceM=ln.match(/^\s*```(\w*)(?:[ \t]+([^\n]*))?$/);
+    if(fenceM){
+      const lang=(fenceM[1]||'').toLowerCase();
+      const extra=(fenceM[2]||'').trim();
+      const body=[];
+      i++;
+      while(i<lines.length&&!/^\s*```\s*$/.test(lines[i])){ body.push(lines[i]); i++; }
+      if(i<lines.length) i++;
+      if(lang==='mermaid') blocks.push({id:nextBlkId(),type:'mermaid',code:body.join('\n')});
+      else if(lang==='sema') blocks.push({id:nextBlkId(),type:'sema',name:extra||'rc-lowpass',code:body.join('\n')});
+      else blocks.push({id:nextBlkId(),type:'code',lang:lang||'c',code:body.join('\n')});
+      continue;
+    }
+
+    // 2. Display Math $$ ... $$ (single-line or multi-line, including indented)
+    if(/^\s*\$\$/.test(ln)){
+      const indent=/^\s{2,}/.test(ln)?1:0;
+      const singleM=trimmed.match(/^\$\$([\s\S]+?)\$\$$/);
+      if(singleM&&trimmed!=='$$'){
+        blocks.push({id:nextBlkId(),type:'math',tex:singleM[1].trim(),indent});
+        i++; continue;
+      }
+      const texLines=[];
+      const firstAfter=trimmed.slice(2).trim();
+      if(firstAfter) texLines.push(firstAfter);
+      i++;
+      while(i<lines.length){
+        const cur=lines[i].trim();
+        if(cur.endsWith('$$')){
+          const before=cur.slice(0,-2).trim();
+          if(before) texLines.push(before);
+          i++; break;
+        }
+        texLines.push(lines[i]);
+        i++;
+      }
+      blocks.push({id:nextBlkId(),type:'math',tex:texLines.join('\n').trim(),indent});
+      continue;
+    }
+
+    // 3. Callout or Blockquote (> ...)
+    if(/^\s*>\s?/.test(ln)){
+      const qLines=[];
+      while(i<lines.length&&/^\s*>\s?/.test(lines[i])){
+        qLines.push(lines[i].replace(/^\s*>\s?/,''));
+        i++;
+      }
+      const first=qLines[0]||'';
+      const coM=first.match(/^\[!(\w+)\]\s*(.*)/);
+      if(coM){
+        const kind=coM[1].toUpperCase();
+        const title=coM[2].trim();
+        const bodyLines=qLines.slice(1);
+        blocks.push({
+          id:nextBlkId(),
+          type:'callout',
+          kind:CALLOUT_TYPES[kind]?kind:'NOTE',
+          title:title||CALLOUT_TYPES[kind]?.title||'Not',
+          lines:bodyLines.length?bodyLines:['']
+        });
+      }else{
+        blocks.push({id:nextBlkId(),type:'quote',text:qLines.join('\n')});
+      }
+      continue;
+    }
+
+    // 4. Table (| ... |)
+    if(/^\|(.+)\|$/.test(trimmed)){
+      const tLines=[];
+      while(i<lines.length&&/^\|(.+)\|$/.test(lines[i].trim())){
+        tLines.push(lines[i].trim());
+        i++;
+      }
+      const parseRow=r=>r.slice(1,-1).split('|').map(c=>c.trim());
+      const headers=parseRow(tLines[0]);
+      let aligns=headers.map(()=>':---');
+      let startRow=1;
+      if(tLines.length>1){
+        const cand=parseRow(tLines[1]);
+        if(cand.every(c=>/^:?-{2,}:?$/.test(c))){
+          aligns=cand;
+          startRow=2;
+        }
+      }
+      const rows=tLines.slice(startRow).map(r=>{
+        const cells=parseRow(r);
+        while(cells.length<headers.length) cells.push('');
+        return cells.slice(0,headers.length);
+      });
+      if(!rows.length) rows.push(headers.map(()=>''));
+      blocks.push({id:nextBlkId(),type:'table',headers,aligns,rows});
+      continue;
+    }
+
+    // 5. Horizontal Rule
+    if(/^---+$|^\*\*\*+$/.test(trimmed)){
+      blocks.push({id:nextBlkId(),type:'hr'});
+      i++; continue;
+    }
+
+    // 6. Headings
+    if(/^#\s+(.+)/.test(ln)){ blocks.push({id:nextBlkId(),type:'h1',text:RegExp.$1.trim()}); i++; continue; }
+    if(/^##\s+(.+)/.test(ln)){ blocks.push({id:nextBlkId(),type:'h2',text:RegExp.$1.trim()}); i++; continue; }
+    if(/^###\s+(.+)/.test(ln)){ blocks.push({id:nextBlkId(),type:'h3',text:RegExp.$1.trim()}); i++; continue; }
+
+    // 7. Standalone Embed (![[...]] or ![...](...))
+    if(/^!\[\[[^\]]+\]\]$/.test(trimmed)||/^!\[[^\]]*\]\([^)]+\)$/.test(trimmed)){
+      blocks.push({id:nextBlkId(),type:'embed',raw:trimmed});
+      i++; continue;
+    }
+
+    // 8. Checklist / Todo (- [ ] or - [x])
+    const todoM=ln.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.*)/);
+    if(todoM){
+      blocks.push({id:nextBlkId(),type:'todo',checked:todoM[2].toLowerCase()==='x',text:todoM[3],indent:todoM[1].length>=2?1:0});
+      i++; continue;
+    }
+
+    // 9. Bullet List (- or *)
+    const ulM=ln.match(/^(\s*)[-*]\s+(.*)/);
+    if(ulM){
+      blocks.push({id:nextBlkId(),type:'ul',text:ulM[2],indent:ulM[1].length>=2?1:0});
+      i++; continue;
+    }
+
+    // 10. Numbered List (1. ...)
+    const olM=ln.match(/^(\s*)(\d+)\.\s+(.*)/);
+    if(olM){
+      blocks.push({id:nextBlkId(),type:'ol',num:Number(olM[2])||1,text:olM[3],indent:olM[1].length>=2?1:0});
+      i++; continue;
+    }
+
+    // 11. Paragraph
+    blocks.push({id:nextBlkId(),type:'p',text:ln});
+    i++;
+  }
+  if(!blocks.length){
+    blocks.push({id:nextBlkId(),type:'h1',text:''});
+    blocks.push({id:nextBlkId(),type:'p',text:''});
+  }
+  return blocks;
+}
+
+function serializeNoteBlocks(blocks){
+  const out=[];
+  let olCounter=0;
+  for(let i=0;i<blocks.length;i++){
+    const b=blocks[i];
+    const prev=blocks[i-1];
+    const next=blocks[i+1];
+    if(b.type!=='ol'&&!b.indent) olCounter=0;
+
+    if(b.type==='h1') out.push(`# ${b.text||''}`);
+    else if(b.type==='h2') out.push(`## ${b.text||''}`);
+    else if(b.type==='h3') out.push(`### ${b.text||''}`);
+    else if(b.type==='hr') out.push(`---`);
+    else if(b.type==='p') out.push(b.text||'');
+    else if(b.type==='todo'){
+      const pad=b.indent?'   ':'';
+      out.push(`${pad}- [${b.checked?'x':' '}] ${b.text||''}`);
+    }else if(b.type==='ul'){
+      const pad=b.indent?'   ':'';
+      out.push(`${pad}- ${b.text||''}`);
+    }else if(b.type==='ol'){
+      olCounter=b.indent?1:(olCounter+1);
+      const num=b.num||olCounter;
+      const pad=b.indent?'   ':'';
+      out.push(`${pad}${num}. ${b.text||''}`);
+    }else if(b.type==='callout'){
+      const head=`> [!${b.kind||'NOTE'}] ${b.title||''}`.trimEnd();
+      const body=(b.lines||[]).map(l=>`> ${l}`);
+      out.push([head,...body].join('\n'));
+    }else if(b.type==='quote'){
+      out.push(String(b.text||'').split('\n').map(l=>`> ${l}`).join('\n'));
+    }else if(b.type==='math'){
+      const pad=b.indent?'   ':'';
+      if(String(b.tex||'').includes('\n')) out.push(`${pad}$$\n${b.tex}\n${pad}$$`);
+      else out.push(`${pad}$$${b.tex||''}$$`);
+    }else if(b.type==='mermaid'){
+      out.push('```mermaid\n'+(b.code||'')+'\n```');
+    }else if(b.type==='sema'){
+      out.push('```sema '+(b.name||'rc-lowpass')+'\n'+(b.code||'')+'\n```');
+    }else if(b.type==='code'){
+      out.push('```'+(b.lang||'')+'\n'+(b.code||'')+'\n```');
+    }else if(b.type==='embed'){
+      out.push(b.raw||'');
+    }else if(b.type==='table'){
+      const hdr=`| ${(b.headers||[]).join(' | ')} |`;
+      const alg=`| ${(b.headers||[]).map((_, idx)=>(b.aligns&&b.aligns[idx])||':---').join(' | ')} |`;
+      const rws=(b.rows||[]).map(r=>`| ${r.map(c=>String(c||'').replace(/\|/g,'\\|')).join(' | ')} |`);
+      out.push([hdr,alg,...rws].join('\n'));
+    }
+
+    // Blank line spacing rules for clean Markdown output
+    if(next){
+      const sameList=(['ul','ol','todo'].includes(b.type)&&['ul','ol','todo'].includes(next.type))
+        ||(['ul','ol','todo'].includes(b.type)&&next.type==='math'&&next.indent)
+        ||(b.type==='math'&&b.indent&&['ul','ol','todo'].includes(next.type));
+      if(!sameList) out.push('');
+    }
+  }
+  return out.join('\n')+'\n';
+}
+
+/* ---------- Inline Markdown <-> Editable DOM (With Lossless KaTeX & WikiLink Chips) ---------- */
+function renderKatexSafe(tex,displayMode=false){
+  if(window.katex){
+    try{ return katex.renderToString(String(tex||'').trim(),{displayMode,throwOnError:false}); }catch(e){}
+  }
+  return `<code style="color:var(--cu)">${escHtml(tex)}</code>`;
+}
+
+function inlineMdToEditableHtml(md,base){
+  const tokens=[];
+  const stash=html=>`@@NTOK_${tokens.push(html)-1}@@`;
+  let s=String(md||'');
+
+  // 1. Inline Display Math $$...$$
+  s=s.replace(/\$\$([^\n]+?)\$\$/g,(_,tex)=>{
+    const clean=tex.trim();
+    return stash(`<span class="n-math-chip" contenteditable="false" data-tex="${escAttr(clean)}" data-display="1" onclick="openInlineMathPop(this,event)" title="LaTeX formülünü düzenlemek için tıkla: $$${escAttr(clean)}$$">${renderKatexSafe(clean,false)}</span>`);
+  });
+  // 2. Inline Math $...$
+  s=s.replace(/\$([^\$\n]+?)\$/g,(_,tex)=>{
+    const clean=tex.trim();
+    return stash(`<span class="n-math-chip" contenteditable="false" data-tex="${escAttr(clean)}" data-display="0" onclick="openInlineMathPop(this,event)" title="LaTeX formülünü düzenlemek için tıkla: $${escAttr(clean)}$">${renderKatexSafe(clean,false)}</span>`);
+  });
+  // 3. WikiLinks & Inline Embeds ![[...]] or [[...]]
+  s=s.replace(/(!?\[\[([^\]]+)\]\])/g,(_,raw,inner)=>{
+    const isBang=raw.startsWith('!');
+    const parts=inner.split('|');
+    const target=parts[0].trim();
+    const label=(parts[1]||target.split('/').pop()).trim();
+    const resolveRel=t=>/^https?:\/\//i.test(t)?t:(base?base+'/'+t:t);
+    if(/\.(pdf|docx?|pptx?|xlsx?|csv|txt|png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(target)){
+      const rel=resolveRel(target);
+      const safeLbl=label.replace(/'/g,'');
+      const ext=target.slice(target.lastIndexOf('.')).toLowerCase();
+      const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':'📘');
+      return stash(`<span class="n-wiki-chip" contenteditable="false" data-raw="${escAttr(raw)}" onclick="openRightViewer('${escAttr(rel)}','${escAttr(safeLbl)}')" ondblclick="openDocInTab('${escAttr(rel)}','${escAttr(safeLbl)}')" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede aç (${escAttr(rel)})">${ic} ${escHtml(label)}</span>`);
+    }
+    const {id,label:wLbl}=resolveWiki(inner);
+    return stash(`<span class="n-wiki-chip" contenteditable="false" data-raw="${escAttr(raw)}" onclick="${id?`openPage('${escAttr(id)}')`:''}" title=" Bağlantıyı aç: ${escAttr(wLbl)}">📄 ${escHtml(wLbl)}</span>`);
+  });
+
+  // 4. Escape HTML
+  s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+  // 5. Inline code `...`
+  s=s.replace(/`([^`\n]+)`/g,(_,c)=>stash(`<code>${c}</code>`));
+
+  // 6. Standard inline styles
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  s=s.replace(/\*([^*\n]+)\*/g,'<i>$1</i>');
+  s=s.replace(/~~([^~\n]+)~~/g,'<s>$1</s>');
+  s=s.replace(/==([^=\n]+)==/g,'<mark>$1</mark>');
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" data-mdlink="$2" onclick="if(event.ctrlKey||notionState.locked)window.open(this.href,\'_blank\')">$1</a>');
+
+  s=s.replace(/@@NTOK_(\d+)@@/g,(_,idx)=>tokens[+idx]);
+  return s;
+}
+
+function editableDomToInlineMd(root){
+  if(!root) return '';
+  const walk=node=>{
+    if(node.nodeType===Node.TEXT_NODE){
+      return (node.nodeValue||'').replace(/\u00A0/g,' ');
+    }
+    if(node.nodeType!==Node.ELEMENT_NODE) return '';
+    const el=node;
+    if(el.dataset){
+      if(el.dataset.tex!==undefined){
+        return el.dataset.display==='1'?`$$${el.dataset.tex}$$`:`$${el.dataset.tex}$`;
+      }
+      if(el.dataset.raw!==undefined){
+        return el.dataset.raw;
+      }
+    }
+    const tag=el.tagName.toUpperCase();
+    if(tag==='BR') return '';
+    let inner='';
+    for(const ch of el.childNodes) inner+=walk(ch);
+    if(!inner&&tag!=='IMG') return '';
+    if(tag==='B'||tag==='STRONG') return `**${inner}**`;
+    if(tag==='I'||tag==='EM') return `*${inner}*`;
+    if(tag==='S'||tag==='STRIKE'||tag==='DEL') return `~~${inner}~~`;
+    if(tag==='U') return `<u>${inner}</u>`;
+    if(tag==='MARK') return `==${inner}==`;
+    if(tag==='CODE') return `\`${el.textContent||''}\``;
+    if(tag==='A') return `[${inner}](${el.getAttribute('data-mdlink')||el.getAttribute('href')||''})`;
+    return inner;
+  };
+  let res='';
+  for(const ch of root.childNodes) res+=walk(ch);
+  return res.replace(/\n+/g,' ').trimEnd();
+}
+
+function syncBlockFromDOM(idx){
+  const b=notionState.blocks[idx];
+  const view=$('#mdView');
+  if(!b||!view) return;
+  const blkEl=view.querySelector(`.nblock[data-bidx="${idx}"]`);
+  if(!blkEl) return;
+
+  if(['h1','h2','h3','p','ul','ol','todo','quote'].includes(b.type)){
+    const ed=blkEl.querySelector('.n-ed');
+    if(ed) b.text=editableDomToInlineMd(ed);
+  }else if(b.type==='callout'){
+    const tEl=blkEl.querySelector('.n-callout-title');
+    if(tEl) b.title=editableDomToInlineMd(tEl);
+    const lEls=[...blkEl.querySelectorAll('.n-callout-line')];
+    if(lEls.length) b.lines=lEls.map(el=>editableDomToInlineMd(el));
+  }else if(b.type==='table'){
+    const hEls=[...blkEl.querySelectorAll('thead .n-table-cell')];
+    if(hEls.length) b.headers=hEls.map(el=>editableDomToInlineMd(el));
+    const rEls=[...blkEl.querySelectorAll('tbody tr')];
+    if(rEls.length){
+      b.rows=rEls.map(tr=>[...tr.querySelectorAll('.n-table-cell')].map(el=>editableDomToInlineMd(el)));
+    }
   }
 }
+
+function syncAllNotionBlocksFromDOM(){
+  for(let i=0;i<notionState.blocks.length;i++) syncBlockFromDOM(i);
+}
+
+function setSavePillState(state,text){
+  const pill=$('#notionSavePill');
+  if(!pill) return;
+  pill.className='notion-save-pill '+state;
+  pill.textContent=text;
+}
+
+function scheduleNotionAutoSave(noteId){
+  const id=noteId||notionState.noteId;
+  if(!id||!String(id).startsWith('note:')) return;
+  setSavePillState('saving','● Kaydediliyor…');
+  if(notionState.saveTimer) clearTimeout(notionState.saveTimer);
+  notionState.saveTimer=setTimeout(()=>flushNotionSave(id,false),650);
+}
+
+function scheduleRawMdAutoSave(id){
+  setSavePillState('saving','● Kaydediliyor…');
+  if(notionState.saveTimer) clearTimeout(notionState.saveTimer);
+  notionState.saveTimer=setTimeout(()=>{
+    const ed=$('#mdEd');
+    if(!ed||!noteCache[id]) return;
+    const rel=id.slice(5);
+    noteCache[id].content=ed.value;
+    api('/api/note',{rel,content:ed.value}).then(saved=>{
+      noteCache[id]=saved;
+      setSavePillState('saved','✓ Kaydedildi');
+      updateRightProps();
+    }).catch(()=>{ setSavePillState('saving','⚠ Kayıt hatası'); });
+  },700);
+}
+
+async function flushNotionSave(noteId,manual=false){
+  const id=noteId||notionState.noteId;
+  if(!id||!String(id).startsWith('note:')) return;
+  if(notionState.saveTimer){ clearTimeout(notionState.saveTimer); notionState.saveTimer=null; }
+  const rel=id.slice(5);
+  let md='';
+  if(editMode&&$('#mdEd')){
+    md=$('#mdEd').value;
+  }else{
+    syncAllNotionBlocksFromDOM();
+    md=serializeNoteBlocks(notionState.blocks);
+  }
+  if(noteCache[id]) noteCache[id].content=md;
+  setSavePillState('saving','● Kaydediliyor…');
+  try{
+    noteCache[id]=await api('/api/note',{rel,content:md});
+    setSavePillState('saved','✓ Kaydedildi');
+    updateRightProps();
+    renderNotionMinimap();
+    if(manual) toast('💾 Not diske kaydedildi: '+rel, id);
+  }catch(e){
+    setSavePillState('saving','⚠ Kaydedilemedi');
+    if(manual) alert('Kaydetme hatası: '+e.message);
+  }
+}
+
+function renderSingleBlockInnerHTML(b,idx,olSeq){
+  const ce=notionState.locked?'false':'true';
+  const base=notionState.baseDir;
+  const gutter=`<div class="nblock-gutter" contenteditable="false">
+    <button class="ng-btn" type="button" onclick="openSlashForBlock(${idx},event)" title="Altına yeni blok ekle (veya '/' yaz)">＋</button>
+    <button class="ng-btn drag" type="button" draggable="true" ondragstart="onNotionBlockDragStart(event,${idx})" onclick="openBlockActionMenu(${idx},event)" title="Sürükle: Taşı · Tıkla: Blok Menüsü (Dönüştür, Çoğalt, Sil)">⋮⋮</button>
+  </div>`;
+
+  if(b.type==='h1'){
+    return `${gutter}<div class="n-ed" contenteditable="${ce}" data-ph="Ana Başlık 1…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='h2'){
+    return `${gutter}<div class="n-ed" contenteditable="${ce}" data-ph="Bölüm Başlığı 2…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='h3'){
+    return `${gutter}<div class="n-ed" contenteditable="${ce}" data-ph="Alt Başlık 3…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='p'){
+    return `${gutter}<div class="n-ed" contenteditable="${ce}" data-ph="Not yazmaya başla veya komutlar için '/' tuşuna bas…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='ul'){
+    return `${gutter}<span class="n-bullet" contenteditable="false">•</span><div class="n-ed" contenteditable="${ce}" data-ph="Liste maddesi…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='ol'){
+    return `${gutter}<span class="n-ol-num" contenteditable="false">${olSeq}.</span><div class="n-ed" contenteditable="${ce}" data-ph="Sıralı madde…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='todo'){
+    return `${gutter}<input type="checkbox" class="n-todo-chk" ${b.checked?'checked':''} onchange="toggleNotionTodo(${idx},this.checked)"><div class="n-ed" contenteditable="${ce}" data-ph="Yapılacak görev…">${inlineMdToEditableHtml(b.text,base)}</div>`;
+  }
+  if(b.type==='hr'){
+    return `${gutter}<hr style="margin:12px 0;border:0;border-top:1px solid var(--line)">`;
+  }
+  if(b.type==='quote'){
+    return `${gutter}<blockquote><div class="n-ed" contenteditable="${ce}" data-ph="Alıntı metni…">${inlineMdToEditableHtml(b.text,base)}</div></blockquote>`;
+  }
+  if(b.type==='callout'){
+    const meta=CALLOUT_TYPES[b.kind]||CALLOUT_TYPES.NOTE;
+    const linesHtml=(b.lines&&b.lines.length?b.lines:['']).map((ln,lIdx)=>
+      `<div class="n-callout-line" contenteditable="${ce}" data-lidx="${lIdx}" data-ph="Bilgi satırı ekle…">${inlineMdToEditableHtml(ln,base)}</div>`
+    ).join('');
+    return `${gutter}<div class="n-callout" data-kind="${b.kind||'NOTE'}">
+      <div class="n-callout-head">
+        <button type="button" class="n-callout-ic" onclick="cycleCalloutKind(${idx})" title="Kutu türünü değiştir (Bilgi / Önemli / Uyarı / İpucu)">${meta.icon}</button>
+        <span class="n-callout-badge" onclick="cycleCalloutKind(${idx})" title="Tıkla: Türü değiştir">${meta.label}</span>
+        <div class="n-callout-title" contenteditable="${ce}" data-ph="Kutu başlığı…">${inlineMdToEditableHtml(b.title,base)}</div>
+      </div>
+      <div class="n-callout-body">${linesHtml}</div>
+    </div>`;
+  }
+  if(b.type==='math'){
+    const isOpen=notionState.openEditorSet.has(b.id);
+    const syms=['\\frac{a}{b}','\\frac{d^2 y}{dx^2}','\\frac{\\partial u}{\\partial x}','\\sqrt{x}','\\int_{a}^{b}','\\sum_{n=1}^{\\infty}','\\implies','\\alpha','\\theta','\\omega'];
+    return `${gutter}<div class="n-math-block ${b.indent?'ind-1':''}" onclick="toggleBlockSubEditor('${b.id}',event)">
+      <span class="n-mb-hint">∑ LaTeX Denklemini Düzenle</span>
+      <div class="n-math-render" id="mrend_${b.id}">${renderKatexSafe(b.tex,true)}</div>
+      <div class="n-block-editor ${isOpen?'open':''}" id="bed_${b.id}" onclick="event.stopPropagation()">
+        <div class="n-math-syms">
+          ${syms.map(s=>`<button type="button" onclick="insertMathSym('${b.id}','${s.replace(/\\/g,'\\\\')}')">$${s.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/,'$1/$2').replace(/\\/g,'')}$</button>`).join('')}
+        </div>
+        <textarea id="mta_${b.id}" placeholder="LaTeX denklemi yazın (ör. \\frac{d^2y}{dx^2} + y = 0)" oninput="onBlockMathInput(${idx},'${b.id}',this.value)">${escHtml(b.tex)}</textarea>
+      </div>
+    </div>`;
+  }
+  if(b.type==='mermaid'){
+    const isOpen=notionState.openEditorSet.has(b.id);
+    return `${gutter}<div class="cbox" style="margin:8px 0">
+      <div class="ctool" style="opacity:1;pointer-events:auto;transform:none">
+        <span class="clang">◈ Mermaid Diyagramı</span>
+        <span class="csep"></span>
+        <button type="button" onclick="toggleBlockSubEditor('${b.id}',event)">✎ ${isOpen?'Kapat':'Diyagram Kodu'}</button>
+      </div>
+      <div class="mermaid" id="merm_${b.id}" style="background:var(--bg);padding:16px;border-radius:10px;border:1px solid var(--line)">${escHtml((b.code||'').trim())}</div>
+      <div class="n-block-editor ${isOpen?'open':''}" id="bed_${b.id}" style="background:var(--bg);padding:10px;border:1px solid var(--line);border-top:0;border-radius:0 0 10px 10px">
+        <textarea id="mta_${b.id}" style="min-height:110px" oninput="onBlockMermaidInput(${idx},'${b.id}',this.value)">${escHtml(b.code)}</textarea>
+      </div>
+    </div>`;
+  }
+  if(b.type==='code'){
+    const isOpen=notionState.openEditorSet.has(b.id);
+    const key=(b.lang||'c').toLowerCase();
+    const lbl=LANG_NAMES[key]||(key?key.toUpperCase():'Kod');
+    const esc=escHtml(b.code||'');
+    return `${gutter}<div class="cbox" style="margin:8px 0">
+      <div class="ctool">
+        <span class="clang">${lbl}</span>
+        <span class="csep"></span>
+        <button type="button" onclick="toggleBlockSubEditor('${b.id}',event)" title="Kodu düzenle">✎ Düzenle</button>
+        <button type="button" onclick="copyBlock(this)" title="Kodu kopyala">⧉</button>
+        <button type="button" onclick="wrapBlock(this)" title="Satır kaydırma">↵</button>
+      </div>
+      <pre onclick="if(!notionState.locked)toggleBlockSubEditor('${b.id}',event)"><code id="chl_${b.id}">${hlCode(esc,key)}</code></pre>
+      <div class="n-block-editor ${isOpen?'open':''}" id="bed_${b.id}" style="background:var(--bg);padding:10px;border:1px solid var(--line);border-top:0;border-radius:0 0 10px 10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="font:11px var(--mono);color:var(--mut)">Dil:</span>
+          <select class="nb-sel" onchange="onBlockCodeLang(${idx},'${b.id}',this.value)">
+            ${['c','cpp','py','matlab','js','bash','spice','vhdl','txt'].map(l=>`<option value="${l}" ${l===key?'selected':''}>${LANG_NAMES[l]||l.toUpperCase()}</option>`).join('')}
+          </select>
+        </div>
+        <textarea id="mta_${b.id}" style="min-height:120px" oninput="onBlockCodeInput(${idx},'${b.id}',this.value)">${escHtml(b.code)}</textarea>
+      </div>
+    </div>`;
+  }
+  if(b.type==='sema'){
+    return `${gutter}${wrapWindow(`<div class="sema">${semaSvg(b.name)}</div>`,'Devre Şeması · '+b.name,false)}`;
+  }
+  if(b.type==='embed'){
+    return `${gutter}<div>${mdToHtml(b.raw,base)}</div>`;
+  }
+  if(b.type==='table'){
+    const ths=(b.headers||[]).map((h,cIdx)=>`<th><div class="n-table-cell" contenteditable="${ce}" data-r="-1" data-c="${cIdx}">${inlineMdToEditableHtml(h,base)}</div></th>`).join('');
+    const trs=(b.rows||[]).map((r,rIdx)=>`<tr>${r.map((cell,cIdx)=>`<td><div class="n-table-cell" contenteditable="${ce}" data-r="${rIdx}" data-c="${cIdx}">${inlineMdToEditableHtml(cell,base)}</div></td>`).join('')}</tr>`).join('');
+    return `${gutter}<div class="n-table-wrap">
+      <table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>
+      <div class="n-table-bar" contenteditable="false">
+        <button type="button" class="n-tbtn" onclick="notionTableAddRow(${idx})">＋ Satır Ekle</button>
+        <button type="button" class="n-tbtn" onclick="notionTableAddCol(${idx})">＋ Sütun Ekle</button>
+        ${(b.rows||[]).length>1?`<button type="button" class="n-tbtn" onclick="notionTableDelRow(${idx})">− Son Satırı Sil</button>`:''}
+        ${(b.headers||[]).length>1?`<button type="button" class="n-tbtn" onclick="notionTableDelCol(${idx})">− Son Sütunu Sil</button>`:''}
+      </div>
+    </div>`;
+  }
+  return `${gutter}<div class="n-ed" contenteditable="${ce}">${inlineMdToEditableHtml(b.text||'',base)}</div>`;
+}
+
+function blockClassFor(b){
+  if(b.type==='h1') return 'nblock nblock-h1';
+  if(b.type==='h2') return 'nblock nblock-h2';
+  if(b.type==='h3') return 'nblock nblock-h3';
+  if(b.type==='p') return 'nblock nblock-p';
+  if(b.type==='ul'||b.type==='ol') return `nblock nblock-list ${b.indent?'ind-1':''}`;
+  if(b.type==='todo') return `nblock nblock-list nblock-todo ${b.checked?'done':''} ${b.indent?'ind-1':''}`;
+  if(b.type==='quote') return 'nblock nblock-quote';
+  return `nblock nblock-${b.type}`;
+}
+
+function renderNotionCanvasDOM(focusIdx=null,caretAtEnd=true){
+  const view=$('#mdView');
+  if(!view) return;
+  view.classList.toggle('locked',!!notionState.locked);
+  let olSeq=0;
+  const html=notionState.blocks.map((b,idx)=>{
+    if(b.type==='ol') olSeq=b.indent?1:(olSeq+1);
+    else if(!b.indent) olSeq=0;
+    return `<div class="${blockClassFor(b)}" data-bidx="${idx}" data-bid="${b.id}" ondragover="onNotionBlockDragOver(event,${idx})" ondragleave="onNotionBlockDragLeave(event)" ondrop="onNotionBlockDrop(event,${idx})">${renderSingleBlockInnerHTML(b,idx,b.num||olSeq)}</div>`;
+  }).join('');
+  view.innerHTML=html;
+  wireNotionCanvasEvents(view);
+  renderNotionMinimap();
+  if(window.mermaid) runMermaid('#mdView .mermaid');
+  if(focusIdx!==null&&focusIdx>=0&&focusIdx<notionState.blocks.length){
+    focusNotionBlock(focusIdx,caretAtEnd);
+  }
+}
+
+function focusNotionBlock(idx,toEnd=true){
+  const view=$('#mdView'); if(!view) return;
+  const blk=view.querySelector(`.nblock[data-bidx="${idx}"]`);
+  if(!blk) return;
+  const target=blk.querySelector('.n-ed, .n-callout-title, .n-callout-line, .n-table-cell, textarea');
+  if(!target) return;
+  target.focus();
+  if(target.tagName==='TEXTAREA'){
+    const len=target.value.length;
+    target.setSelectionRange(toEnd?len:0,toEnd?len:0);
+    return;
+  }
+  const sel=window.getSelection();
+  const range=document.createRange();
+  range.selectNodeContents(target);
+  range.collapse(!toEnd);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function getCaretTextOffset(el){
+  const sel=window.getSelection();
+  if(!sel||!sel.rangeCount) return 0;
+  const r=sel.getRangeAt(0);
+  const pre=r.cloneRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(r.startContainer,r.startOffset);
+  return pre.toString().length;
+}
+
+function wireNotionCanvasEvents(view){
+  view.onfocusin=e=>{
+    view.querySelectorAll('.nblock.focused').forEach(x=>x.classList.remove('focused'));
+    const blk=e.target.closest('.nblock');
+    if(blk) blk.classList.add('focused');
+  };
+
+  view.oninput=e=>{
+    const t=e.target;
+    const blkEl=t.closest('.nblock');
+    if(!blkEl) return;
+    const idx=Number(blkEl.dataset.bidx);
+    const b=notionState.blocks[idx];
+    if(!b) return;
+
+    // Check live Markdown auto-shortcuts at start of .n-ed
+    if(t.classList.contains('n-ed')){
+      const rawTxt=(t.textContent||'').replace(/\u00A0/g,' ');
+
+      // 1) Block-level prefixes (# , ## , ### , - , 1. , [] , > , --- , $$, ```)
+      const turnMap=[
+        {re:/^#\s(.*)$/,type:'h1'},
+        {re:/^##\s(.*)$/,type:'h2'},
+        {re:/^###\s(.*)$/,type:'h3'},
+        {re:/^[-*]\s\[([ xX])\]\s(.*)$/,type:'todo'},
+        {re:/^\[\]\s(.*)$/,type:'todo_empty'},
+        {re:/^[-*]\s(.*)$/,type:'ul'},
+        {re:/^(\d+)\.\s(.*)$/,type:'ol'},
+        {re:/^>\s(.*)$/,type:'quote'},
+        {re:/^!note\s(.*)$/i,type:'callout_NOTE'},
+        {re:/^!warn\s(.*)$/i,type:'callout_WARNING'},
+        {re:/^!imp\s(.*)$/i,type:'callout_IMPORTANT'}
+      ];
+      for(const rule of turnMap){
+        const m=rawTxt.match(rule.re);
+        if(m){
+          if(rule.type==='todo'){ b.type='todo'; b.checked=m[1].toLowerCase()==='x'; b.text=m[2]; }
+          else if(rule.type==='todo_empty'){ b.type='todo'; b.checked=false; b.text=m[1]; }
+          else if(rule.type==='ol'){ b.type='ol'; b.num=Number(m[1])||1; b.text=m[2]; }
+          else if(rule.type.startsWith('callout_')){
+            b.type='callout'; b.kind=rule.type.split('_')[1]; b.title=m[1]||CALLOUT_TYPES[b.kind].title; b.lines=[''];
+          }else{
+            b.type=rule.type; b.text=m[1];
+          }
+          renderNotionCanvasDOM(idx,true);
+          scheduleNotionAutoSave();
+          return;
+        }
+      }
+      if(rawTxt.trim()==='---'){
+        b.type='hr'; delete b.text;
+        notionState.blocks.splice(idx+1,0,{id:nextBlkId(),type:'p',text:''});
+        renderNotionCanvasDOM(idx+1,false);
+        scheduleNotionAutoSave();
+        return;
+      }
+      if(rawTxt.trim()==='$$'){
+        b.type='math'; b.tex=''; delete b.text;
+        notionState.openEditorSet.add(b.id);
+        renderNotionCanvasDOM(idx,true);
+        scheduleNotionAutoSave();
+        return;
+      }
+      if(/^```\w*\s*$/.test(rawTxt.trim())){
+        const lang=rawTxt.trim().slice(3).trim()||'c';
+        if(lang==='mermaid'){ b.type='mermaid'; b.code='flowchart LR\n    A["Giriş"] --> B["Çıkış"]'; }
+        else { b.type='code'; b.lang=lang; b.code=''; }
+        delete b.text;
+        notionState.openEditorSet.add(b.id);
+        renderNotionCanvasDOM(idx,true);
+        scheduleNotionAutoSave();
+        return;
+      }
+
+      // 2) Live inline $math$ conversion when closing $ is typed
+      const mdNow=editableDomToInlineMd(t);
+      const inlineMathMatch=rawTxt.match(/\$([^$\n]{1,80})\$\s$/);
+      if(inlineMathMatch){
+        b.text=mdNow;
+        renderNotionCanvasDOM(idx,true);
+        scheduleNotionAutoSave();
+        return;
+      }
+
+      // 3) Slash '/' Command Trigger
+      const slashM=rawTxt.match(/(?:^|\s)\/([a-zA-Z0-9ğüşöçıİĞÜŞÖÇ_]*)$/);
+      if(slashM){
+        openSlashMenuAtCaret(idx,slashM[1]||'');
+      }else if(notionState.slashOpen&&notionState.slashMode==='slash'){
+        closeNotionSlash();
+      }
+    }
+
+    syncBlockFromDOM(idx);
+    scheduleNotionAutoSave();
+  };
+
+  view.onkeydown=e=>{
+    const t=e.target;
+    const blkEl=t.closest('.nblock');
+    if(!blkEl) return;
+    const idx=Number(blkEl.dataset.bidx);
+    const b=notionState.blocks[idx];
+    if(!b) return;
+
+    // Navigate Slash Menu if open
+    if(notionState.slashOpen){
+      const items=getFilteredSlashItems();
+      if(e.key==='ArrowDown'){ e.preventDefault(); notionState.slashSelIdx=(notionState.slashSelIdx+1)%Math.max(1,items.length); renderSlashMenuDOM(); return; }
+      if(e.key==='ArrowUp'){ e.preventDefault(); notionState.slashSelIdx=(notionState.slashSelIdx-1+Math.max(1,items.length))%Math.max(1,items.length); renderSlashMenuDOM(); return; }
+      if(e.key==='Enter'||e.key==='Tab'){
+        if(items[notionState.slashSelIdx]){
+          e.preventDefault();
+          applySlashCommand(items[notionState.slashSelIdx].id);
+          return;
+        }
+      }
+      if(e.key==='Escape'){ e.preventDefault(); closeNotionSlash(); return; }
+    }
+
+    // Inside Callout lines
+    if(t.classList.contains('n-callout-line')||t.classList.contains('n-callout-title')){
+      if(e.key==='Enter'&&!e.shiftKey){
+        e.preventDefault();
+        syncBlockFromDOM(idx);
+        const lIdx=t.classList.contains('n-callout-title')?-1:Number(t.dataset.lidx||0);
+        if(!b.lines) b.lines=[''];
+        b.lines.splice(lIdx+1,0,'');
+        renderNotionCanvasDOM();
+        const newLine=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"] .n-callout-line[data-lidx="${lIdx+1}"]`);
+        if(newLine) newLine.focus();
+        scheduleNotionAutoSave();
+        return;
+      }
+      if(e.key==='Backspace'&&t.classList.contains('n-callout-line')&&!(t.textContent||'').trim()){
+        const lIdx=Number(t.dataset.lidx||0);
+        if((b.lines||[]).length>1){
+          e.preventDefault();
+          syncBlockFromDOM(idx);
+          b.lines.splice(lIdx,1);
+          renderNotionCanvasDOM();
+          const prevLine=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"] .n-callout-line[data-lidx="${Math.max(0,lIdx-1)}"]`);
+          if(prevLine) prevLine.focus();
+          scheduleNotionAutoSave();
+          return;
+        }
+      }
+      return;
+    }
+
+    // Inside Table cells
+    if(t.classList.contains('n-table-cell')){
+      if(e.key==='Tab'){
+        e.preventDefault();
+        const cells=[...blkEl.querySelectorAll('.n-table-cell')];
+        const curPos=cells.indexOf(t);
+        const nextPos=e.shiftKey?curPos-1:curPos+1;
+        if(cells[nextPos]) cells[nextPos].focus();
+        else if(!e.shiftKey) notionTableAddRow(idx);
+        return;
+      }
+      return;
+    }
+
+    if(!t.classList.contains('n-ed')) return;
+
+    // Tab / Shift+Tab indentation for lists & todos
+    if(e.key==='Tab'&&['ul','ol','todo'].includes(b.type)){
+      e.preventDefault();
+      syncBlockFromDOM(idx);
+      b.indent=e.shiftKey?0:1;
+      renderNotionCanvasDOM(idx,true);
+      scheduleNotionAutoSave();
+      return;
+    }
+
+    // Enter key inside text blocks
+    if(e.key==='Enter'&&!e.shiftKey){
+      e.preventDefault();
+      syncBlockFromDOM(idx);
+      const rawTxt=(t.textContent||'').trim();
+      // Empty list/todo/quote -> convert to normal paragraph
+      if(!rawTxt&&['ul','ol','todo','quote'].includes(b.type)){
+        b.type='p'; b.indent=0;
+        renderNotionCanvasDOM(idx,false);
+        scheduleNotionAutoSave();
+        return;
+      }
+      const nextType=['ul','ol','todo'].includes(b.type)?b.type:'p';
+      const nextBlk={id:nextBlkId(),type:nextType,text:'',indent:b.indent||0};
+      if(nextType==='todo') nextBlk.checked=false;
+      notionState.blocks.splice(idx+1,0,nextBlk);
+      renderNotionCanvasDOM(idx+1,false);
+      scheduleNotionAutoSave();
+      return;
+    }
+
+    // Backspace at start of block
+    if(e.key==='Backspace'){
+      const offset=getCaretTextOffset(t);
+      const rawTxt=(t.textContent||'').trim();
+      if(offset===0){
+        if(['h1','h2','h3','ul','ol','todo','quote'].includes(b.type)){
+          e.preventDefault();
+          syncBlockFromDOM(idx);
+          b.type='p'; b.indent=0;
+          renderNotionCanvasDOM(idx,false);
+          scheduleNotionAutoSave();
+          return;
+        }
+        if(!rawTxt&&notionState.blocks.length>1){
+          e.preventDefault();
+          notionState.blocks.splice(idx,1);
+          renderNotionCanvasDOM(Math.max(0,idx-1),true);
+          scheduleNotionAutoSave();
+          return;
+        }
+      }
+    }
+
+    // Up / Down arrow between blocks
+    if(e.key==='ArrowUp'&&getCaretTextOffset(t)===0&&idx>0){
+      e.preventDefault();
+      focusNotionBlock(idx-1,true);
+    }else if(e.key==='ArrowDown'&&getCaretTextOffset(t)>=(t.textContent||'').length&&idx<notionState.blocks.length-1){
+      e.preventDefault();
+      focusNotionBlock(idx+1,false);
+    }
+  };
+}
+
+/* ---------- Block Actions, Callout Cycling, Todo & Table Helpers ---------- */
+function toggleNotionLock(id){
+  notionState.locked=!notionState.locked;
+  renderMain();
+  toast(notionState.locked?'🔒 Sayfa kilitlendi (Salt okunur mod)':'🔓 Doğrudan Notion düzenleme açıldı',id);
+}
+
+function toggleNotionTodo(idx,checked){
+  const b=notionState.blocks[idx];
+  if(!b) return;
+  b.checked=!!checked;
+  const blkEl=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"]`);
+  if(blkEl) blkEl.classList.toggle('done',!!checked);
+  scheduleNotionAutoSave();
+}
+
+function cycleCalloutKind(idx){
+  if(notionState.locked) return;
+  syncBlockFromDOM(idx);
+  const b=notionState.blocks[idx];
+  if(!b||b.type!=='callout') return;
+  const cur=CALLOUT_KEYS.indexOf(b.kind||'NOTE');
+  b.kind=CALLOUT_KEYS[(cur+1)%CALLOUT_KEYS.length];
+  renderNotionCanvasDOM(idx,true);
+  scheduleNotionAutoSave();
+}
+
+function toggleBlockSubEditor(bid,ev){
+  if(ev) ev.stopPropagation();
+  if(notionState.locked) return;
+  if(notionState.openEditorSet.has(bid)) notionState.openEditorSet.delete(bid);
+  else notionState.openEditorSet.add(bid);
+  const box=document.getElementById('bed_'+bid);
+  if(box){
+    box.classList.toggle('open',notionState.openEditorSet.has(bid));
+    const ta=document.getElementById('mta_'+bid);
+    if(ta&&notionState.openEditorSet.has(bid)) ta.focus();
+  }
+}
+
+function onBlockMathInput(idx,bid,val){
+  const b=notionState.blocks[idx]; if(!b) return;
+  b.tex=val;
+  const r=document.getElementById('mrend_'+bid);
+  if(r) r.innerHTML=renderKatexSafe(val,true);
+  scheduleNotionAutoSave();
+}
+
+function insertMathSym(bid,sym){
+  const ta=document.getElementById('mta_'+bid);
+  if(!ta) return;
+  const s=ta.selectionStart||0, e=ta.selectionEnd||0;
+  ta.setRangeText(sym,s,e,'end');
+  ta.dispatchEvent(new Event('input'));
+  ta.focus();
+}
+
+let _mermaidTimer=null;
+function onBlockMermaidInput(idx,bid,val){
+  const b=notionState.blocks[idx]; if(!b) return;
+  b.code=val;
+  scheduleNotionAutoSave();
+  if(_mermaidTimer) clearTimeout(_mermaidTimer);
+  _mermaidTimer=setTimeout(()=>{
+    const host=document.getElementById('merm_'+bid);
+    if(host&&window.mermaid){
+      host.removeAttribute('data-processed');
+      host.textContent=val.trim();
+      runMermaid('#merm_'+bid);
+    }
+  },350);
+}
+
+function onBlockCodeInput(idx,bid,val){
+  const b=notionState.blocks[idx]; if(!b) return;
+  b.code=val;
+  const chl=document.getElementById('chl_'+bid);
+  if(chl) chl.innerHTML=hlCode(escHtml(val),b.lang||'c');
+  scheduleNotionAutoSave();
+}
+
+function onBlockCodeLang(idx,bid,lang){
+  const b=notionState.blocks[idx]; if(!b) return;
+  b.lang=lang;
+  renderNotionCanvasDOM();
+  scheduleNotionAutoSave();
+}
+
+function notionTableAddRow(idx){
+  syncBlockFromDOM(idx);
+  const b=notionState.blocks[idx]; if(!b||b.type!=='table') return;
+  b.rows.push((b.headers||['']).map(()=>''));
+  renderNotionCanvasDOM();
+  const lastCell=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"] tbody tr:last-child .n-table-cell`);
+  if(lastCell) lastCell.focus();
+  scheduleNotionAutoSave();
+}
+
+function notionTableAddCol(idx){
+  syncBlockFromDOM(idx);
+  const b=notionState.blocks[idx]; if(!b||b.type!=='table') return;
+  b.headers.push('Yeni Sütun');
+  if(b.aligns) b.aligns.push(':---');
+  b.rows.forEach(r=>r.push(''));
+  renderNotionCanvasDOM();
+  scheduleNotionAutoSave();
+}
+
+function notionTableDelRow(idx){
+  syncBlockFromDOM(idx);
+  const b=notionState.blocks[idx]; if(!b||b.type!=='table'||b.rows.length<=1) return;
+  b.rows.pop();
+  renderNotionCanvasDOM();
+  scheduleNotionAutoSave();
+}
+
+function notionTableDelCol(idx){
+  syncBlockFromDOM(idx);
+  const b=notionState.blocks[idx]; if(!b||b.type!=='table'||b.headers.length<=1) return;
+  b.headers.pop();
+  if(b.aligns) b.aligns.pop();
+  b.rows.forEach(r=>r.pop());
+  renderNotionCanvasDOM();
+  scheduleNotionAutoSave();
+}
+
+function notionAppendBottomBlock(){
+  if(notionState.locked) return;
+  syncAllNotionBlocksFromDOM();
+  notionState.blocks.push({id:nextBlkId(),type:'p',text:''});
+  renderNotionCanvasDOM(notionState.blocks.length-1,false);
+  scheduleNotionAutoSave();
+}
+
+/* ---------- Drag & Drop Block Reordering ---------- */
+function onNotionBlockDragStart(ev,idx){
+  syncAllNotionBlocksFromDOM();
+  notionState.dragIdx=idx;
+  ev.dataTransfer.effectAllowed='move';
+  ev.dataTransfer.setData('text/plain',String(idx));
+}
+function onNotionBlockDragOver(ev,idx){
+  if(notionState.dragIdx===null||notionState.dragIdx===idx) return;
+  ev.preventDefault();
+  const blk=ev.currentTarget;
+  const rect=blk.getBoundingClientRect();
+  const topHalf=(ev.clientY-rect.top)<rect.height/2;
+  blk.classList.toggle('drag-over-top',topHalf);
+  blk.classList.toggle('drag-over-bot',!topHalf);
+}
+function onNotionBlockDragLeave(ev){
+  ev.currentTarget.classList.remove('drag-over-top','drag-over-bot');
+}
+function onNotionBlockDrop(ev,targetIdx){
+  ev.currentTarget.classList.remove('drag-over-top','drag-over-bot');
+  const from=notionState.dragIdx;
+  notionState.dragIdx=null;
+  if(from===null||from===targetIdx) return;
+  ev.preventDefault();
+  const rect=ev.currentTarget.getBoundingClientRect();
+  const after=(ev.clientY-rect.top)>=rect.height/2;
+  const [moved]=notionState.blocks.splice(from,1);
+  let dest=targetIdx+(after?1:0);
+  if(from<dest) dest--;
+  notionState.blocks.splice(Math.max(0,dest),0,moved);
+  renderNotionCanvasDOM(Math.max(0,dest),true);
+  scheduleNotionAutoSave();
+}
+
+/* ---------- Floating Overlays: Slash Menu, Bubble Toolbar & Inline Math Popover ---------- */
+function ensureNotionOverlays(){
+  if(!$('#notionSlashMenu')){
+    const sm=document.createElement('div');
+    sm.id='notionSlashMenu';
+    sm.className='notion-slash';
+    document.body.appendChild(sm);
+  }
+  if(!$('#notionBubble')){
+    const bb=document.createElement('div');
+    bb.id='notionBubble';
+    bb.className='notion-bubble';
+    bb.onmousedown=e=>e.preventDefault(); // Keep text selection active!
+    bb.innerHTML=`
+      <select class="nb-sel" id="nbTurnSel" onchange="notionBubbleTurnInto(this.value)" title="Bloğu dönüştür">
+        <option value="">Dönüştür…</option>
+        <option value="p">¶ Metin</option>
+        <option value="h1">H1 Başlık 1</option>
+        <option value="h2">H2 Başlık 2</option>
+        <option value="h3">H3 Başlık 3</option>
+        <option value="ul">• Madde Listesi</option>
+        <option value="ol">1. Numaralı Liste</option>
+        <option value="todo">☑ Yapılacaklar</option>
+        <option value="callout_NOTE">📘 Bilgi Kutusu</option>
+        <option value="callout_IMPORTANT">🔥 Önemli Kutusu</option>
+        <option value="callout_WARNING">⚠️ Uyarı Kutusu</option>
+        <option value="quote">❝ Alıntı</option>
+      </select>
+      <span class="nb-sep"></span>
+      <button type="button" class="nb-btn" onclick="notionFormat('bold')" title="Kalın (Ctrl+B)"><b>B</b></button>
+      <button type="button" class="nb-btn" onclick="notionFormat('italic')" title="İtalik (Ctrl+I)"><i>I</i></button>
+      <button type="button" class="nb-btn" onclick="notionFormat('underline')" title="Altı Çizili (Ctrl+U)"><u>U</u></button>
+      <button type="button" class="nb-btn" onclick="notionFormat('strikeThrough')" title="Üstü Çizili"><s>S</s></button>
+      <button type="button" class="nb-btn" onclick="notionWrapSelection('code')" title="Satır İçi Kod (Ctrl+E)">&lt;/&gt;</button>
+      <button type="button" class="nb-btn" onclick="notionWrapSelection('mark')" title="Fosforlu Vurgula">🖍</button>
+      <button type="button" class="nb-btn" onclick="notionWrapSelection('math')" title="Seçili ifadeyi LaTeX Matematik Formülüne ($...$) çevir">∑ Formül</button>
+      <span class="nb-sep"></span>
+      <button type="button" class="nb-btn" style="color:var(--cu)" onclick="notionAskAiSelection()" title="Seçili kısmı AI ile açıkla veya soru çöz">✨ AI</button>
+    `;
+    document.body.appendChild(bb);
+  }
+  if(!$('#notionMathPop')){
+    const mp=document.createElement('div');
+    mp.id='notionMathPop';
+    mp.className='notion-math-pop';
+    mp.innerHTML=`
+      <div style="display:flex;align-items:center;justify-content:space-between;font:600 11px var(--mono);color:var(--cu)">
+        <span>∑ Satır İçi LaTeX Formül Düzenleyici</span>
+        <button type="button" class="nb-btn" onclick="closeInlineMathPop()" style="height:20px">✕</button>
+      </div>
+      <input type="text" class="nmp-in" id="nmpInput" placeholder="Örn: \\frac{d^2y}{dx^2} + 2y = 0" oninput="onInlineMathPopInput(this.value)" onkeydown="if(event.key==='Enter'||event.key==='Escape'){event.preventDefault();closeInlineMathPop();}">
+      <div class="n-math-syms">
+        ${['\\frac{a}{b}','x^{2}','y_{n}','\\sqrt{x}','\\partial','\\int','\\implies','\\neq','\\leq','\\geq','\\infty'].map(s=>`<button type="button" onclick="insertInlinePopSym('${s.replace(/\\/g,'\\\\')}')">${s.replace(/\\/g,'')}</button>`).join('')}
+      </div>
+      <div class="nmp-prev" id="nmpPrev"></div>
+    `;
+    document.body.appendChild(mp);
+  }
+}
+
+function getFilteredSlashItems(){
+  const q=(notionState.slashFilter||'').toLowerCase().trim();
+  if(!q) return NOTION_SLASH_ITEMS;
+  return NOTION_SLASH_ITEMS.filter(it=>
+    it.t.toLowerCase().includes(q)||it.d.toLowerCase().includes(q)||it.kw.includes(q)||it.id.toLowerCase().includes(q)
+  );
+}
+
+function renderSlashMenuDOM(){
+  const sm=$('#notionSlashMenu'); if(!sm) return;
+  const items=getFilteredSlashItems();
+  if(!items.length){
+    sm.innerHTML=`<div style="padding:12px;color:var(--mut);font-size:12px;text-align:center">Komut bulunamadı: "/${escHtml(notionState.slashFilter)}"</div>`;
+    return;
+  }
+  let curCat='';
+  let html='';
+  items.forEach((it,idx)=>{
+    if(it.cat!==curCat){
+      curCat=it.cat;
+      html+=`<div class="ns-head"><span>${curCat}</span>${idx===0?'<span>↑↓ Seç · Enter</span>':''}</div>`;
+    }
+    html+=`<div class="ns-item ${idx===notionState.slashSelIdx?'act':''}" onmousedown="event.preventDefault();applySlashCommand('${it.id}')">
+      <div class="ns-ic">${it.ic}</div>
+      <div class="ns-info"><div class="ns-title">${it.t}</div><div class="ns-desc">${it.d}</div></div>
+      <span class="ns-kbd">${it.kbd}</span>
+    </div>`;
+  });
+  sm.innerHTML=html;
+  const actEl=sm.querySelector('.ns-item.act');
+  if(actEl) actEl.scrollIntoView({block:'nearest'});
+}
+
+function positionPopupNearRect(el,rect,w=310,h=340){
+  const x=Math.max(16,Math.min(window.innerWidth-w-16,rect.left));
+  const spaceBelow=window.innerHeight-rect.bottom;
+  const y=spaceBelow>h||spaceBelow>rect.top
+    ?Math.min(window.innerHeight-h-12,rect.bottom+6)
+    :Math.max(12,rect.top-h-6);
+  el.style.left=x+'px';
+  el.style.top=y+'px';
+}
+
+function openSlashMenuAtCaret(idx,filterStr=''){
+  ensureNotionOverlays();
+  notionState.slashOpen=true;
+  notionState.slashMode='slash';
+  notionState.slashBlockIdx=idx;
+  notionState.slashFilter=filterStr;
+  notionState.slashSelIdx=0;
+  const sm=$('#notionSlashMenu');
+  renderSlashMenuDOM();
+  sm.classList.add('show');
+  const sel=window.getSelection();
+  if(sel&&sel.rangeCount){
+    const r=sel.getRangeAt(0).getBoundingClientRect();
+    if(r.width||r.height){ positionPopupNearRect(sm,r); return; }
+  }
+  const blk=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"]`);
+  if(blk) positionPopupNearRect(sm,blk.getBoundingClientRect());
+}
+
+function openSlashForBlock(idx,ev){
+  if(ev) ev.stopPropagation();
+  syncAllNotionBlocksFromDOM();
+  notionState.blocks.splice(idx+1,0,{id:nextBlkId(),type:'p',text:''});
+  renderNotionCanvasDOM(idx+1,false);
+  const blk=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx+1}"]`);
+  ensureNotionOverlays();
+  notionState.slashOpen=true;
+  notionState.slashMode='gutter';
+  notionState.slashBlockIdx=idx+1;
+  notionState.slashFilter='';
+  notionState.slashSelIdx=0;
+  const sm=$('#notionSlashMenu');
+  renderSlashMenuDOM();
+  sm.classList.add('show');
+  if(blk) positionPopupNearRect(sm,blk.getBoundingClientRect());
+}
+
+function openSlashFromTop(id){
+  if(editMode) toggleEditNote(id);
+  openSlashForBlock(notionState.blocks.length-1);
+}
+
+function openBlockActionMenu(idx,ev){
+  if(ev) ev.stopPropagation();
+  syncAllNotionBlocksFromDOM();
+  ensureNotionOverlays();
+  notionState.slashOpen=true;
+  notionState.slashMode='menu';
+  notionState.slashBlockIdx=idx;
+  const sm=$('#notionSlashMenu');
+  sm.innerHTML=`
+    <div class="ns-head"><span>Blok İşlemleri (#${idx+1})</span></div>
+    <div class="ns-item" onmousedown="event.preventDefault();blockMenuAction(${idx},'dup')"><div class="ns-ic">⧉</div><div class="ns-info"><div class="ns-title">Bloğu Çoğalt</div><div class="ns-desc">Aynı bloğun kopyasını altına ekle</div></div></div>
+    <div class="ns-item" onmousedown="event.preventDefault();blockMenuAction(${idx},'up')"><div class="ns-ic">↑</div><div class="ns-info"><div class="ns-title">Yukarı Taşı</div><div class="ns-desc">Bloğu bir üst sıraya al</div></div></div>
+    <div class="ns-item" onmousedown="event.preventDefault();blockMenuAction(${idx},'down')"><div class="ns-ic">↓</div><div class="ns-info"><div class="ns-title">Aşağı Taşı</div><div class="ns-desc">Bloğu bir alt sıraya al</div></div></div>
+    <div class="ns-item" onmousedown="event.preventDefault();blockMenuAction(${idx},'ai')"><div class="ns-ic">✨</div><div class="ns-info"><div class="ns-title">AI ile Açıkla & Genişlet</div><div class="ns-desc">Bu bloğu sağdaki AI asistanına gönder</div></div></div>
+    <div class="ns-item" onmousedown="event.preventDefault();blockMenuAction(${idx},'del')"><div class="ns-ic" style="color:var(--bad)">🗑</div><div class="ns-info"><div class="ns-title" style="color:var(--bad)">Bloğu Sil</div><div class="ns-desc">Bu bloğu sayfadan kaldır</div></div></div>
+    <div class="ns-head" style="margin-top:4px"><span>Başka Bloğa Dönüştür</span></div>
+    ${NOTION_SLASH_ITEMS.slice(0,12).map(it=>`<div class="ns-item" onmousedown="event.preventDefault();applySlashCommand('${it.id}',true)"><div class="ns-ic">${it.ic}</div><div class="ns-info"><div class="ns-title">${it.t}</div></div></div>`).join('')}
+  `;
+  sm.classList.add('show');
+  if(ev&&ev.currentTarget) positionPopupNearRect(sm,ev.currentTarget.getBoundingClientRect());
+}
+
+function blockMenuAction(idx,act){
+  closeNotionSlash();
+  const b=notionState.blocks[idx]; if(!b) return;
+  if(act==='dup'){
+    const clone=JSON.parse(JSON.stringify(b));
+    clone.id=nextBlkId();
+    notionState.blocks.splice(idx+1,0,clone);
+    renderNotionCanvasDOM(idx+1,true);
+  }else if(act==='up'&&idx>0){
+    const [it]=notionState.blocks.splice(idx,1);
+    notionState.blocks.splice(idx-1,0,it);
+    renderNotionCanvasDOM(idx-1,true);
+  }else if(act==='down'&&idx<notionState.blocks.length-1){
+    const [it]=notionState.blocks.splice(idx,1);
+    notionState.blocks.splice(idx+1,0,it);
+    renderNotionCanvasDOM(idx+1,true);
+  }else if(act==='del'){
+    if(notionState.blocks.length<=1){ notionState.blocks=[{id:nextBlkId(),type:'p',text:''}]; }
+    else notionState.blocks.splice(idx,1);
+    renderNotionCanvasDOM(Math.max(0,idx-1),true);
+  }else if(act==='ai'){
+    const md=serializeNoteBlocks([b]).trim();
+    rtab('ai');
+    aiSend('side_ai',`Notumdaki şu bloğu detaylıca açıkla ve sınav düzeyinde bir örnek ekle:\n\n${md}`);
+    return;
+  }
+  scheduleNotionAutoSave();
+}
+
+function closeNotionSlash(){
+  notionState.slashOpen=false;
+  const sm=$('#notionSlashMenu');
+  if(sm) sm.classList.remove('show');
+}
+
+function applySlashCommand(cmdId,keepText=false){
+  const idx=notionState.slashBlockIdx;
+  closeNotionSlash();
+  if(idx<0||idx>=notionState.blocks.length) return;
+  syncAllNotionBlocksFromDOM();
+  const b=notionState.blocks[idx];
+  // Strip trailing /filter if triggered by typing '/'
+  let cleanText=b.text||'';
+  if(!keepText&&notionState.slashMode==='slash'){
+    cleanText=cleanText.replace(/(?:^|\s)\/[a-zA-Z0-9ğüşöçıİĞÜŞÖÇ_]*$/,'').trim();
+  }
+  if(cmdId==='upload'){
+    triggerAssetUpload(notionState.noteId);
+    return;
+  }
+  if(cmdId==='ai_expand'){
+    rtab('ai');
+    aiSend('side_ai',`Açık olan "${pg(notionState.noteId).t}" notu için bu bölüme uygun çözümlü bir sınav sorusu ve özet tablo hazırla.`);
+    return;
+  }
+  const replaceOrInsert=(newBlk)=>{
+    if(cleanText&&!keepText){
+      b.text=cleanText;
+      notionState.blocks.splice(idx+1,0,newBlk);
+      return idx+1;
+    }else{
+      const keepContent=cleanText||b.title||(b.lines&&b.lines.join(' '))||'';
+      Object.keys(b).forEach(k=>{if(k!=='id')delete b[k];});
+      Object.assign(b,newBlk);
+      if(keepText&&keepContent&&['p','h1','h2','h3','ul','ol','todo','quote'].includes(b.type)) b.text=keepContent;
+      return idx;
+    }
+  };
+
+  let targetIdx=idx;
+  if(['p','h1','h2','h3','ul','ol','quote'].includes(cmdId)){
+    targetIdx=replaceOrInsert({type:cmdId,text:keepText?cleanText:''});
+  }else if(cmdId==='todo'){
+    targetIdx=replaceOrInsert({type:'todo',checked:false,text:keepText?cleanText:''});
+  }else if(cmdId.startsWith('callout_')){
+    const kind=cmdId.split('_')[1];
+    targetIdx=replaceOrInsert({type:'callout',kind,title:CALLOUT_TYPES[kind].title,lines:[keepText&&cleanText?cleanText:'']});
+  }else if(cmdId==='math'){
+    targetIdx=replaceOrInsert({type:'math',tex:'\\frac{d^2 y}{dx^2} + \\omega_0^2 y = 0'});
+    notionState.openEditorSet.add(notionState.blocks[targetIdx].id);
+  }else if(cmdId==='table'){
+    targetIdx=replaceOrInsert({type:'table',headers:['Kavram / Parametre','Formül & Sembol','Birim / Açıklama'],aligns:[':---',':---:',':---'],rows:[['','',''],['','','']]});
+  }else if(cmdId==='mermaid'){
+    targetIdx=replaceOrInsert({type:'mermaid',code:'flowchart LR\n    G["Giriş X(s)"] --> H["Sistem H(s)"] --> Y["Çıkış Y(s)"]'});
+    notionState.openEditorSet.add(notionState.blocks[targetIdx].id);
+  }else if(cmdId==='code'){
+    targetIdx=replaceOrInsert({type:'code',lang:'c',code:'// STM32 / Mühendislik Kodu\nvoid EXTI0_IRQHandler(void) {\n    EXTI->PR |= (1U << 0);\n}'});
+    notionState.openEditorSet.add(notionState.blocks[targetIdx].id);
+  }else if(cmdId==='hr'){
+    targetIdx=replaceOrInsert({type:'hr'});
+    notionState.blocks.splice(targetIdx+1,0,{id:nextBlkId(),type:'p',text:''});
+    targetIdx++;
+  }
+  renderNotionCanvasDOM(targetIdx,true);
+  scheduleNotionAutoSave();
+}
+
+/* ---------- Bubble Toolbar & Inline Formatting ---------- */
+document.addEventListener('selectionchange',()=>{
+  const bb=$('#notionBubble'); if(!bb) return;
+  if(notionState.locked||editMode){ bb.classList.remove('show'); return; }
+  const sel=window.getSelection();
+  if(!sel||sel.isCollapsed||!sel.toString().trim()){ bb.classList.remove('show'); return; }
+  const anchor=sel.anchorNode?(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement):null;
+  if(!anchor||!anchor.closest||!anchor.closest('#mdView')){ bb.classList.remove('show'); return; }
+  const r=sel.getRangeAt(0).getBoundingClientRect();
+  if(!r.width&&!r.height){ bb.classList.remove('show'); return; }
+  const selEl=$('#nbTurnSel');
+  if(selEl) selEl.value='';
+  bb.classList.add('show');
+  const x=Math.max(12,Math.min(window.innerWidth-390,r.left+r.width/2-180));
+  const y=Math.max(10,r.top-42);
+  bb.style.left=x+'px';
+  bb.style.top=y+'px';
+});
+
+function notionFormat(cmd){
+  document.execCommand(cmd,false,null);
+  const sel=window.getSelection();
+  const blk=sel&&sel.anchorNode?(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement)?.closest('.nblock'):null;
+  if(blk){
+    syncBlockFromDOM(Number(blk.dataset.bidx));
+    scheduleNotionAutoSave();
+  }
+}
+
+function notionWrapSelection(kind){
+  const sel=window.getSelection();
+  if(!sel||sel.isCollapsed) return;
+  const txt=sel.toString();
+  const blk=(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement)?.closest('.nblock');
+  if(!blk) return;
+  const idx=Number(blk.dataset.bidx);
+  if(kind==='math'){
+    const clean=txt.replace(/^\$+|\$+$/g,'').trim();
+    const chipHtml=`<span class="n-math-chip" contenteditable="false" data-tex="${escAttr(clean)}" data-display="0" onclick="openInlineMathPop(this,event)">${renderKatexSafe(clean,false)}</span>&nbsp;`;
+    document.execCommand('insertHTML',false,chipHtml);
+  }else if(kind==='code'){
+    document.execCommand('insertHTML',false,`<code>${escHtml(txt)}</code>`);
+  }else if(kind==='mark'){
+    document.execCommand('insertHTML',false,`<mark>${escHtml(txt)}</mark>`);
+  }
+  syncBlockFromDOM(idx);
+  scheduleNotionAutoSave();
+  $('#notionBubble')?.classList.remove('show');
+}
+
+function notionBubbleTurnInto(val){
+  if(!val) return;
+  const sel=window.getSelection();
+  const blk=sel&&sel.anchorNode?(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement)?.closest('.nblock'):null;
+  if(!blk) return;
+  notionState.slashBlockIdx=Number(blk.dataset.bidx);
+  applySlashCommand(val,true);
+  $('#notionBubble')?.classList.remove('show');
+}
+
+function notionAskAiSelection(){
+  const sel=window.getSelection();
+  const txt=sel?sel.toString().trim():'';
+  if(!txt) return;
+  $('#notionBubble')?.classList.remove('show');
+  rtab('ai');
+  aiSend('side_ai',`Notumda seçtiğim şu ifadeyi/denklemi açıkla:\n\n> ${txt}`);
+}
+
+/* ---------- Inline Math Chip Live Popover ---------- */
+function openInlineMathPop(chipEl,ev){
+  if(ev) ev.stopPropagation();
+  if(notionState.locked) return;
+  ensureNotionOverlays();
+  document.querySelectorAll('.n-math-chip.editing').forEach(x=>x.classList.remove('editing'));
+  chipEl.classList.add('editing');
+  notionState.activeMathChip=chipEl;
+  const pop=$('#notionMathPop');
+  const inp=$('#nmpInput');
+  const prev=$('#nmpPrev');
+  const tex=chipEl.dataset.tex||'';
+  inp.value=tex;
+  prev.innerHTML=renderKatexSafe(tex,true);
+  pop.classList.add('show');
+  positionPopupNearRect(pop,chipEl.getBoundingClientRect(),360,160);
+  setTimeout(()=>{ inp.focus(); inp.select(); },20);
+}
+
+function onInlineMathPopInput(val){
+  const chip=notionState.activeMathChip;
+  const prev=$('#nmpPrev');
+  if(prev) prev.innerHTML=renderKatexSafe(val,true);
+  if(chip){
+    chip.dataset.tex=val;
+    chip.innerHTML=renderKatexSafe(val,false);
+    const blk=chip.closest('.nblock');
+    if(blk){
+      syncBlockFromDOM(Number(blk.dataset.bidx));
+      scheduleNotionAutoSave();
+    }
+  }
+}
+
+function insertInlinePopSym(sym){
+  const inp=$('#nmpInput'); if(!inp) return;
+  const s=inp.selectionStart||0, e=inp.selectionEnd||0;
+  inp.setRangeText(sym,s,e,'end');
+  onInlineMathPopInput(inp.value);
+  inp.focus();
+}
+
+function closeInlineMathPop(){
+  document.querySelectorAll('.n-math-chip.editing').forEach(x=>x.classList.remove('editing'));
+  notionState.activeMathChip=null;
+  $('#notionMathPop')?.classList.remove('show');
+}
+
+document.addEventListener('mousedown',e=>{
+  if(notionState.slashOpen&&!e.target.closest('#notionSlashMenu')&&!e.target.closest('.ng-btn')){
+    closeNotionSlash();
+  }
+  if(notionState.activeMathChip&&!e.target.closest('#notionMathPop')&&!e.target.closest('.n-math-chip')){
+    closeInlineMathPop();
+  }
+});
+
+/* ---------- Right-Edge Notion Outline Minimap ---------- */
+function renderNotionMinimap(){
+  const mm=$('#notionMinimap'); if(!mm) return;
+  const headings=[];
+  notionState.blocks.forEach((b,idx)=>{
+    if(b.type==='h1'||b.type==='h2'||b.type==='h3'){
+      const lvl=Number(b.type.slice(1));
+      const clean=(b.text||'').replace(/[*_`~=$]/g,'').trim();
+      if(clean) headings.push({idx,lvl,text:clean});
+    }
+  });
+  if(headings.length<2){ mm.style.display='none'; return; }
+  mm.style.display='flex';
+  mm.innerHTML=headings.map((h,i)=>`<div class="nm-tick lvl-${h.lvl} ${i===0?'on':''}" data-bidx="${h.idx}" onclick="scrollToNotionBlock(${h.idx})" title="${escAttr(h.text)}"></div>`).join('')+
+    `<div class="nm-card">
+      <div class="nm-head">İçindekiler (${headings.length} başlık)</div>
+      ${headings.map((h,i)=>`<div class="nm-link lvl-${h.lvl} ${i===0?'on':''}" data-bidx="${h.idx}" onclick="scrollToNotionBlock(${h.idx})">${escHtml(h.text)}</div>`).join('')}
+    </div>`;
+}
+
+function scrollToNotionBlock(idx){
+  const el=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"]`);
+  if(el){
+    el.scrollIntoView({behavior:'smooth',block:'start'});
+    document.querySelectorAll('#notionMinimap .nm-tick, #notionMinimap .nm-link').forEach(x=>{
+      x.classList.toggle('on',Number(x.dataset.bidx)===idx);
+    });
+  }
+}
+
 /* ---------- Not içine görsel / PDF / DOCX sürükle-bırak & yapıştır ---------- */
 const isUploadable=f=>f&&(f.type.startsWith('image/')||/\.(pdf|docx?|pptx?|xlsx?|csv|txt|md|html|png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
 async function uploadImages(files,rel){
@@ -1780,8 +3476,15 @@ async function dropImagesToNote(id,files){
     const items=await uploadImages(files,rel); if(!items.length)return;
     const embeds=items.map(x=>x.embed);
     const block='\n\n'+embeds.join('\n\n')+'\n\n';
-    if(editMode&&$('#mdEd')){ const ed=$('#mdEd'),p=ed.selectionStart; ed.setRangeText(block,p,p,'end'); ed.focus(); toast(`📎 ${embeds.length} dosya eklendi (Kaydet'e bas)`,id); }
-    else{ const n=noteCache[id]; noteCache[id]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+block}); await loadVault(); renderMain(); toast(`📎 ${embeds.length} dosya nota eklendi (Önizlemek için çift tıkla)`,id); }
+    if(editMode&&$('#mdEd')){ const ed=$('#mdEd'),p=ed.selectionStart; ed.setRangeText(block,p,p,'end'); ed.focus(); scheduleRawMdAutoSave(id); toast(`📎 ${embeds.length} dosya eklendi`,id); }
+    else{
+      syncAllNotionBlocksFromDOM();
+      embeds.forEach(em=>notionState.blocks.push({id:nextBlkId(),type:'embed',raw:em}));
+      const md=serializeNoteBlocks(notionState.blocks);
+      noteCache[id]=await api('/api/note',{rel,content:md});
+      await loadVault(); renderMain();
+      toast(`📎 ${embeds.length} dosya nota blok olarak eklendi`,id);
+    }
   }catch(e){ alert('Dosya eklenemedi: '+e.message); }
 }
 const hasFiles=e=>e.dataTransfer&&[...e.dataTransfer.types].includes('Files');
@@ -1793,19 +3496,47 @@ function wireNoteImages(m,id){
 window.addEventListener('dragover',e=>{ if(hasFiles(e))e.preventDefault(); });
 window.addEventListener('drop',e=>{ if(hasFiles(e))e.preventDefault(); });
 window.addEventListener('paste',e=>{
-  if(!String(active).startsWith('note:'))return;
-  const files=[...(e.clipboardData?e.clipboardData.files:[])].filter(f=>f.type.startsWith('image/'));
-  if(files.length){e.preventDefault(); dropImagesToNote(active,files);}
+  const cd=e.clipboardData; if(!cd) return;
+  const files=[];
+  if(cd.files&&cd.files.length){
+    for(const f of cd.files) if(f.type&&f.type.startsWith('image/')) files.push(f);
+  }else if(cd.items&&cd.items.length){
+    for(const it of cd.items){
+      if(it.kind==='file'&&it.type&&it.type.startsWith('image/')){ const f=it.getAsFile(); if(f) files.push(f); }
+    }
+  }
+  if(!files.length) return;
+  const ae=document.activeElement;
+  const aid=ae?ae.id:'';
+  if(aid==='chatIn'||aid==='scIn'||(ae&&ae.closest&&(ae.closest('#rb-ai')||ae.closest('.sc-wrap')))){
+    e.preventDefault(); attachChatImages('side_ai',files); return;
+  }
+  if(aid==='aiInput'||(ae&&ae.closest&&ae.closest('.aiwrap'))){
+    e.preventDefault(); attachChatImages(active,files); return;
+  }
+  if(active==='studychat'){ e.preventDefault(); attachChatImages('side_ai',files); return; }
+  if(isAI(active)){ e.preventDefault(); attachChatImages(active,files); return; }
+  if(String(active).startsWith('note:')){ e.preventDefault(); dropImagesToNote(active,files); }
 });
-function toggleEditNote(id){ editMode=!editMode; renderMain(); }
+async function toggleEditNote(id){
+  if(!editMode){
+    syncAllNotionBlocksFromDOM();
+    if(noteCache[id]) noteCache[id].content=serializeNoteBlocks(notionState.blocks);
+    editMode=true;
+    renderMain();
+  }else{
+    await saveActiveNote(id);
+  }
+}
 async function saveActiveNote(id){
-  const ed=$('#mdEd'); if(!ed)return;
+  const ed=$('#mdEd');
   const rel=id.slice(5);
   try{
-    noteCache[id]=await api('/api/note',{rel,content:ed.value});
+    const content=ed?ed.value:(syncAllNotionBlocksFromDOM(),serializeNoteBlocks(notionState.blocks));
+    noteCache[id]=await api('/api/note',{rel,content});
     editMode=false;
     await loadVault();
-    toast('💾 Not diske kaydedildi: '+rel, id);
+    toast('💾 Not kaydedildi: '+rel, id);
     renderMain();
   }catch(e){ alert('Kaydetme hatası: '+e.message); }
 }
@@ -1815,7 +3546,6 @@ function renderBlankTab(m){
     <div style="text-align:left;min-width:240px">
       <div style="font-size:12px;color:var(--mut);margin-bottom:10px">Sol panelden bir dosya seç · orta tık: yeni sekme</div>
       <span style="${lk}" onclick="openNewNoteModal()">Yeni not oluştur (Alt+N)</span>
-      <span style="${lk}" onclick="openPal()">Dosyaya git (Ctrl+K)</span>
       <span style="${lk}" onclick="openPage('kasalar')">Kasalar ana ekranı</span>
       <span style="${lk}" onclick="closeTab(active)">Sekmeyi kapat (Ctrl+W)</span>
     </div></div>`;
@@ -1867,7 +3597,8 @@ const GCAL_KINDS={
   lab:{id:'lab',label:'Lab & Deney',icon:'⚡',solid:'#188038',color:'#52b788',bg:'#52b78824',bd:'#52b78888'},
   task:{id:'task',label:'Ödev & Proje Teslimi',icon:'📘',solid:'#e37400',color:'#e0a458',bg:'#e0a45824',bd:'#e0a45888'},
   study:{id:'study',label:'Derin Çalışma / Pomodoro',icon:'🎯',solid:'#1a73e8',color:'#7aa2f7',bg:'#7aa2f724',bd:'#7aa2f788'},
-  lecture:{id:'lecture',label:'Ders / Amfi',icon:'🏛',solid:'#8e24aa',color:'#bb9af7',bg:'#bb9af720',bd:'#bb9af788'}
+  lecture:{id:'lecture',label:'Ders / Amfi',icon:'🏛',solid:'#8e24aa',color:'#bb9af7',bg:'#bb9af720',bd:'#bb9af788'},
+  event:{id:'event',label:'Paddock & Etkinlik',icon:'🏁',solid:'#db2777',color:'#f472b6',bg:'#f472b624',bd:'#f472b688'}
 };
 const isLightTheme=()=>typeof curTheme!=='undefined'&&(curTheme==='mono-light'||curTheme==='eink'||curTheme==='sepia');
 const gcalInk=k=>(isLightTheme()?k.solid:k.color);
@@ -1894,7 +3625,7 @@ const GCAL={
   search:'',
   agendaFilter:'all', // 'all' | 'exam' | 'pending' | 'done'
   kasaFilter:'all',
-  kinds:{exam:true,lab:true,task:true,study:true,lecture:true},
+  kinds:{exam:true,lab:true,task:true,study:true,lecture:true,event:true},
   editingId:null,
   pomo:{sec:25*60,total:25*60,running:false,timer:null,mode:'25 dk Odak',taskTitle:'Yüksek Gerilim & Kontrol Vize Hazırlığı'}
 };
@@ -2855,6 +4586,7 @@ function openCalModal(evId=null,defaultDate=null,defaultStart=null){
       <button type="button" class="gm-tab gm-kbtn ${kindVal==='task'?'on':''}" data-k="task" onclick="gcalSetModalKind('task')">Görev</button>
       <button type="button" class="gm-tab gm-kbtn ${kindVal==='lab'?'on':''}" data-k="lab" onclick="gcalSetModalKind('lab')">Lab Deneyi</button>
       <button type="button" class="gm-tab gm-kbtn ${kindVal==='study'?'on':''}" data-k="study" onclick="gcalSetModalKind('study')">Çalışma</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='event'?'on':''}" data-k="event" onclick="gcalSetModalKind('event')">🏁 Paddock & Etkinlik</button>
     </div>
 
     <!-- İkonlu Google Calendar Satırları -->
@@ -3646,23 +5378,34 @@ function renderStudio(){
   </div>`;
 }
 function studioSend(q){
-  q=(q||'').trim(); if(!q) return;
+  q=(q||'').trim();
+  if(!q&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length)) return;
   studioPendingTitle=null; aiSend('side_ai',q);
 }
 function renderStudyChat(m){
-  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
+  m.scrollTop=0;
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span>${effortSelectHtml()}<button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
-    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-box"><textarea id="scIn" rows="1" placeholder="Kaynaklarına bir şey sor…"></textarea><span class="sc-n" id="scN"></span><button class="sc-go" id="scGo" title="Gönder">➤</button></div></div></div>`;
-  const i=$('#scIn'), go=()=>{ const v=i.value; i.value=''; autoGrow(i); studioSend(v); };
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="chat-att-bar sc-att-bar" id="scAttach"></div><div class="sc-box"><button class="sc-att" id="scImgBtn" type="button" onclick="pickChatImages('side_ai')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="scIn" rows="1" placeholder="Kaynaklarına bir şey sor…"></textarea><span class="sc-n" id="scN"></span><button class="sc-go" id="scGo" title="Gönder">➤</button></div></div></div>`;
+  const i=$('#scIn'), go=()=>{
+    const v=i.value;
+    if(!v.trim()&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length)) return;
+    i.value=''; autoGrow(i); studioSend(v);
+  };
   $('#scGo').onclick=go;
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
   i.oninput=()=>autoGrow(i);
+  wireChatDrop(m.querySelector('.sc-wrap'),()=>'side_ai');
+  renderChatAttachments('side_ai');
   updateSideAiCtx(); renderStudyChatBody(); i.focus();
 }
 function renderStudyChatBody(){
   const c=$('#scChat'); if(!c||active!=='studychat') return;
   const s=ai.side_ai; if(!s) return;
   const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
+  const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
+  const prevScroll=c.scrollTop;
+  const nearBottom=!c.dataset.rendered||(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
   const n=getCheckedSources().length;
   let h='';
   if(!msgs.length&&!s.running){
@@ -3672,7 +5415,10 @@ function renderStudyChatBody(){
     if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
-  c.scrollTop=c.scrollHeight;
+  c.dataset.rendered='1';
+  c.dataset.msgCount=String(msgs.length);
+  if(msgs.length!==prevLen||nearBottom) c.scrollTop=c.scrollHeight;
+  else c.scrollTop=prevScroll;
   const st=$('#scStop'); if(st) st.style.display=(s.running||s.pending)?'inline-flex':'none';
   const ch=$('#scChips');
   if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
@@ -3685,10 +5431,13 @@ function chat(who,html){
 }
 function autoGrow(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight+2,Math.round(innerHeight*0.5))+'px'}
 function send(){
-  const i=$('#chatIn'),q=i.value.trim(); if(!q)return; i.value='';autoGrow(i);
+  const i=$('#chatIn'),q=i.value.trim();
+  if(!q&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length))return;
+  i.value='';autoGrow(i);
   aiSend('side_ai',q);
 }
 $('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>autoGrow(e.target);
+wireChatDrop($('#rb-ai'),()=>'side_ai');
 
 /* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
 function syncPaneBtns(){
@@ -3823,52 +5572,13 @@ function toggleZen(){
 $$('.rbtn[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 $('#zenBtn').onclick=toggleZen;
 
-/* ---------- Komut paleti & Kısayollar ---------- */
-const cmds=[
- ['🎨 Tema Seçiciyi Aç (Temaları Değiştir)','',()=>openThemePop()],
- ['❖ Kasalar Ana Ekranına Git (NotebookLM)','',()=>openKasalarHome()],
- ['＋ Yeni Kasa Oluştur','',()=>openNewKasaModal()],
- ['📝 Kasaya Yeni Not Ekle','Alt+N',()=>openNewNoteModal()],
- ['📎 Kasaya Dosya / Kaynak Yükle','',()=>triggerAssetUpload()],
- ['🖨 Aktif Notu A4 İki Sütun Yazdır (Canon G3080)','Ctrl+P',()=>window.print()],
- ['Sol paneli aç/kapat','Ctrl+B',()=>togglePane('left')],
- ['Sağ paneli aç/kapat','Ctrl+J',()=>togglePane('right')],
- ['Sonraki sekmeye geç','Ctrl+Tab',()=>cycleTab(1)],
- ['Önceki sekmeye geç','Ctrl+Shift+Tab',()=>cycleTab(-1)],
- ['Sekmeyi sola taşı','Ctrl+Shift+PageUp',()=>moveActiveTab(-1)],
- ['Sekmeyi sağa taşı','Ctrl+Shift+PageDown',()=>moveActiveTab(1)],
- ['Aktif sekmeyi kapat','Ctrl+W',()=>closeTab(active)],
- ['Yeni AI oturumu aç','',()=>newSession()],
- ['Odak modu (Tam Ekran)','Ctrl+.',()=>toggleZen()],
- ['Yaz moduna geç','',()=>setMode('write')],
- ['Çalış (NotebookLM) moduna geç','',()=>setMode('study')],
- ['AgyCal Akıllı Takvimi aç','',()=>setMode('plan')],
- ['Trafo Lab Analizörünü aç','',()=>openPage('trafo')],
- ['RC Filtre Simülatörünü aç','',()=>openPage('sim')],
- ['Skill menüsünü aç','',()=>rtab('skills')],
- ['Yönlendirici & kotalar','',()=>rtab('router')]
-];
+/* ---------- Kısayollar ---------- */
 function cycleTab(dir){
   if(openTabs.length<2)return;
   const i=openTabs.indexOf(active);
   const next=(i+dir+openTabs.length)%openTabs.length;
   openPage(openTabs[next]);
 }
-function palRender(q=''){
-  const l=$('#palList'); l.innerHTML='';
-  const ql=q.toLowerCase().trim();
-  const noteItems=Object.entries(pages).filter(([id,p])=>id.startsWith('note:')&&(p.t.toLowerCase().includes(ql)||(p.folder||'').toLowerCase().includes(ql))).slice(0,8).map(([id,p])=>[`${p.i||'📝'} ${p.folder?p.folder+' · ':''}${p.t}`,p.ext==='.pdf'?'PDF Sekmesi':'Not',()=>openPage(id,true,{replace:true})]);
-  const allCmds=ql?[...noteItems,...cmds.filter(c=>c[0].toLowerCase().includes(ql))]:cmds;
-  allCmds.forEach((c,i)=>{
-    const d=document.createElement('div'); d.className='pi'+(i==0?' sel':''); d.innerHTML=`<span>${c[0]}</span><kbd>${c[1]}</kbd>`;
-    d.onclick=()=>{closePal();c[2]()}; l.appendChild(d);
-  });
-}
-function openPal(){$('#pal').classList.add('show');$('#palIn').value='';palRender();$('#palIn').focus();}
-function closePal(){$('#pal').classList.remove('show');}
-$('#palBtn').onclick=openPal; $('#pal').onclick=e=>{if(e.target.id==='pal')closePal()};
-$('#palIn').oninput=e=>palRender(e.target.value);
-$('#palIn').onkeydown=e=>{if(e.key==='Enter'){const f=$('#palList .pi');if(f)f.click()}};
 document.addEventListener('keydown',e=>{
   if(e.key==='Tab'&&e.ctrlKey){
     e.preventDefault();
@@ -3877,9 +5587,11 @@ document.addEventListener('keydown',e=>{
   }
   if(e.key==='Tab'&&e.shiftKey&&!e.ctrlKey&&isAI(active)){e.preventDefault();cycleMode(active);return;}
   if(e.key==='Escape'){
+    if(notionState.slashOpen){ closeNotionSlash(); return; }
+    if(notionState.activeMathChip){ closeInlineMathPop(); return; }
     if($('#gcalModalBg')?.classList.contains('show')){ closeCalModal(); return; }
     if(app.classList.contains('zen')){ toggleZen(); return; }
-    closePal(); closeKasaModal();
+    closeKasaModal();
   }
   if(active==='cal'&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&!['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)&&!e.target.isContentEditable&&!$('#gcalModalBg')?.classList.contains('show')){
     const k=e.key.toLowerCase();
@@ -3901,13 +5613,21 @@ document.addEventListener('keydown',e=>{
     return;
   }
   if(!e.ctrlKey)return;
+  if((e.key==='s'||e.key==='S')&&String(active).startsWith('note:')){e.preventDefault();flushNotionSave(active,true);return;}
+  if(e.target.isContentEditable&&e.target.closest&&e.target.closest('#mdView')){
+    const lk=e.key.toLowerCase();
+    if(lk==='b'&&!e.shiftKey){e.preventDefault();notionFormat('bold');return;}
+    if(lk==='i'&&!e.shiftKey){e.preventDefault();notionFormat('italic');return;}
+    if(lk==='u'&&!e.shiftKey){e.preventDefault();notionFormat('underline');return;}
+    if(lk==='e'&&!e.shiftKey){e.preventDefault();notionWrapSelection('code');return;}
+    if(lk==='m'&&!e.shiftKey){e.preventDefault();notionWrapSelection('math');return;}
+  }
   if(e.shiftKey&&(e.key==='PageUp'||(!['INPUT','TEXTAREA'].includes(e.target.tagName)&&!e.target.isContentEditable&&e.key==='ArrowLeft'))){e.preventDefault();moveActiveTab(-1);return;}
   if(e.shiftKey&&(e.key==='PageDown'||(!['INPUT','TEXTAREA'].includes(e.target.tagName)&&!e.target.isContentEditable&&e.key==='ArrowRight'))){e.preventDefault();moveActiveTab(1);return;}
   if(e.key==='PageDown'){e.preventDefault();cycleTab(1);return;}
   if(e.key==='PageUp'){e.preventDefault();cycleTab(-1);return;}
   if(e.key==='w'||e.key==='W'){e.preventDefault();closeTab(active);return;}
   if((e.key==='t'||e.key==='T')&&!e.shiftKey){e.preventDefault();newBlankTab();return;}
-  if(e.key==='k'||e.key==='K'){e.preventDefault();openPal();}
   if(e.key==='b'||e.key==='B'){e.preventDefault();togglePane('left');}
   if(e.key==='j'||e.key==='J'){e.preventDefault();togglePane('right');}
   if(e.key==='.'){e.preventDefault();toggleZen();}
@@ -3969,7 +5689,7 @@ buildSkills();
 
 function aiInstant(id,k){
   const s=ai[id];
-  if(k==='clear'){ api('/api/clear',{session:id}).catch(()=>{}); s.msgs=[{w:'a',h:'🧹 Oturum temizlendi. agy konuşma bağlamı sıfırlandı.'}]; }
+  if(k==='clear'){ api('/api/clear',{session:id}).catch(()=>{}); s.msgs=[{w:'a',h:'🧹 Oturum temizlendi. agy konuşma bağlamı sıfırlandı.'}]; s.attachments=[]; renderChatAttachments(id); }
   else if(k==='compact'){
     const mine=s.msgs.filter(m=>m.w==='me').map(m=>m.h).slice(-3).join(' · ');
     s.msgs=[{w:'a',h:`🗜 Bağlam sıkıştırıldı. Özet: ${mine||'(henüz içerik yok)'} <div class="route"><span class="chip l">yerel özetleyici</span><span>~%70 token tasarruf</span></div>`}];
@@ -3997,11 +5717,11 @@ function renderUsage(){
   const left=cloud.length?Math.round(cloud.reduce((a,q)=>a+(100-q.u),0)/cloud.length):100;
   $('#uring').style.setProperty('--p',left); $('#uringTxt').textContent=left+'%';
   $('#upop').innerHTML=`<h4><span>AI kullanımı</span><button class="urefresh" id="urefresh" title="Kotaları yenile" onclick="refreshQuota(event)">⟳ Yenile</button></h4>${quotaRows()}
-   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele (Flash / Argon / Yerel) devredilir.</div>`;
+   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele (Hydrogen / Argon / Yerel) devredilir.</div>`;
   const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
 }
 (()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
-$('#uring').onclick=e=>{e.stopPropagation();$('#upop').classList.toggle('show');};
+$('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#upop').classList.toggle('show');};
 document.addEventListener('click',e=>{if(!e.target.closest('#upop'))$('#upop').classList.remove('show');});
 loadQuota(); loadHealth(); setInterval(loadQuota,30000); loadLog(); startEvents();
 
@@ -4069,6 +5789,7 @@ function openThemePop() {
   const pop = $('#tpop');
   if (!pop) return;
   $('#fpop')?.classList.remove('show');
+  $('#mpop')?.classList.remove('show');
   renderThemePop();
   pop.classList.toggle('show');
 }
@@ -4126,7 +5847,7 @@ function renderFontPop(){
 function initTextPrefs(){
   applyTextPrefs();
   const b=$('#fontBtn');
-  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
+  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');$('#mpop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
   const fp=$('#fpop'); if(fp) fp.addEventListener('click',e=>e.stopPropagation());
   document.addEventListener('click',e=>{ if(!e.target.closest('#fontBtn')) $('#fpop')?.classList.remove('show'); });
   document.addEventListener('keydown',e=>{
@@ -4210,6 +5931,478 @@ function initAppClock(){
   setInterval(updateAppClock,1000);
 }
 
+/* ---------- Sol Ray Medya Kumandası (SMTC + Spotify Connect Hibrit) ---------- */
+const MEDIA_ICONS={
+  spotify:'<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7"/><path d="M7.3 9.7c3.4-1 7-.7 9.8.8M8 12.6c2.8-.8 5.8-.5 8.1.7M8.7 15.3c2.1-.6 4.4-.4 6.2.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  youtube:'<svg viewBox="0 0 24 24" fill="none"><rect x="2.5" y="5.5" width="19" height="13" rx="4" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7"/><path d="M10.2 9.4 15.4 12l-5.2 2.6V9.4Z" fill="currentColor"/></svg>',
+  ytmusic:'<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="5.6" stroke="currentColor" stroke-width="1.3" opacity=".8"/><path d="M10.3 9.5 15 12l-4.7 2.5V9.5Z" fill="currentColor"/></svg>',
+  vlc:'<svg viewBox="0 0 24 24" fill="none"><path d="M9.6 4.5h4.8l3.1 11.5H6.5L9.6 4.5Z" fill="currentColor" opacity=".18" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M8.5 9.2h7M7.5 12.6h9M4.5 16.5h15l1 3h-17l1-3Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  soundcloud:'<svg viewBox="0 0 24 24" fill="none"><path d="M11.5 17h6.2a3.3 3.3 0 0 0 .3-6.6 4.5 4.5 0 0 0-8.6-1.3V17h2.1Z" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M3.5 14v3M6 12v5M8.5 10.5V17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  apple:'<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7"/><path d="M7.5 13v-2M10.5 16V8M13.5 14.5v-5M16.5 13v-2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+  browser:'<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.2" fill="currentColor" opacity=".14" stroke="currentColor" stroke-width="1.7"/><path d="M10.2 9.2 15.2 12l-5 2.8V9.2Z" fill="currentColor"/></svg>',
+  media:'<svg viewBox="0 0 24 24" fill="none"><path d="M4.5 14v-4M8.2 17.5v-11M12 19V5M15.8 16.5v-9M19.5 14v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  idle:'<svg viewBox="0 0 24 24" fill="none"><path d="M4.5 13.5v-3M8.2 16V8M12 18V6M15.8 15.5v-7M19.5 13.5v-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".82"/></svg>'
+};
+const mediaIcon=p=>MEDIA_ICONS[p]||MEDIA_ICONS.media;
+
+const MEDIA_CTRL_SVG={
+  prev:'<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3.2 3.2a.7.7 0 0 1 .7.7v8.2a.7.7 0 0 1-1.4 0V3.9a.7.7 0 0 1 .7-.7Zm9.5.9a.8.8 0 0 1 1.2.7v6.4a.8.8 0 0 1-1.2.7L6.3 8.7a.8.8 0 0 1 0-1.4l6.4-3.2Z"/></svg>',
+  play:'<svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><path d="M4.6 3.1a.9.9 0 0 1 1-.04l7.2 4.2a.85.85 0 0 1 0 1.48l-7.2 4.2a.9.9 0 0 1-1.35-.78V3.84a.9.9 0 0 1 .35-.74Z"/></svg>',
+  pause:'<svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><rect x="3.8" y="3" width="3" height="10" rx=".9"/><rect x="9.2" y="3" width="3" height="10" rx=".9"/></svg>',
+  next:'<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M12.8 3.2a.7.7 0 0 0-.7.7v8.2a.7.7 0 0 0 1.4 0V3.9a.7.7 0 0 0-.7-.7Zm-9.5.9a.8.8 0 0 0-1.2.7v6.4a.8.8 0 0 0 1.2.7l6.4-3.2a.8.8 0 0 0 0-1.4L3.3 4.1Z"/></svg>',
+  chevron:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>',
+  gear:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.3M8 12.5v1.3M2.2 8h1.3M12.5 8h1.3M3.9 3.9l.95.95M11.15 11.15l.95.95M12.1 3.9l-.95.95M4.85 11.15l-.95.95"/></svg>'
+};
+
+const SP_REDIRECT=window.location.origin+'/';
+const SP_SCOPES='user-read-playback-state user-modify-playback-state user-read-currently-playing';
+let preferredPcApp=localStorage.getItem('agydesk_media_app')||'';
+let selectedMediaKey=localStorage.getItem('agydesk_media_sel')||(preferredPcApp?'pc:'+preferredPcApp:'');
+function loadJsonLs(k,def){try{return JSON.parse(localStorage.getItem(k)||'')||def;}catch{return def;}}
+const mediaThumbCache=loadJsonLs('agydesk_media_thumbs',{});
+const mediaAppLastThumb={};
+const mediaPlatCache=loadJsonLs('agydesk_media_plats',{});
+let mediaShowSetup=false;
+let mediaPinned=false;
+let mediaHoverTimer=null;
+let mediaPollSeq=0;
+let mediaHasPolledPc=false;
+let mediaState={
+  source:'idle',activeKey:'',platform:'idle',platformLabel:'Medya Yok',title:'Aktif medya yok',
+  artist:'',thumb:'',playing:false,pct:0,device:'',deviceId:'',isActiveDevice:false,targetApp:'',players:[]
+};
+let pcMedia={active:null,sessions:[]};
+let spMedia={connected:false,playing:false,title:'',artist:'',thumb:'',pct:0,device:'',devices:[]};
+
+function spConnected(){return !!localStorage.getItem('agydesk_sp_token');}
+function b64url(buf){return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');}
+
+async function startSpotifyConnect(){
+  const inp=$('#spCidIn');
+  const cid=(inp?inp.value:localStorage.getItem('agydesk_sp_cid')||'').trim();
+  if(!cid)return;
+  localStorage.setItem('agydesk_sp_cid',cid);
+  const verifier=b64url(crypto.getRandomValues(new Uint8Array(32)));
+  localStorage.setItem('agydesk_sp_verifier',verifier);
+  const challenge=b64url(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)));
+  const u=new URL('https://accounts.spotify.com/authorize');
+  u.searchParams.set('client_id',cid);
+  u.searchParams.set('response_type','code');
+  u.searchParams.set('redirect_uri',SP_REDIRECT);
+  u.searchParams.set('code_challenge_method','S256');
+  u.searchParams.set('code_challenge',challenge);
+  u.searchParams.set('scope',SP_SCOPES);
+  location.href=u.toString();
+}
+
+async function handleSpotifyOAuthCallback(){
+  const p=new URLSearchParams(location.search);
+  const code=p.get('code');
+  if(!code)return;
+  const cid=localStorage.getItem('agydesk_sp_cid');
+  const verifier=localStorage.getItem('agydesk_sp_verifier');
+  if(!cid||!verifier)return;
+  try{
+    const r=await fetch('https://accounts.spotify.com/api/token',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({client_id:cid,grant_type:'authorization_code',code,redirect_uri:SP_REDIRECT,code_verifier:verifier})
+    });
+    const d=await r.json();
+    if(d.access_token){
+      localStorage.setItem('agydesk_sp_token',d.access_token);
+      if(d.refresh_token)localStorage.setItem('agydesk_sp_refresh',d.refresh_token);
+      localStorage.setItem('agydesk_sp_exp',String(Date.now()+(d.expires_in-60)*1000));
+      mediaShowSetup=false;
+    }
+  }catch{}
+  history.replaceState({},'',location.pathname);
+}
+
+async function ensureSpotifyToken(){
+  const tok=localStorage.getItem('agydesk_sp_token');
+  if(!tok)return null;
+  const exp=Number(localStorage.getItem('agydesk_sp_exp')||0);
+  if(Date.now()<exp)return tok;
+  const ref=localStorage.getItem('agydesk_sp_refresh');
+  const cid=localStorage.getItem('agydesk_sp_cid');
+  if(!ref||!cid)return tok;
+  try{
+    const r=await fetch('https://accounts.spotify.com/api/token',{
+      method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'},
+      body:new URLSearchParams({client_id:cid,grant_type:'refresh_token',refresh_token:ref})
+    });
+    const d=await r.json();
+    if(d.access_token){
+      localStorage.setItem('agydesk_sp_token',d.access_token);
+      if(d.refresh_token)localStorage.setItem('agydesk_sp_refresh',d.refresh_token);
+      localStorage.setItem('agydesk_sp_exp',String(Date.now()+(d.expires_in-60)*1000));
+      return d.access_token;
+    }
+  }catch{}
+  return tok;
+}
+
+function disconnectSpotify(){
+  ['agydesk_sp_token','agydesk_sp_refresh','agydesk_sp_exp'].forEach(k=>localStorage.removeItem(k));
+  spMedia={connected:false,playing:false,title:'',artist:'',thumb:'',pct:0,device:'',devices:[]};
+  if(selectedMediaKey.startsWith('sp:')){
+    selectedMediaKey='';
+    localStorage.removeItem('agydesk_media_sel');
+  }
+  recomputeMediaState();
+  renderMediaUI();
+}
+
+async function spApi(url,opts={}){
+  const tok=await ensureSpotifyToken();
+  if(!tok)return null;
+  const r=await fetch(url,{...opts,headers:{...(opts.headers||{}),Authorization:'Bearer '+tok}});
+  if(r.status===401){disconnectSpotify();return null;}
+  return r;
+}
+
+function saveMediaCacheMap(lsKey,obj,maxEntries,maxChars){
+  try{
+    const keys=Object.keys(obj);
+    while(keys.length>maxEntries){delete obj[keys.shift()];}
+    let s=JSON.stringify(obj);
+    while(maxChars&&s.length>maxChars&&keys.length>1){delete obj[keys.shift()];s=JSON.stringify(obj);}
+    if(!maxChars||s.length<=maxChars)localStorage.setItem(lsKey,s);
+  }catch{}
+}
+function cacheMediaThumb(app,title,thumb){
+  if(!thumb)return;
+  const k=`${app||''}|${title||''}`;
+  if(mediaThumbCache[k]!==thumb){
+    mediaThumbCache[k]=thumb;
+    saveMediaCacheMap('agydesk_media_thumbs',mediaThumbCache,6,260000);
+  }
+  if(app)mediaAppLastThumb[app]={title:title||'',thumb};
+}
+function lookupMediaThumb(app,title){
+  const k=`${app||''}|${title||''}`;
+  if(mediaThumbCache[k])return mediaThumbCache[k];
+  const last=app&&mediaAppLastThumb[app];
+  if(last&&last.thumb&&(!title||last.title===title))return last.thumb;
+  return '';
+}
+function normalizeSessionPlat(s){
+  if(!s)return s;
+  const k=`${s.app||''}|${s.title||''}`;
+  if(s.platform&&s.platform!=='browser'&&s.platform!=='media'&&s.platform!=='idle'){
+    const prev=mediaPlatCache[k];
+    if(!prev||prev.platform!==s.platform){
+      mediaPlatCache[k]={platform:s.platform,platformLabel:s.platform_label||s.platform};
+      saveMediaCacheMap('agydesk_media_plats',mediaPlatCache,20,0);
+    }
+    return s;
+  }
+  const hit=s.title&&mediaPlatCache[k];
+  if(hit)return{...s,platform:hit.platform,platform_label:hit.platformLabel};
+  return s;
+}
+
+async function pollPcMedia(){
+  const seq=++mediaPollSeq;
+  const wantApp=selectedMediaKey.startsWith('pc:')?selectedMediaKey.slice(3):preferredPcApp;
+  try{
+    const qs=wantApp?`?app=${encodeURIComponent(wantApp)}`:'';
+    const r=await fetch('/api/media/status'+qs);
+    if(!r.ok)return;
+    const d=await r.json();
+    if(seq!==mediaPollSeq)return;
+    mediaHasPolledPc=true;
+    const sessions=(d.sessions||[]).map(normalizeSessionPlat);
+    let act=d.active?normalizeSessionPlat(d.active):null;
+    if(act){
+      if(act.thumbnail)cacheMediaThumb(act.app,act.title,act.thumbnail);
+      else act.thumbnail=lookupMediaThumb(act.app,act.title);
+    }
+    pcMedia={active:act,sessions};
+  }catch{}
+}
+
+async function pollSpotifyConnect(){
+  if(!spConnected()){spMedia.connected=false;return;}
+  try{
+    const r=await spApi('https://api.spotify.com/v1/me/player');
+    if(!r)return;
+    spMedia.connected=true;
+    if(r.status===204){
+      const dr=await spApi('https://api.spotify.com/v1/me/player/devices');
+      spMedia.devices=dr?((await dr.json()).devices||[]):[];
+      spMedia.playing=false;
+      spMedia.title='';spMedia.artist='';spMedia.thumb='';spMedia.pct=0;spMedia.device='';
+      return;
+    }
+    const d=await r.json();
+    const dr=await spApi('https://api.spotify.com/v1/me/player/devices');
+    const item=d.item||{};
+    spMedia={
+      connected:true,
+      playing:!!d.is_playing,
+      title:item.name||'',
+      artist:(item.artists||[]).map(a=>a.name).join(', '),
+      thumb:item.album?.images?.[2]?.url||item.album?.images?.[0]?.url||'',
+      pct:item.duration_ms?Math.round((d.progress_ms/item.duration_ms)*100):0,
+      device:d.device?.name||'Spotify',
+      devices:dr?((await dr.json()).devices||[]):[]
+    };
+  }catch{}
+}
+
+function getUnifiedPlayers(){
+  const players=[];
+  for(const s of(pcMedia.sessions||[])){
+    const actThumb=(pcMedia.active&&pcMedia.active.app===s.app)?pcMedia.active.thumbnail:'';
+    players.push({
+      key:'pc:'+s.app,kind:'pc',app:s.app,deviceId:'',isActiveDevice:false,
+      platform:s.platform||'media',platformLabel:s.platform_label||'PC Medya',
+      title:s.title||'Bilinmiyor',artist:s.artist||'',
+      thumb:actThumb||lookupMediaThumb(s.app,s.title),
+      playing:!!s.playing,device:s.platform_label||'PC',pct:0
+    });
+  }
+  if(spConnected()){
+    const hasPcSp=(pcMedia.sessions||[]).some(s=>s.platform==='spotify');
+    const devs=spMedia.devices||[];
+    let addedSp=false;
+    for(const d of devs){
+      if(d.type==='Computer'&&hasPcSp)continue;
+      if(!d.is_active&&d.type==='Computer'&&!spMedia.title)continue;
+      addedSp=true;
+      const devIcon=(d.type==='Tablet'||d.type==='Smartphone')?'📱 ':'💻 ';
+      players.push({
+        key:'sp:'+d.id,kind:'sp',app:'',deviceId:d.id,isActiveDevice:!!d.is_active,
+        platform:'spotify',platformLabel:d.is_active?'Spotify':`Spotify · ${d.name}`,
+        title:(d.is_active&&spMedia.title)?spMedia.title:(spMedia.title||d.name),
+        artist:d.is_active?(spMedia.artist||d.name):(devIcon+d.name),
+        thumb:d.is_active?spMedia.thumb:'',
+        playing:!!(d.is_active&&spMedia.playing),
+        device:d.name,pct:d.is_active?spMedia.pct:0
+      });
+    }
+    if(!addedSp&&!hasPcSp&&spMedia.title){
+      players.push({
+        key:'sp:default',kind:'sp',app:'',deviceId:'',isActiveDevice:true,
+        platform:'spotify',platformLabel:'Spotify Connect',
+        title:spMedia.title,artist:spMedia.artist||spMedia.device||'Spotify',
+        thumb:spMedia.thumb,playing:spMedia.playing,device:spMedia.device||'Spotify',pct:spMedia.pct
+      });
+    }
+  }
+  return players;
+}
+
+function recomputeMediaState(){
+  const players=getUnifiedPlayers();
+  let sel=selectedMediaKey?players.find(p=>p.key===selectedMediaKey):null;
+  if(!sel&&selectedMediaKey&&mediaHasPolledPc){
+    if(!selectedMediaKey.startsWith('sp:')||spMedia.connected){
+      selectedMediaKey='';
+      preferredPcApp='';
+      localStorage.removeItem('agydesk_media_sel');
+      localStorage.removeItem('agydesk_media_app');
+    }
+  }
+  if(!sel){
+    sel=players.find(p=>p.playing)||players[0]||null;
+  }
+  if(sel){
+    mediaState={
+      source:sel.kind,activeKey:sel.key,platform:sel.platform,platformLabel:sel.platformLabel,
+      title:sel.title,artist:sel.artist||(sel.device||''),thumb:sel.thumb,playing:sel.playing,
+      pct:sel.pct||0,device:sel.device,deviceId:sel.deviceId||'',isActiveDevice:!!sel.isActiveDevice,
+      targetApp:sel.app||'',players
+    };
+    return;
+  }
+  mediaState={
+    source:'idle',activeKey:'',platform:'idle',platformLabel:'Medya Yok',title:'Şu an çalan medya yok',
+    artist:'Spotify, YouTube veya PC medyası bekleniyor',thumb:'',playing:false,pct:0,
+    device:'',deviceId:'',isActiveDevice:false,targetApp:'',players
+  };
+}
+
+function setSelectedMedia(player){
+  selectedMediaKey=player?player.key:'';
+  if(selectedMediaKey)localStorage.setItem('agydesk_media_sel',selectedMediaKey);
+  else localStorage.removeItem('agydesk_media_sel');
+  preferredPcApp=(player&&player.kind==='pc')?player.app:'';
+  if(preferredPcApp)localStorage.setItem('agydesk_media_app',preferredPcApp);
+  else localStorage.removeItem('agydesk_media_app');
+  mediaPollSeq++;
+  recomputeMediaState();
+  renderMediaUI();
+}
+
+async function cycleMediaPlayer(){
+  const players=mediaState.players&&mediaState.players.length?mediaState.players:getUnifiedPlayers();
+  if(players.length<2)return;
+  const curIdx=players.findIndex(p=>p.key===mediaState.activeKey);
+  const next=players[(curIdx+1)%players.length];
+  setSelectedMedia(next);
+  await refreshMediaNow();
+}
+
+function toggleMediaSetup(){
+  mediaShowSetup=!mediaShowSetup;
+  renderMediaPop();
+}
+
+async function mediaCmd(action){
+  if(mediaState.source==='sp'){
+    if(mediaState.deviceId&&!mediaState.isActiveDevice&&action==='playpause'){
+      await spApi('https://api.spotify.com/v1/me/player',{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({device_ids:[mediaState.deviceId],play:true})
+      });
+    }else{
+      const devQ=mediaState.deviceId?`?device_id=${encodeURIComponent(mediaState.deviceId)}`:'';
+      const ep=action==='playpause'?(mediaState.playing?'pause':'play'):(action==='next'?'next':'previous');
+      await spApi(`https://api.spotify.com/v1/me/player/${ep}${devQ}`,{method:action==='playpause'?'PUT':'POST'});
+    }
+  }else{
+    await fetch('/api/media/cmd',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action,app:mediaState.targetApp||''})
+    });
+  }
+  setTimeout(refreshMediaNow,240);
+}
+
+function renderMediaRail(){
+  const btn=$('#mediaBtn'); if(!btn)return;
+  btn.innerHTML=mediaIcon(mediaState.platform);
+  btn.classList.toggle('playing',mediaState.playing);
+  btn.classList.toggle('active',mediaPinned||$('#mpop')?.classList.contains('show'));
+  btn.dataset.tip=mediaState.source==='idle'
+    ?'Medya Kumandası (Çalan yok)'
+    :`${mediaState.playing?'▶':'❚❚'} ${mediaState.title}${mediaState.artist?' — '+mediaState.artist:''} (${mediaState.platformLabel})`;
+}
+
+function renderMediaPop(){
+  const pop=$('#mpop'); if(!pop)return;
+  const activeEl=document.activeElement;
+  if(activeEl&&activeEl.id==='spCidIn'&&pop.classList.contains('show'))return;
+
+  const hasSp=spConnected();
+  const s=mediaState;
+  const players=s.players||[];
+  const multi=players.length>1;
+  const curIdx=players.findIndex(p=>p.key===s.activeKey);
+  const nextPl=multi?players[(curIdx+1)%players.length]:null;
+  const nextTip=nextPl
+    ?`Sonraki oynatıcı: ${nextPl.platformLabel} (${((curIdx+1)%players.length)+1}/${players.length})`
+    :'Başka aktif medya oynatıcı yok';
+  const artHtml=s.thumb?`<img src="${escAttr(s.thumb)}" alt="">`:mediaIcon(s.platform);
+
+  const savedCid=escAttr(localStorage.getItem('agydesk_sp_cid')||'');
+  const setupHtml=mediaShowSetup?`
+    <div class="mpop-setup">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <b style="color:var(--txt);font-size:11.5px">Spotify Connect (PC + Tablet)</b>
+        ${hasSp?'<button class="mpop-btn" onclick="disconnectSpotify()">Bağlantıyı Kes</button>':''}
+      </div>
+      ${hasSp?'<span style="color:var(--ok)">✓ Spotify hesabı bağlı (oynatıcılar › ile döner)</span>':`
+        <span>1. <b>developer.spotify.com/dashboard</b> → Create app → Redirect URI:</span>
+        <code>${escAttr(SP_REDIRECT)}</code>
+        <input id="spCidIn" value="${savedCid}" placeholder="Spotify Client ID yapıştır">
+        <button class="mpop-btn on" style="text-align:center" onclick="startSpotifyConnect()">Spotify'a Bağlan</button>
+      `}
+    </div>`:'';
+
+  pop.innerHTML=`
+    <div class="mpop-head">
+      <span class="mpop-plat">${mediaIcon(s.platform)}<span>${escAttr(s.platformLabel)}</span></span>
+      <div class="mpop-actions">
+        <button class="mpop-sbtn ${mediaShowSetup?'on':''}" onclick="toggleMediaSetup()" title="Spotify Connect (Tablet & PC) ayarları">${MEDIA_CTRL_SVG.gear}</button>
+        <button class="mpop-next" onclick="cycleMediaPlayer()" ${multi?'':'disabled'} title="${escAttr(nextTip)}">${MEDIA_CTRL_SVG.chevron}</button>
+      </div>
+    </div>
+    <div class="mpop-card">
+      <div class="mpop-info">
+        <div class="mpop-title">${escAttr(s.title)}</div>
+        <div class="mpop-artist">${escAttr(s.artist||'')}</div>
+      </div>
+      <div class="mpop-art">${artHtml}</div>
+    </div>
+    ${(s.source==='sp'&&s.pct>0)?`<div class="mpop-bar"><i style="width:${s.pct}%"></i></div>`:''}
+    <div class="mpop-ctrls">
+      <button class="mpop-cbtn" onclick="mediaCmd('prev')" title="Önceki parça">${MEDIA_CTRL_SVG.prev}</button>
+      <button class="mpop-cbtn main" onclick="mediaCmd('playpause')" title="Oynat / Duraklat">${s.playing?MEDIA_CTRL_SVG.pause:MEDIA_CTRL_SVG.play}</button>
+      <button class="mpop-cbtn" onclick="mediaCmd('next')" title="Sonraki parça">${MEDIA_CTRL_SVG.next}</button>
+    </div>
+    ${setupHtml}
+  `;
+}
+
+function renderMediaUI(){
+  renderMediaRail();
+  if($('#mpop')?.classList.contains('show'))renderMediaPop();
+}
+
+async function refreshMediaNow(){
+  await Promise.all([pollPcMedia(),pollSpotifyConnect()]);
+  recomputeMediaState();
+  renderMediaUI();
+}
+
+function openMediaPop(pin=false){
+  const pop=$('#mpop'); if(!pop)return;
+  $('#upop')?.classList.remove('show');
+  $('#tpop')?.classList.remove('show');
+  $('#fpop')?.classList.remove('show');
+  if(pin)mediaPinned=true;
+  renderMediaPop();
+  pop.classList.add('show');
+  renderMediaRail();
+}
+
+function closeMediaPop(force=false){
+  if(force)mediaPinned=false;
+  if(!force&&mediaPinned)return;
+  $('#mpop')?.classList.remove('show');
+  renderMediaRail();
+}
+
+function initMediaHub(){
+  const btn=$('#mediaBtn'), pop=$('#mpop');
+  if(!btn||!pop)return;
+  renderMediaRail();
+  handleSpotifyOAuthCallback().then(()=>refreshMediaNow());
+
+  btn.addEventListener('mouseenter',()=>{
+    clearTimeout(mediaHoverTimer);
+    openMediaPop(false);
+    refreshMediaNow();
+  });
+  btn.addEventListener('mouseleave',()=>{
+    mediaHoverTimer=setTimeout(()=>closeMediaPop(false),240);
+  });
+  pop.addEventListener('mouseenter',()=>clearTimeout(mediaHoverTimer));
+  pop.addEventListener('mouseleave',()=>{
+    mediaHoverTimer=setTimeout(()=>closeMediaPop(false),240);
+  });
+  btn.addEventListener('click',e=>{
+    e.stopPropagation();
+    clearTimeout(mediaHoverTimer);
+    if(mediaPinned&&pop.classList.contains('show'))closeMediaPop(true);
+    else{openMediaPop(true);refreshMediaNow();}
+  });
+  pop.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{
+    if(!e.target.closest('#mpop')&&!e.target.closest('#mediaBtn'))closeMediaPop(true);
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&pop.classList.contains('show'))closeMediaPop(true);
+  });
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshMediaNow();});
+  setInterval(()=>{if(!document.hidden)refreshMediaNow();},2500);
+}
+
 /* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects();
 setMode('kasalar'); loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());

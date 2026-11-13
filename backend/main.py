@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import checkpoints, permissions, providers, router, store, vault
+from . import checkpoints, config, media, permissions, providers, router, store, vault
 from .config import PROVIDERS, ROOT, VAULT_DIR, WORKSPACE
 
 WS_HINT = (
@@ -49,9 +49,11 @@ def emit(event: str, **data):
 
 class RunReq(BaseModel):
     session: str
-    text: str
+    text: str = ""
+    images: list[str] = []
     skill: str | None = None
     mode: str = "y"
+    effort: str = "low"
     allow: dict = {}
     approved: bool = False
     sources: list[str] = []
@@ -281,11 +283,20 @@ async def _job(r: RunReq, dec: router.Decision):
     try:
         emit("step", session=r.session, step=f"Yönlendiriliyor → {dec.label}")
         await asyncio.sleep(0.2)
-        emit("step", session=r.session, step=f"{dec.label} çalışıyor… ({dec.reason})")
+        init_step = (
+            f"{dec.label} çalışıyor… ({dec.reason})"
+            if dec.provider == "local"
+            else f"{dec.label} ({config.effective_effort(dec.provider, r.effort)}) çalışıyor… ({dec.reason})"
+        )
+        emit("step", session=r.session, step=init_step)
         conv_id = store.get_conv_id(r.session)
         src_ctx = await asyncio.to_thread(vault.build_context_from_sources, r.sources, r.active_note)
-        base_prompt = f"{src_ctx}{r.text}" if src_ctx else r.text
+        img_paths = await asyncio.to_thread(vault.resolve_chat_images, r.images)
+        img_ctx = vault.build_image_prompt_block(img_paths)
+        user_text = "Eklenen görseli incele ve içeriğini açıkla." if (not r.text.strip() and img_paths) else r.text
+        base_prompt = f"{src_ctx}{img_ctx}{user_text}"
         prompt = f"{WS_HINT}{base_prompt}" if not conv_id else base_prompt
+        log_text = f"[{len(img_paths)} görsel]" if (not r.text.strip() and img_paths) else r.text
 
         def _on_failover(new_prov: str, why: str):
             dec.provider = new_prov
@@ -296,21 +307,24 @@ async def _job(r: RunReq, dec: router.Decision):
         text, tokens, real, new_conv = await providers.complete(
             dec.provider,
             prompt,
+            image_paths=img_paths,
             session=r.session,
             mode=r.mode,
+            effort=r.effort,
             conv_id=conv_id,
             on_step=lambda st: loop.call_soon_threadsafe(lambda s=st: emit("step", session=r.session, step=s)),
             on_failover=_on_failover,
         )
+        used_effort = None if dec.provider == "local" else config.effective_effort(dec.provider, r.effort)
         if new_conv:
             store.set_conv_id(r.session, new_conv)
         if real:  # DEMO/yer tutucu yanıtlar gerçek kotadan sayılmaz
             store.record_usage(dec.provider, tokens, real)
-        store.add_log(r.session, f"✓ Tamamlandı ({dec.label}{'' if real else ', DEMO'}): {r.text}", "ok")
+        store.add_log(r.session, f"✓ Tamamlandı ({dec.label}{'' if real else ', DEMO'}): {log_text}", "ok")
         if not _subs:
             store.add_chat_msg(r.session, "a", text)
         emit("done", session=r.session, reply=text, real=real, tokens=tokens,
-             conv_id=new_conv, route=dec.dict(), quota=store.quota_status())
+             conv_id=new_conv, route=dec.dict(), effort=used_effort, quota=store.quota_status())
         emit("log")
     except asyncio.CancelledError:
         providers.kill_session_proc(r.session)
@@ -326,26 +340,29 @@ async def _job(r: RunReq, dec: router.Decision):
 
 @app.post("/api/run")
 async def run(r: RunReq):
+    if not r.text.strip() and not r.images:
+        raise HTTPException(400, "Mesaj veya görsel boş olamaz")
     if r.session in _tasks:
         raise HTTPException(409, "Oturum meşgul")
+    log_text = f"[{len(r.images)} görsel]" if not r.text.strip() else r.text
     risk = permissions.classify(r.text, r.skill)
     if not r.approved and permissions.needs_approval(r.mode, risk, r.allow):
-        store.add_log(r.session, f"⏸ Onay bekleniyor ({risk}): {r.text}", "w")
+        store.add_log(r.session, f"⏸ Onay bekleniyor ({risk}): {log_text}", "w")
         emit("log")
         return {"status": "approval", "risk": risk}
     if r.mode == "r" and risk == "risky":
-        store.add_log(r.session, f"⚠ YOLO: riskli işlem onaysız çalıştı: {r.text}", "w")
+        store.add_log(r.session, f"⚠ YOLO: riskli işlem onaysız çalıştı: {log_text}", "w")
     cp = None
     if risk != "safe":
         ref = await asyncio.to_thread(checkpoints.snapshot, WORKSPACE)
         if ref:
-            store.add_checkpoint(r.session, ref, r.text)
+            store.add_checkpoint(r.session, ref, log_text)
             cp = len(store.pending_checkpoints(r.session))
-            store.add_log(r.session, f"● Checkpoint alındı (#{cp}) → {r.text}", "ok")
+            store.add_log(r.session, f"● Checkpoint alındı (#{cp}) → {log_text}", "ok")
         else:
             store.add_log(r.session, "● Checkpoint alınamadı (git deposu yok)", "w")
-    dec = router.route(r.text, r.skill, store.used_pct)
-    store.add_log(r.session, f"İş başladı → {dec.label}: {r.text}")
+    dec = router.route(r.text, r.skill, store.used_pct, has_images=bool(r.images))
+    store.add_log(r.session, f"İş başladı → {dec.label}: {log_text}")
     _tasks[r.session] = asyncio.create_task(_job(r, dec))
     emit("log")
     return {"status": "started", "route": dec.dict(), "risk": risk,
@@ -385,6 +402,24 @@ async def undo(r: SessionReq):
     store.add_log(r.session, f"↶ {len(cps)} checkpoint geri alındı", "w")
     emit("log")
     return {"undone": len(cps)}
+
+
+class MediaCmdReq(BaseModel):
+    action: str
+    app: str = ""
+
+
+@app.get("/api/media/status")
+async def media_status(app: str = ""):
+    return await asyncio.to_thread(media.get_status, app)
+
+
+@app.post("/api/media/cmd")
+async def media_cmd(r: MediaCmdReq):
+    res = await asyncio.to_thread(media.send_cmd, r.action, r.app)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error", "Medya komutu başarısız"))
+    return res
 
 
 @app.middleware("http")

@@ -37,6 +37,14 @@ def init():
               id INTEGER PRIMARY KEY, day INTEGER, title TEXT, kind TEXT, kasa TEXT);
             """
         )
+        # Migrate legacy gemini-flash quota counters to the shared gemini-hydrogen slot.
+        c.execute("UPDATE usage SET provider='gemini-hydrogen' WHERE provider='gemini-flash'")
+        c.execute(
+            "UPDATE exhausted SET provider='gemini-hydrogen' "
+            "WHERE provider='gemini-flash' "
+            "AND NOT EXISTS (SELECT 1 FROM exhausted WHERE provider='gemini-hydrogen')"
+        )
+        c.execute("DELETE FROM exhausted WHERE provider='gemini-flash'")
         # seeds removed (keep calendar empty on fresh install, matching store.rs)
 
 

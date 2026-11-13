@@ -10,7 +10,7 @@ ARGON = re.compile(r"argon|simülasyon|kontrol sistemi|bode|transfer fonksiyonu|
 HARD = re.compile(r"mimari|tasarım kararı|zor hata|kritik|derin", re.I)
 CODE = re.compile(r"\bkod\b|pcb|refactor|patch|fonksiyon|script|spice|backend|\bapi\b|python|javascript", re.I)
 
-CLOUD_CHAIN = ["gemini-flash", "gemini-argon", "claude-sonnet", "claude-opus"]
+CLOUD_CHAIN = ["gemini-hydrogen", "gemini-argon", "claude-sonnet", "claude-opus"]
 
 LOCAL_SKILLS = {"ozet", "whisper", "graphify", "verify-and-stop", "caveman-commit", "caveman-review", "spice"}
 OPUS_SKILLS = {"llm-council", "boost"}
@@ -44,12 +44,15 @@ def _pick(text: str, skill: str | None) -> tuple[str, str]:
         return "gemini-argon", "mühendislik analizi → Argon"
     if CODE.search(text):
         return "claude-sonnet", "kodlama → Sonnet"
-    return "gemini-flash", "genel sohbet → ana model"
+    return "gemini-hydrogen", "genel sohbet → ana model"
 
 
-def route(text: str, skill: str | None, pct_of) -> Decision:
+def route(text: str, skill: str | None, pct_of, has_images: bool = False) -> Decision:
     """pct_of(provider_id) -> kullanım yüzdesi. Test edilebilsin diye enjekte edilir."""
     prov, reason = _pick(text, skill)
+    if has_images and prov == "local":
+        prov = "gemini-hydrogen"
+        reason = "görsel analizi → multimodal bulut modeli"
     pct = pct_of(prov) if PROVIDERS[prov]["cloud"] else 0
     if PROVIDERS[prov]["cloud"] and pct >= FALLBACK_THRESHOLD:
         for alt in CLOUD_CHAIN:

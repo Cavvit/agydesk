@@ -40,6 +40,18 @@ pub fn init() {
     let n_ev: i64 = c
         .query_row("SELECT COUNT(*) FROM cal_events", [], |r| r.get(0))
         .unwrap_or(0);
+    // Migrate legacy gemini-flash quota counters to the shared gemini-hydrogen slot.
+    let _ = c.execute(
+        "UPDATE usage SET provider='gemini-hydrogen' WHERE provider='gemini-flash'",
+        [],
+    );
+    let _ = c.execute(
+        "UPDATE exhausted SET provider='gemini-hydrogen'
+         WHERE provider='gemini-flash'
+           AND NOT EXISTS (SELECT 1 FROM exhausted WHERE provider='gemini-hydrogen')",
+        [],
+    );
+    let _ = c.execute("DELETE FROM exhausted WHERE provider='gemini-flash'", []);
     // seeds removed
     let _ = n_ev;
 }

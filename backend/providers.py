@@ -1,6 +1,7 @@
 """Sağlayıcı adaptörleri: Bulut modelleri doğrudan gömülü Antigravity CLI (agy) üzerinden,
 yerel modeller Ollama üzerinden çalıştırılır. API anahtarı gerekmez."""
 import asyncio
+import base64
 import json
 import re
 import shutil
@@ -11,7 +12,7 @@ from typing import Callable
 import httpx
 
 from . import store
-from .config import AGY_BIN, MODELS, OLLAMA_URL, PROVIDERS, WORKSPACE
+from .config import AGY_BIN, MODELS, OLLAMA_URL, PROVIDERS, VAULT_DIR, WORKSPACE, effective_effort, model_for
 from .router import CLOUD_CHAIN
 
 _procs: dict[str, subprocess.Popen] = {}
@@ -54,11 +55,22 @@ async def _mock(provider: str, prompt: str, why: str) -> tuple[str, int, bool, s
     return (f"[DEMO · {provider}] {why}. İstek: {prompt[:160]}", 0, False, None)
 
 
-async def _local(prompt: str) -> tuple[str, int, bool, str | None]:
+async def _local(prompt: str, image_paths: list[Path] | None = None) -> tuple[str, int, bool, str | None]:
+    payload: dict = {"model": MODELS["local"], "prompt": prompt, "think": False, "stream": False}
+    if image_paths:
+        b64s: list[str] = []
+        for p in image_paths:
+            try:
+                raw = p.read_bytes()
+                if 0 < len(raw) <= 20 * 1024 * 1024:
+                    b64s.append(base64.b64encode(raw).decode("ascii"))
+            except Exception:
+                pass
+        if b64s:
+            payload["images"] = b64s
     try:
         async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(f"{OLLAMA_URL}/api/generate",
-                             json={"model": MODELS["local"], "prompt": prompt, "think": False, "stream": False})
+            r = await c.post(f"{OLLAMA_URL}/api/generate", json=payload)
             r.raise_for_status()
             j = r.json()
             return j.get("response", ""), j.get("eval_count", 0), True, None
@@ -75,6 +87,7 @@ def _mode_flags(mode: str) -> list[str]:
 def _run_agy_sync(
     session: str,
     model: str,
+    effort: str,
     prompt: str,
     mode: str,
     conv_id: str | None,
@@ -85,10 +98,12 @@ def _run_agy_sync(
         "-p", prompt,
         "--output-format", "stream-json",
         "--model", model,
-        "--effort", "low",
+        "--effort", effort,
         "--print-timeout", "300s",
         *_mode_flags(mode),
     ]
+    if VAULT_DIR != WORKSPACE and VAULT_DIR.exists():
+        cmd.extend(["--add-dir", str(VAULT_DIR)])
     if conv_id:
         cmd.extend(["--conversation", conv_id])
 
@@ -108,6 +123,7 @@ def _run_agy_sync(
     chunks: list[str] = []
     tool_logs: list[str] = []
     final_resp: str | None = None
+    agy_err: str | None = None
     tokens = 0
 
     try:
@@ -130,24 +146,38 @@ def _run_agy_sync(
                 delta = su.get("text_delta")
                 if delta:
                     chunks.append(delta)
+                err_txt = su.get("error")
+                if isinstance(err_txt, str) and err_txt.strip():
+                    agy_err = err_txt.strip()
                 tcalls = su.get("tool_calls") or []
                 tlabel = ""
                 if tcalls:
                     t0 = tcalls[0]
-                    tname = t0.get("name", "tool")
-                    args = t0.get("args") or {}
-                    tsum = (args.get("toolSummary") or args.get("Path") or tname).strip('"')
+                    tname, obj = t0.get("name", "tool"), (t0.get("args") or {})
+                    tsum = (obj.get("toolSummary") or obj.get("Path") or tname).strip('"')
                     tlabel = f"🛠 {tname}: {tsum}"
+                elif su.get("tool_name"):
+                    tname, obj = su.get("tool_name", "tool"), ((su.get("tool_info") or {}).get("parameters") or {})
+                    tsum = (obj.get("toolSummary") or obj.get("Path") or tname).strip('"')
+                    tlabel = f"🛠 {tname}: {tsum}"
+                if tlabel:
                     if tlabel not in tool_logs:
                         tool_logs.append(tlabel)
-                if on_step and (tlabel or stype):
-                    on_step(tlabel or f"agy ({model}) · adım #{su.get('step_index', 0)}: {stype}")
+                    if on_step:
+                        on_step(tlabel)
+                elif on_step and stype:
+                    on_step(f"agy ({model}) · adım #{su.get('step_index', 0)}: {stype}")
                 u = su.get("usage") or {}
                 tokens = u.get("total_tokens") or tokens
             elif etype == "result":
                 res = ev.get("result") or {}
                 new_conv = res.get("conversation_id") or new_conv
                 final_resp = res.get("response")
+                err_txt = res.get("error")
+                if isinstance(err_txt, str) and err_txt.strip():
+                    agy_err = err_txt.strip()
+                elif res.get("status") and res.get("status") != "SUCCESS" and not agy_err:
+                    agy_err = f"agy durum: {res.get('status')}"
                 u = res.get("usage") or {}
                 tokens = u.get("total_tokens") or tokens
 
@@ -158,11 +188,14 @@ def _run_agy_sync(
             proc.kill()
 
     text = (final_resp if final_resp is not None else "".join(chunks)).strip()
+    if not text and agy_err:
+        raise RuntimeError(agy_err)
     if not text and tool_logs:
         text = "✓ Tamamlanan işlemler:\n" + "\n".join(f"• {x}" for x in tool_logs[-8:])
-    if not text and proc.returncode != 0:
+    if not text:
         err = (proc.stderr.read() if proc.stderr else "").strip()
-        raise RuntimeError(err or f"agy çıkış kodu: {proc.returncode}")
+        if proc.returncode != 0 or err:
+            raise RuntimeError(err or f"agy çıkış kodu: {proc.returncode}")
     return text, tokens, True, new_conv
 
 
@@ -170,8 +203,10 @@ async def complete(
     provider: str,
     prompt: str,
     *,
+    image_paths: list[Path] | None = None,
     session: str = "default",
     mode: str = "y",
+    effort: str = "low",
     conv_id: str | None = None,
     on_step: Callable[[str], None] | None = None,
     on_failover: Callable[[str, str], None] | None = None,
@@ -179,13 +214,13 @@ async def complete(
     """(metin, token, gerçek_mi, conv_id)"""
     if provider == "local":
         if await ollama_alive():
-            return await _local(prompt)
+            return await _local(prompt, image_paths)
         if agy_available():
-            provider = "gemini-flash"
+            provider = "gemini-hydrogen"
             if on_failover:
-                on_failover(provider, "Yerel Ollama kapalı → Gemini Flash (agy CLI)")
+                on_failover(provider, "Yerel Ollama kapalı → Gemini 4 Hydrogen (agy CLI)")
         else:
-            return await _local(prompt)
+            return await _local(prompt, image_paths)
     if not agy_available():
         return await _mock(provider, prompt, "agy CLI bulunamadı")
 
@@ -193,10 +228,11 @@ async def complete(
     cur_conv = conv_id
     last_err: Exception | None = None
     for idx, prov in enumerate(chain):
-        model = MODELS.get(prov, MODELS["gemini-flash"])
+        eff = effective_effort(prov, effort)
+        model = model_for(prov, eff)
         try:
             text, tokens, real, new_conv = await asyncio.to_thread(
-                _run_agy_sync, session, model, prompt, mode, cur_conv, on_step
+                _run_agy_sync, session, model, eff, prompt, mode, cur_conv, on_step
             )
             if idx > 0 and on_failover:
                 on_failover(prov, f"{PROVIDERS[provider]['label']} kotası doldu → {PROVIDERS[prov]['label']}")
@@ -213,5 +249,5 @@ async def complete(
                 continue
             raise
     if last_err:
-        return await _local(prompt)
+        return await _local(prompt, image_paths)
     return await _mock(provider, prompt, "beklenmeyen durum")

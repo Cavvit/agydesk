@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/styles.css?v=notion2">
 </head>
 <body>
 <div class="app" id="app">
@@ -28,15 +28,16 @@
     <button class="rbtn" data-mode="plan" data-tip="AgyCal · Akıllı Takvim">▦</button>
     <button class="rbtn" data-mode="ai" data-tip="Tam Ekran AI Oturumları">◆</button>
     <div class="sp"></div>
+    <button class="rbtn mbtn-rail" id="mediaBtn" data-tip="Medya Kumandası"></button>
     <button class="rbtn" id="themeBtn" data-tip="Görünüm ve Tema Seçici">◑</button>
     <button class="rbtn" id="fontBtn" data-tip="Yazı tipi ve boyutu (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
     <button class="rbtn" id="zenBtn" data-tip="Odak modu (Ctrl+.)">◐</button>
-    <button class="rbtn" id="palBtn" data-tip="Komut paleti (Ctrl+K)">⌘</button>
     <div class="uring" id="uring" style="--p:100" title="AI kullanım & kalan haklar"><span id="uringTxt">100%</span></div>
   </nav>
   <div class="upop" id="upop"></div>
   <div class="tpop" id="tpop"></div>
   <div class="tpop fpop" id="fpop"></div>
+  <div class="mpop" id="mpop"></div>
 
   <!-- SOL -->
   <aside class="left" id="left"><div class="pane-in">
@@ -53,6 +54,7 @@
       <div class="newses" style="flex:0.85;margin:0" id="newNoteSideBtn" onclick="openNewNoteModal()" title="Seçili kasaya yeni not ekle (Alt+N)"><span>＋</span><span>Yeni Not</span></div>
     </div>
     <input type="file" id="hiddenFileIn" multiple accept=".md,.txt,.html,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,image/*" style="display:none" onchange="handleGlobalUpload(this.files)">
+    <input type="file" id="chatImgIn" multiple accept="image/*" style="display:none" onchange="handleChatImgSelect(this.files)">
     <div class="ph"><span id="leftTitle">Kasa Notları</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan Belge / Fotoğraf Ekle">📎</button><button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Ekle (Alt+N)">＋</button><button class="ph-btn" id="leftActBtn" onclick="leftHeaderAct()" title="Klasörleri daralt/genişlet">↕</button></div></div>
     <div id="sessWrap" style="display:none;flex-direction:column;gap:4px;margin-bottom:4px">
       <div class="newses" onclick="newSession()"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg><span>Yeni AI oturumu</span></div>
@@ -109,9 +111,10 @@
     <div class="rbody" id="rb-studio" style="padding:0"></div>
 
     <div class="rbody on" id="rb-ai" style="padding:0">
-      <div class="rview-head" style="justify-content:space-between">
-        <span id="sideAiCtx" class="mono" style="font-size:11px;color:var(--cu)">📚 Kasa kaynakları bağlı</span>
-        <div style="display:flex;gap:4px">
+      <div class="rview-head" style="justify-content:space-between;gap:6px">
+        <span id="sideAiCtx" class="mono" style="font-size:11px;color:var(--cu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">📚 Kasa kaynakları bağlı</span>
+        <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
+          <select class="eff-sel" id="sideEffSel" onchange="setEffort(this.value)" title="Model düşünme derinliği (Effort)"></select>
           <button class="hb" id="sideAiStop" style="padding:2px 7px;font-size:11px;display:none" onclick="aiStop('side_ai')">■ Dur</button>
           <button class="hb" style="padding:2px 7px;font-size:11px" onclick="clearSideAi()" title="Sohbet geçmişini sıfırla">🧹</button>
         </div>
@@ -119,7 +122,8 @@
       <div style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px" id="chat">
         <div class="msg">Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.</div>
       </div>
-      <div class="inp"><textarea id="chatIn" rows="1" placeholder="Seçili kaynaklara ve nota sor…"></textarea><button class="btn" id="send">Gönder</button></div>
+      <div class="chat-att-bar" id="sideAttach"></div>
+      <div class="inp"><button class="att-btn" id="sideImgBtn" type="button" onclick="pickChatImages('side_ai')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="chatIn" rows="1" placeholder="Seçili kaynaklara ve nota sor…"></textarea><button class="btn" id="send">Gönder</button></div>
     </div>
 
     <div class="rbody" id="rb-skills"></div>
@@ -137,6 +141,7 @@
     <div class="rbody" id="rb-router">
       <div class="ph" style="padding:0">Model &amp; kota</div>
       <div class="ph" style="padding:10px 0 0">Yönlendirme kuralları</div>
+      <div class="msg">Genel sohbet &amp; varsayılan → <span class="chip c">Gemini 4 Hydrogen</span></div>
       <div class="msg">Ses / OCR / özet → <span class="chip l">yerel / hızlı bulut</span></div>
       <div class="msg">Mimari, zor hata, kod → <span class="chip c">Sonnet / Opus</span></div>
       <div class="msg">Matematik &amp; devre analizi → <span class="chip c">Argon / Opus</span></div>
@@ -145,10 +150,9 @@
   </div></aside>
 </div>
 
-<!-- PALET & MODAL -->
-<div class="pal" id="pal"><div class="pbox"><input id="palIn" placeholder="Komut veya not ara…"><div id="palList"></div></div></div>
+<!-- MODAL -->
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=notion2"></script>
 </body>
 </html>
