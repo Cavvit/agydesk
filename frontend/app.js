@@ -1599,16 +1599,18 @@ function scrollToHeading(text){
 /* ---------- Ana alan & PDF/Belge Stüdyosu ---------- */
 const pdfState={};
 const pdfInfoCache={};
+let _pdfNavSeq=0;
 function getPdfState(id){
   if(!pdfState[id]){
     pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:localStorage.getItem('agydesk_pdf_filter')||'normal',drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
   }
   return pdfState[id];
 }
-function buildPdfUrl(rel,st){
+function buildPdfUrl(rel,st,bust=false){
   const z=st.zoom||'FitH';
   const zoomParam=(z==='FitH'||z==='Fit')?`view=${z}`:`zoom=${z}`;
-  return `/api/raw/${encodeURI(rel)}#page=${st.page||1}&${zoomParam}`;
+  const q=bust?`?_pv=${++_pdfNavSeq}`:'';
+  return `/api/raw/${encodeURI(rel)}${q}#page=${st.page||1}&${zoomParam}`;
 }
 function updatePdfFrame(id,reloadHash=false){
   const st=getPdfState(id);
@@ -1625,8 +1627,12 @@ function updatePdfFrame(id,reloadHash=false){
     const rel=id.slice(5);
     const fr=$('#pdfMainFrame');
     if(fr){
-      const nextUrl=buildPdfUrl(rel,st);
-      fr.src=nextUrl;
+      // Chromium/WebView2 PDFium ignores hash-only (#page= / #view=) updates on an existing iframe;
+      // replacing the iframe with a fresh query-busted URL forces PDFium to jump to the target page & zoom.
+      const nextUrl=buildPdfUrl(rel,st,true);
+      const clone=fr.cloneNode(false);
+      clone.src=nextUrl;
+      fr.replaceWith(clone);
     }
   }
 }
@@ -1811,7 +1817,7 @@ async function renderVaultNote(m,id){
 
         <div class="pdf-grp" title="Sayfa Gezgini">
           <button onclick="stepPdfPage('${id}',-1)" title="Önceki Sayfa">◀</button>
-          <input class="pg-in" id="pdfPgIn" type="number" min="1" value="${st.page}" onchange="jumpPdfPage('${id}',this.value)" title="Sayfa numarası yazıp Enter'a bas">
+          <input class="pg-in" id="pdfPgIn" type="number" min="1" value="${st.page}" onchange="jumpPdfPage('${id}',this.value)" onkeydown="if(event.key==='Enter'){jumpPdfPage('${id}',this.value);this.blur();}" title="Sayfa numarası yazıp Enter'a bas">
           <span id="pdfPgTotal">/ ${st.totalPages||'?'}</span>
           <button onclick="stepPdfPage('${id}',1)" title="Sonraki Sayfa">▶</button>
         </div>
