@@ -209,6 +209,14 @@ async def get_docx(rel: str):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/pptx")
+async def get_pptx(rel: str):
+    try:
+        return vault.pptx_to_slides(rel)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/pdf_info")
 async def get_pdf_info(rel: str):
     try:

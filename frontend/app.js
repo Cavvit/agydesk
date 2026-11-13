@@ -592,7 +592,7 @@ function renderTree(){
   });
   build(tree,root);
 }
-const SIDE_EXT=['.pdf','.docx','.doc','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.avif'];
+const SIDE_EXT=['.pdf','.docx','.doc','.pptx','.ppsx','.ppt','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.avif'];
 function isSideDoc(relOrId){
   const s=String(relOrId||'').toLowerCase();
   if(SIDE_EXT.some(e=>s.endsWith(e)))return true;
@@ -633,7 +633,7 @@ function openDocInTab(relOrUrl,title){
   const id='note:'+cleanRel;
   if(!pages[id]){
     const ext=(cleanRel.includes('.')?cleanRel.slice(cleanRel.lastIndexOf('.')):'').toLowerCase();
-    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':(/\.(docx?)$/i.test(ext)?'📘':'📄'));
+    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':(/\.(pptx?|ppsx)$/i.test(ext)?'📊':(/\.(docx?)$/i.test(ext)?'📘':'📄')));
     const fKey=cleanRel.includes('/')?cleanRel.split('/')[0]:'';
     const kObj=kasalarData.find(k=>k.key===fKey);
     pages[id]={t:title||decodeURIComponent(cleanRel.split('/').pop()||cleanRel),i:ic,rel:cleanRel,folder:kObj?kObj.title:(fKey||'Obsidian Kasası'),kasa:fKey,ext:ext||'.pdf'};
@@ -680,6 +680,14 @@ async function openRightViewer(relOrUrl,title){
   }else if(low.endsWith('.pdf')){
     const filt=rvNight?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
     b.innerHTML=`<iframe src="${url}#view=FitH" style="flex:1;width:100%;height:100%;border:0;background:#fff;transition:filter .2s;${filt}"></iframe>`;
+  }else if(/\.(pptx?|ppsx)$/i.test(low)){
+    b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Sunum slaytları hazırlanıyor: ${name}…</div>`;
+    try{
+      const d=await api('/api/pptx?rel='+encodeURIComponent(cleanRel));
+      b.innerHTML=`<div class="rview-pptx">${renderPptxSlidesHtml(d)}</div>`;
+    }catch(e){
+      b.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${e.message}</div>`;
+    }
   }else if(/\.(docx?)$/i.test(low)){
     b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Word belgesi okunuyor: ${name}…</div>`;
     try{
@@ -1798,6 +1806,24 @@ function printPdfFrame(rel){
   window.print();
 }
 
+function renderPptxSlidesHtml(d){
+  if(d&&d.note) return `<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">${escHtml(d.title||'Sunum')}</h2><span class="pptx-slide-num">Bilgi</span></div><div class="pptx-slide-body"><p>${escHtml(d.note)}</p></div></div>`;
+  const slides=(d&&d.slides)||[];
+  if(!slides.length) return `<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">${escHtml((d&&d.title)||'Sunum')}</h2></div><div class="pptx-slide-body"><p>Bu sunumda okunabilir metin veya görsel slayt bulunamadı.</p></div></div>`;
+  return slides.map(s=>{
+    const imgs=(s.images&&s.images.length)?`<div class="pptx-slide-imgs">${s.images.map(src=>`<img src="${src}" loading="lazy">`).join('')}</div>`:'';
+    const body=(s.lines&&s.lines.length)?`<div class="pptx-slide-body">${s.lines.map(ln=>`<p>${escHtml(ln)}</p>`).join('')}</div>`:'';
+    return `<section class="pptx-slide" id="slide-${s.num}">
+      <div class="pptx-slide-head">
+        <h2 class="pptx-slide-title">${escHtml(s.title||('Slayt '+s.num))}</h2>
+        <span class="pptx-slide-num">Slayt ${s.num} / ${slides.length}</span>
+      </div>
+      ${body}
+      ${imgs}
+    </section>`;
+  }).join('');
+}
+
 async function renderVaultNote(m,id){
   const rel=id.slice(5);
   const p=pages[id]||{t:decodeURIComponent(rel.split('/').pop()||rel),folder:'Obsidian Kasası',ext:(rel.includes('.')?rel.slice(rel.lastIndexOf('.')).toLowerCase():'.md')};
@@ -1814,20 +1840,6 @@ async function renderVaultNote(m,id){
           <span>📄</span><b>${p.t}</b>
         </div>
         <span class="pdf-badge" id="pdfMetaBadge">${st.totalPages?`${st.totalPages} sayfa`:'PDF Stüdyosu'}</span>
-
-        <div class="pdf-grp" title="Sayfa Gezgini">
-          <button onclick="stepPdfPage('${id}',-1)" title="Önceki Sayfa">◀</button>
-          <input class="pg-in" id="pdfPgIn" type="number" min="1" value="${st.page}" onchange="jumpPdfPage('${id}',this.value)" onkeydown="if(event.key==='Enter'){jumpPdfPage('${id}',this.value);this.blur();}" title="Sayfa numarası yazıp Enter'a bas">
-          <span id="pdfPgTotal">/ ${st.totalPages||'?'}</span>
-          <button onclick="stepPdfPage('${id}',1)" title="Sonraki Sayfa">▶</button>
-        </div>
-
-        <div class="pdf-grp" title="Yakınlaştırma &amp; Sığdırma">
-          <button onclick="stepPdfZoom('${id}',-1)" title="Uzaklaştır">−</button>
-          <button class="pdf-zm-btn ${st.zoom==='FitH'?'on':''}" data-zm="FitH" onclick="setPdfZoom('${id}','FitH')" title="Genişliğe Sığdır">↔ Genişlik</button>
-          <button class="pdf-zm-btn ${st.zoom==='Fit'?'on':''}" data-zm="Fit" onclick="setPdfZoom('${id}','Fit')" title="Tam Sayfa Sığdır">⊡ Sayfa</button>
-          <button onclick="stepPdfZoom('${id}',1)" title="Yakınlaştır">＋</button>
-        </div>
 
         <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
           <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')" title="Orijinal Beyaz Kağıt">☀ Orijinal</button>
@@ -1847,7 +1859,6 @@ async function renderVaultNote(m,id){
         <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')" title="Bu PDF'ten A4 Sınav Föyü çıkar">▤ Sınav Föyü</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Bu PDF'i sağ panele sabitleyip not sekmene geri dön (Yan Yana Çalışma)">📌 Sağ Panele Al</button>
         <button class="hb" onclick="toggleZen()" title="Kenar panellerini gizle / Tam odak modu (Ctrl+.)">◐ Odak</button>
-        <button class="hb" onclick="printPdfFrame('${rel}')" title="Yazdır">🖨</button>
       </div>
       <div class="pdf-stage">
         <div class="pdf-frame-wrap ${filtCls}" id="pdfFrameWrap">
@@ -1863,8 +1874,6 @@ async function renderVaultNote(m,id){
         st.totalPages=info.pages||0;
         const b=$('#pdfMetaBadge');
         if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
-        const pt=$('#pdfPgTotal');
-        if(pt) pt.textContent=`/ ${info.pages||'?'}`;
         if(st.drawer==='text') renderPdfDrawer(id);
         updateRightProps();
       }).catch(()=>{});
@@ -1873,8 +1882,46 @@ async function renderVaultNote(m,id){
       st.totalPages=info.pages||0;
       const b=$('#pdfMetaBadge');
       if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
-      const pt=$('#pdfPgTotal');
-      if(pt) pt.textContent=`/ ${info.pages||'?'}`;
+    }
+    updateRightProps();
+    return;
+  }
+
+  if(/\.(pptx?|ppsx)$/i.test(ext)){
+    const st=getPdfState(id);
+    const isSrcChecked=checkedSources.has(rel);
+    const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
+        <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>📊</span><b>${p.t}</b></div>
+        <span class="pdf-badge" id="pptxMetaBadge">Sunum · PDF Görünümü</span>
+        <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
+          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')">☀ Orijinal</button>
+          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')">🌙 Gece</button>
+          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')">📜 Sepya</button>
+        </div>
+        <span style="flex:1"></span>
+        <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
+        <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')">✨ AI Özetle</button>
+        <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')">▤ Sınav Föyü</button>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="window.print()" title="Sunumu PDF olarak kaydet / A4 Yazdır">🖨 PDF / Yazdır</button>
+        <button class="hb" onclick="toggleZen()">◐ Odak</button>
+      </div>
+      <div class="pptx-stage ${filtCls}" id="pdfFrameWrap">
+        <div style="padding:40px;color:#ccc"><span class="spin"></span> Sunum PDF sayfalarına dönüştürülüyor…</div>
+      </div>
+    </div>`;
+    try{
+      const d=await api('/api/pptx?rel='+encodeURIComponent(rel));
+      const stage=$('#pdfFrameWrap');
+      if(stage) stage.innerHTML=renderPptxSlidesHtml(d);
+      const b=$('#pptxMetaBadge');
+      if(b) b.textContent=`${d.count||0} slayt · Sunum`;
+    }catch(e){
+      const stage=$('#pdfFrameWrap');
+      if(stage) stage.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">Sunum okunamadı</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
     }
     updateRightProps();
     return;
@@ -1885,6 +1932,7 @@ async function renderVaultNote(m,id){
     if(typeof st.imgZoom!=='number') st.imgZoom=100;
     if(typeof st.imgRot!=='number') st.imgRot=0;
     if(typeof st.imgInv!=='boolean') st.imgInv=false;
+    const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
         <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
@@ -1901,11 +1949,17 @@ async function renderVaultNote(m,id){
           <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)+90)%360;renderMain()" title="Sağa Döndür">↻ 90°</button>
           <button class="${st.imgInv?'on':''}" onclick="const s=getPdfState('${id}');s.imgInv=!s.imgInv;renderMain()" title="Renkleri Ters Çevir (Şema/Tahta İnceleme)">◑ Kontrast</button>
         </div>
+        <div class="pdf-grp" title="Okuma Modu">
+          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')">☀</button>
+          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')">🌙</button>
+          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')">📜</button>
+        </div>
         <span style="flex:1"></span>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Görseli sağ panele sabitleyip nota dön">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="window.print()" title="A4 Yazdır">🖨</button>
         <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
-      <div class="img-studio">
+      <div class="img-studio ${filtCls}" id="pdfFrameWrap">
         <img src="/api/raw/${encodeURI(rel)}" style="transform:scale(${(st.imgZoom||100)/100}) rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
       </div>
     </div>`;

@@ -260,4 +260,34 @@ def test_media_endpoints_and_validation(monkeypatch):
     assert bad.status_code == 400
 
 
+def test_pptx_to_slides_endpoint(tmp_path, monkeypatch):
+    import zipfile
+    from fastapi.testclient import TestClient
+    from backend import main, vault
+
+    monkeypatch.setattr(vault, "VAULT_DIR", tmp_path)
+    monkeypatch.setattr(main, "VAULT_DIR", tmp_path)
+    pptx_path = tmp_path / "sunum.pptx"
+    slide_xml = (
+        '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+        "<p:cSld><p:spTree>"
+        '<p:sp><p:nvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>'
+        "<p:txBody><a:p><a:r><a:t>Test Slayt</a:t></a:r></a:p></p:txBody></p:sp>"
+        "<p:sp><p:txBody><a:p><a:r><a:t>Madde 1</a:t></a:r></a:p></p:txBody></p:sp>"
+        "</p:spTree></p:cSld></p:sld>"
+    )
+    with zipfile.ZipFile(pptx_path, "w") as z:
+        z.writestr("ppt/slides/slide1.xml", slide_xml)
+
+    client = TestClient(main.app)
+    r = client.get("/api/pptx", params={"rel": "sunum.pptx"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["count"] == 1
+    assert data["slides"][0]["title"] == "Test Slayt"
+    assert data["slides"][0]["lines"] == ["Madde 1"]
+
+
+
 

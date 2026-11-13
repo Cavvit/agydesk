@@ -342,6 +342,18 @@ async fn get_docx_ep(Query(q): Query<RelQuery>) -> Response {
     }
 }
 
+async fn get_pptx_ep(Query(q): Query<RelQuery>) -> Response {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::pptx_to_slides(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(val) => Json(val).into_response(),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
 async fn get_pdf_info_ep(Query(q): Query<RelQuery>) -> Response {
     let rel = q.rel.clone();
     let res = tokio::task::spawn_blocking(move || vault::pdf_info(&rel))
@@ -839,6 +851,7 @@ fn build_router() -> Router {
         .route("/api/calendar/:ev_id", delete(delete_calendar_ep))
         .route("/api/upload", post(upload_asset_ep))
         .route("/api/docx", get(get_docx_ep))
+        .route("/api/pptx", get(get_pptx_ep))
         .route("/api/pdf_info", get(get_pdf_info_ep))
         .route("/api/raw/*rel", get(raw_file_ep))
         .route("/api/chats", get(get_chats_ep).post(post_chat_ep))

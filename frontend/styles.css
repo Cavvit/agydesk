@@ -742,6 +742,29 @@ body.fw-full .doc{max-width:none}
 .pdf-scratch:focus{border-color:var(--cu)}
 .img-studio{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at center,var(--bg3) 0%,var(--bg) 100%)}
 .img-studio img{max-width:100%;height:auto;border-radius:8px;box-shadow:0 16px 48px #000a;transition:transform .18s ease,filter .2s ease;background:#fff;border:1px solid var(--line)}
+.img-studio.night img{filter:invert(0.90) hue-rotate(180deg) contrast(0.96)}
+.img-studio.sepia img{filter:sepia(0.32) contrast(0.96) brightness(0.96)}
+
+/* ---------- Sunum (PPTX/PPSX) PDF-Tarzı Slayt Akışı ---------- */
+.pptx-stage{flex:1;min-height:0;overflow:auto;padding:24px 28px 64px;background:#26282e;display:flex;flex-direction:column;align-items:center;gap:20px;transition:filter .2s,background .2s}
+.pptx-stage.night{background:#121316}
+.pptx-stage.sepia{background:#3a3228}
+.pptx-slide{width:100%;max-width:920px;min-height:460px;background:#ffffff;color:#1b1d21;border-radius:8px;box-shadow:0 12px 34px #00000060;padding:30px 38px 34px;display:flex;flex-direction:column;gap:14px;border:1px solid #d9dce2;break-inside:avoid}
+.pptx-stage.night .pptx-slide{background:#1b1d22;color:#e6e8ec;border-color:#2c303a}
+.pptx-stage.sepia .pptx-slide{background:#f5ecd8;color:#33291f;border-color:#dfd1b6}
+.pptx-slide-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:2px solid color-mix(in srgb,var(--cu) 45%,#d5d8de);padding-bottom:10px}
+.pptx-slide-title{font:700 22px/1.28 var(--sans);margin:0}
+.pptx-slide-num{font:600 11.5px var(--mono);padding:3px 9px;border-radius:99px;background:var(--cu-d);color:var(--cu);flex-shrink:0}
+.pptx-slide-body{display:flex;flex-direction:column;gap:8px;font:400 15.5px/1.62 var(--sans)}
+.pptx-slide-body p{margin:0;padding-left:16px;position:relative}
+.pptx-slide-body p::before{content:'•';position:absolute;left:0;color:var(--cu);font-weight:700}
+.pptx-slide-imgs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:8px}
+.pptx-slide-imgs img{width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid #00000018;background:#fff}
+.rview-pptx{padding:14px;display:flex;flex-direction:column;gap:12px;background:#26282e;min-height:100%}
+.rview-pptx .pptx-slide{min-height:auto;padding:16px 18px;max-width:100%}
+.rview-pptx .pptx-slide-title{font-size:16px}
+.rview-pptx .pptx-slide-body{font-size:13px}
+@media print{.pdf-bar{display:none!important}.pptx-stage{background:#fff!important;padding:0!important;overflow:visible!important}.pptx-slide{box-shadow:none!important;border:1px solid #ccc!important;page-break-after:always;margin-bottom:12mm}}
 @media print{
   @page{size:A4 portrait;margin:10mm}
   html,body{background:#fff!important;color:#111!important;overflow:visible!important;height:auto!important;font-size:10.5pt!important}

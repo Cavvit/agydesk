@@ -448,6 +448,12 @@ def build_context_from_sources(rels: list[str], active_rel: str | None = None, m
             elif ext in (".docx", ".doc"):
                 d = docx_to_html(rel)
                 txt = re.sub(r"<[^>]+>", " ", d.get("html", "")).strip()
+            elif ext in (".pptx", ".ppsx"):
+                d = pptx_to_slides(rel)
+                txt = "\n\n".join(
+                    f"[Slayt {s['num']}] {s['title']}\n" + "\n".join(s["lines"])
+                    for s in d.get("slides", [])
+                ).strip()
             elif ext == ".pdf":
                 txt = _pdf_to_text(p)
                 if not txt:
@@ -616,3 +622,100 @@ def docx_to_html(rel: str) -> dict:
             if rows_html:
                 out.append("<table>" + "".join(rows_html) + "</table>")
     return {"rel": rel, "title": p.name, "html": "\n".join(out) or "<p>(Metin içeriği bulunamadı)</p>"}
+
+
+def pptx_to_slides(rel: str) -> dict:
+    """PPTX/PPSX sunum dosyasının slayt metinlerini ve gömülü görsellerini PDF benzeri sayfa kartları için çıkarır."""
+    import base64
+    p = _safe_path(rel)
+    if not p.exists():
+        raise FileNotFoundError(rel)
+    ext = p.suffix.lower()
+    if ext == ".ppt":
+        return {
+            "rel": rel,
+            "title": p.name,
+            "count": 0,
+            "slides": [],
+            "note": "Eski ikili .ppt formatı doğrudan XML olarak okunamıyor; PowerPoint üzerinden .pptx veya .pdf olarak kaydedin.",
+        }
+    ns_a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    ns_p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    ns_r = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    slides: list[dict] = []
+    with zipfile.ZipFile(p) as z:
+        names = z.namelist()
+        slide_files = sorted(
+            [n for n in names if re.match(r"^ppt/slides/slide\d+\.xml$", n)],
+            key=lambda n: int(re.search(r"slide(\d+)\.xml$", n).group(1)),
+        )
+        for idx, sfile in enumerate(slide_files, start=1):
+            root = ET.fromstring(z.read(sfile))
+            title = ""
+            lines: list[str] = []
+            # Extract shapes in order; detect title placeholder if present
+            for sp in root.iter(f"{ns_p}sp"):
+                is_title = False
+                ph = sp.find(f".//{ns_p}ph")
+                if ph is not None and ph.attrib.get("type", "") in ("title", "ctrTitle"):
+                    is_title = True
+                sp_paras: list[str] = []
+                for para in sp.findall(f".//{ns_a}p"):
+                    txt = "".join(t.text for t in para.findall(f".//{ns_a}t") if t.text).strip()
+                    if txt:
+                        sp_paras.append(txt)
+                if not sp_paras:
+                    continue
+                if is_title and not title:
+                    title = " ".join(sp_paras)
+                else:
+                    lines.extend(sp_paras)
+            if not title and lines:
+                title = lines[0]
+                lines = lines[1:]
+
+            # Extract embedded raster images referenced by this slide
+            images: list[str] = []
+            s_num = re.search(r"slide(\d+)\.xml$", sfile).group(1)
+            rels_path = f"ppt/slides/_rels/slide{s_num}.xml.rels"
+            if rels_path in names:
+                rels_root = ET.fromstring(z.read(rels_path))
+                rid_to_target = {}
+                for rel_el in rels_root:
+                    rid = rel_el.attrib.get("Id", "")
+                    tgt = rel_el.attrib.get("Target", "")
+                    if rid and tgt:
+                        rid_to_target[rid] = tgt
+                seen_imgs: set[str] = set()
+                for blip in root.iter(f"{ns_a}blip"):
+                    rid = blip.attrib.get(f"{ns_r}embed", "")
+                    tgt = rid_to_target.get(rid, "")
+                    if not tgt:
+                        continue
+                    norm = ("ppt/" + tgt.lstrip("./").replace("../", "")) if "media/" in tgt else ""
+                    if not norm or norm in seen_imgs or norm not in names:
+                        continue
+                    seen_imgs.add(norm)
+                    img_ext = Path(norm).suffix.lower().lstrip(".")
+                    mime = {
+                        "png": "image/png",
+                        "jpg": "image/jpeg",
+                        "jpeg": "image/jpeg",
+                        "gif": "image/gif",
+                        "webp": "image/webp",
+                        "svg": "image/svg+xml",
+                    }.get(img_ext)
+                    if not mime:
+                        continue
+                    raw_bytes = z.read(norm)
+                    if len(raw_bytes) <= 4 * 1024 * 1024:
+                        b64 = base64.b64encode(raw_bytes).decode("ascii")
+                        images.append(f"data:{mime};base64,{b64}")
+
+            slides.append({
+                "num": idx,
+                "title": title or f"Slayt {idx}",
+                "lines": lines,
+                "images": images,
+            })
+    return {"rel": rel, "title": p.name, "count": len(slides), "slides": slides}

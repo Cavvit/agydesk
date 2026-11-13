@@ -836,6 +836,245 @@ pub fn docx_to_html(rel: &str) -> Result<Value, String> {
     }))
 }
 
+fn b64_encode(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(((data.len() + 2) / 3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(T[b0 >> 2] as char);
+        out.push(T[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        out.push(if chunk.len() > 1 { T[((b1 & 15) << 2) | (b2 >> 6)] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[b2 & 63] as char } else { '=' });
+    }
+    out
+}
+
+pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
+    let p = safe_path(rel)?;
+    if !p.exists() {
+        return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    if ext == ".ppt" {
+        return Ok(json!({
+            "rel": rel,
+            "title": fname,
+            "count": 0,
+            "slides": [],
+            "note": "Eski ikili .ppt formatı doğrudan XML olarak okunamıyor; PowerPoint üzerinden .pptx veya .pdf olarak kaydedin."
+        }));
+    }
+    let file = fs::File::open(&p).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let slide_re = Regex::new(r"^ppt/slides/slide(\d+)\.xml$").unwrap();
+    let mut slide_entries: Vec<(usize, String, String)> = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(f) = archive.by_index(i) {
+            let name = f.name().to_string();
+            if let Some(cap) = slide_re.captures(&name) {
+                let snum_str = cap[1].to_string();
+                let num: usize = snum_str.parse().unwrap_or(0);
+                slide_entries.push((num, name, snum_str));
+            }
+        }
+    }
+    slide_entries.sort_by_key(|x| x.0);
+
+    let mut slides: Vec<Value> = Vec::new();
+    for (idx, (_, sname, snum)) in slide_entries.iter().enumerate() {
+        let mut sxml = String::new();
+        if let Ok(mut entry) = archive.by_name(sname) {
+            let _ = entry.read_to_string(&mut sxml);
+        }
+        let mut reader = Reader::from_str(&sxml);
+        reader.trim_text(false);
+        let mut in_sp = false;
+        let mut is_title_sp = false;
+        let mut in_p = false;
+        let mut in_t = false;
+        let mut cur_p = String::new();
+        let mut sp_paras: Vec<String> = Vec::new();
+        let mut title = String::new();
+        let mut lines: Vec<String> = Vec::new();
+        let mut rel_ids: Vec<String> = Vec::new();
+
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"sp" {
+                        in_sp = true;
+                        is_title_sp = false;
+                        sp_paras.clear();
+                    } else if tag == b"ph" && in_sp {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"type" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                if v == "title" || v == "ctrTitle" {
+                                    is_title_sp = true;
+                                }
+                            }
+                        }
+                    } else if tag == b"p" {
+                        in_p = true;
+                        cur_p.clear();
+                    } else if tag == b"t" && in_p {
+                        in_t = true;
+                    } else if tag == b"blip" {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"embed" {
+                                rel_ids.push(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"ph" && in_sp {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"type" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                if v == "title" || v == "ctrTitle" {
+                                    is_title_sp = true;
+                                }
+                            }
+                        }
+                    } else if tag == b"blip" {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"embed" {
+                                rel_ids.push(String::from_utf8_lossy(&attr.value).to_string());
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Text(e)) => {
+                    if in_t {
+                        if let Ok(t) = e.unescape() {
+                            cur_p.push_str(&t);
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"t" {
+                        in_t = false;
+                    } else if tag == b"p" {
+                        in_p = false;
+                        let trimmed = cur_p.trim().to_string();
+                        if !trimmed.is_empty() {
+                            sp_paras.push(trimmed);
+                        }
+                        cur_p.clear();
+                    } else if tag == b"sp" {
+                        in_sp = false;
+                        if !sp_paras.is_empty() {
+                            if is_title_sp && title.is_empty() {
+                                title = sp_paras.join(" ");
+                            } else {
+                                lines.extend(sp_paras.drain(..));
+                            }
+                        }
+                        sp_paras.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        if title.is_empty() && !lines.is_empty() {
+            title = lines.remove(0);
+        }
+
+        let mut images: Vec<String> = Vec::new();
+        let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", snum);
+        let mut rxml = String::new();
+        if let Ok(mut rentry) = archive.by_name(&rels_name) {
+            let _ = rentry.read_to_string(&mut rxml);
+        }
+        if !rxml.is_empty() && !rel_ids.is_empty() {
+            let mut rid_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut rr = Reader::from_str(&rxml);
+            loop {
+                match rr.read_event() {
+                    Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                        if e.local_name().as_ref() == b"Relationship" {
+                            let mut id = String::new();
+                            let mut tgt = String::new();
+                            for attr in e.attributes().flatten() {
+                                match attr.key.local_name().as_ref() {
+                                    b"Id" => id = String::from_utf8_lossy(&attr.value).to_string(),
+                                    b"Target" => tgt = String::from_utf8_lossy(&attr.value).to_string(),
+                                    _ => {}
+                                }
+                            }
+                            if !id.is_empty() && !tgt.is_empty() {
+                                rid_map.insert(id, tgt);
+                            }
+                        }
+                    }
+                    Ok(Event::Eof) | Err(_) => break,
+                    _ => {}
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            for rid in rel_ids {
+                if let Some(tgt) = rid_map.get(&rid) {
+                    if !tgt.contains("media/") {
+                        continue;
+                    }
+                    let clean = tgt.trim_start_matches("./").replace("../", "");
+                    let norm = if clean.starts_with("ppt/") { clean } else { format!("ppt/{}", clean) };
+                    if !seen.insert(norm.clone()) {
+                        continue;
+                    }
+                    let mime = if norm.ends_with(".png") {
+                        Some("image/png")
+                    } else if norm.ends_with(".jpg") || norm.ends_with(".jpeg") {
+                        Some("image/jpeg")
+                    } else if norm.ends_with(".gif") {
+                        Some("image/gif")
+                    } else if norm.ends_with(".webp") {
+                        Some("image/webp")
+                    } else if norm.ends_with(".svg") {
+                        Some("image/svg+xml")
+                    } else {
+                        None
+                    };
+                    if let Some(m) = mime {
+                        if let Ok(mut img_f) = archive.by_name(&norm) {
+                            let mut buf = Vec::new();
+                            if img_f.read_to_end(&mut buf).is_ok() && buf.len() <= 4 * 1024 * 1024 {
+                                images.push(format!("data:{};base64,{}", m, b64_encode(&buf)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        slides.push(json!({
+            "num": idx + 1,
+            "title": if title.is_empty() { format!("Slayt {}", idx + 1) } else { title },
+            "lines": lines,
+            "images": images
+        }));
+    }
+
+    Ok(json!({
+        "rel": rel,
+        "title": fname,
+        "count": slides.len(),
+        "slides": slides
+    }))
+}
+
 pub fn pdf_info(rel: &str) -> Result<Value, String> {
     let p = safe_path(rel)?;
     if !p.exists() || p.is_dir() {
@@ -929,6 +1168,31 @@ pub fn build_context_from_sources(rels: &[String], active_rel: Option<&str>) -> 
                 .ok()
                 .and_then(|v| v.get("html").and_then(|h| h.as_str()).map(|s| s.to_string()))
                 .map(|h| HTML_TAG_RE.replace_all(&h, " ").trim().to_string())
+                .unwrap_or_default()
+        } else if ext == ".pptx" || ext == ".ppsx" {
+            pptx_to_slides(&rel)
+                .ok()
+                .and_then(|v| v.get("slides").and_then(|s| s.as_array()).cloned())
+                .map(|arr| {
+                    arr.iter()
+                        .map(|s| {
+                            let num = s.get("num").and_then(|x| x.as_u64()).unwrap_or(0);
+                            let t = s.get("title").and_then(|x| x.as_str()).unwrap_or("");
+                            let ls = s
+                                .get("lines")
+                                .and_then(|x| x.as_array())
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|v| v.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                })
+                                .unwrap_or_default();
+                            format!("[Slayt {}] {}\n{}", num, t, ls)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n\n")
+                })
                 .unwrap_or_default()
         } else if is_img_ext(&ext) {
             blocks.push(format!(
