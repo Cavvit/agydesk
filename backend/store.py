@@ -37,21 +37,7 @@ def init():
               id INTEGER PRIMARY KEY, day INTEGER, title TEXT, kind TEXT, kasa TEXT);
             """
         )
-        n_ev = c.execute("SELECT COUNT(*) FROM cal_events").fetchone()[0]
-        if n_ev == 0:
-            seeds = [
-                (3, "Kontrol Sistemleri Quiz Çalışma", "exam", "Kontrol_Sistemlerine_Giris"),
-                (6, "Elektrik Makinaları Lab: 3 Fazlı Trafo", "lab", "Elektrik_Makineleri_Lab"),
-                (9, "Seçmeli Tasarım İHA Raporu", "task", "Secmeli_Tasarim"),
-                (12, "Yüksek Gerilim Manevra & Deşarj Tekrarı", "task", "Yuksek_Gerilim_Teknigi"),
-                (18, "VİZE: Kontrol Sistemlerine Giriş", "exam", "Kontrol_Sistemlerine_Giris"),
-                (20, "VİZE: Yüksek Gerilim Tekniği", "exam", "Yuksek_Gerilim_Teknigi"),
-                (24, "Elektrik Makinaları Lab Sözlü Quiz", "exam", "Elektrik_Makineleri_Lab"),
-            ]
-            c.executemany(
-                "INSERT INTO cal_events(day,title,kind,kasa) VALUES(?,?,?,?)",
-                seeds,
-            )
+        # seeds removed (keep calendar empty on fresh install, matching store.rs)
 
 
 def add_chat_msg(session: str, w: str, h: str):
