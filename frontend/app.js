@@ -1,0 +1,4215 @@
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const app=$('#app');
+
+/* ---------- Veri & Gerçek Obsidian Kasası ---------- */
+let vaultTree=[];
+let kasalarData=[];
+let allSources=[];
+let backlinksMap={};
+let currentKasa='all';
+let kasaSearchQ='';
+let tree=[];
+const pages={
+ kasalar:{t:'Kasalar (Ana Ekran)',i:'❖'},
+ trafo:{t:'Trafo Lab Analizörü',i:'⚡'},
+ cal:{t:'AgyCal',i:'▦'},
+ sim:{t:'Filtre Simülatörü',i:'∿'}
+};
+const WIKI_MAP={
+ 'kasalar':'kasalar',
+ 'trafo lab analizörü':'trafo',
+ 'trafo lab':'trafo',
+ 'düşük geçiren filtre':'sim',
+ 'filtre tasarımı':'sim',
+ 'takvim':'cal',
+ 'sınav takvimi':'cal',
+ 'agycal':'cal'
+};
+const noteCache={};
+let editMode=false;
+
+function resolveWiki(rawTarget){
+  const parts=rawTarget.split('|');
+  const key=parts[0].trim().toLowerCase().replace(/\.md$/,'');
+  const label=(parts[1]||parts[0]).trim();
+  const id=WIKI_MAP[key]||WIKI_MAP[key.replace(/_/g,' ')];
+  return {id,label};
+}
+function linkifyAndOpen(raw,autoOpen=true){
+  let s=String(raw).replace(/</g,'&lt;').replace(/\n/g,'<br>');
+  s=s.replace(/\[\[([^\]]+)\]\]/g,(m,inner)=>{
+    const {id,label}=resolveWiki(inner);
+    if(id){
+      if(autoOpen&&!openTabs.includes(id))openTabs.push(id);
+      return `<span class="link" onclick="openPage('${id}')">📄 ${label}</span>`;
+    }
+    return `<span class="link">[[${label}]]</span>`;
+  });
+  return s;
+}
+/* ---------- Sohbette ve notlarda gerçek devre çizimleri & Notion pencere başlığı ---------- */
+const SV={ln:'var(--cu)',tx:'var(--txt)',dim:'var(--mut)',bg:'var(--bg2)',acc:'var(--blue)',grn:'var(--ok)'};
+function svLine(a,b,c,d,col,w){return `<line x1="${a}" y1="${b}" x2="${c}" y2="${d}" stroke="${col||SV.ln}" stroke-width="${w||1.8}" stroke-linecap="round"/>`;}
+function svTxt(x,y,t,col,anc,sz){return `<text x="${x}" y="${y}" fill="${col||SV.tx}" font-size="${sz||12}" text-anchor="${anc||'middle'}">${t}</text>`;}
+function svDot(x,y,col){return `<circle cx="${x}" cy="${y}" r="3.6" fill="${col||SV.ln}"/>`;}
+function svTerm(x,y,lbl,dy){return `<circle cx="${x}" cy="${y}" r="4.5" fill="${SV.bg}" stroke="${SV.ln}" stroke-width="1.8"/>`+(lbl?svTxt(x,y+(dy||-12),lbl,SV.ln,'middle',12.5):'');}
+function svResH(x,y,w,l,sub){
+  const n=6,dx=w/n,a=6.5; let d=`M ${x} ${y}`;
+  for(let i=0;i<n;i++){ d+=` L ${x+(i+0.25)*dx} ${y-a} L ${x+(i+0.75)*dx} ${y+a}`; }
+  d+=` L ${x+w} ${y}`;
+  return `<path d="${d}" fill="none" stroke="${SV.ln}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`+
+    (l?svTxt(x+w/2,y-13,l,SV.tx,'middle',12):'')+(sub?svTxt(x+w/2,y+21,sub,SV.dim,'middle',10.5):'');
+}
+function svResV(x,y,h,l,lx){
+  const n=6,dy=h/n,a=6.5; let d=`M ${x} ${y}`;
+  for(let i=0;i<n;i++){ d+=` L ${x-a} ${y+(i+0.25)*dy} L ${x+a} ${y+(i+0.75)*dy}`; }
+  d+=` L ${x} ${y+h}`;
+  return `<path d="${d}" fill="none" stroke="${SV.ln}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>`+
+    (l?svTxt(x+(lx||-16),y+h/2+4,l,SV.tx,lx>0?'start':'end',12):'');
+}
+function svIndH(x,y,w,l,sub){
+  const n=4,dx=w/n,r=dx/2; let d=`M ${x} ${y}`;
+  for(let i=0;i<n;i++){ d+=` A ${r} ${r*1.15} 0 0 1 ${x+(i+1)*dx} ${y}`; }
+  return `<path d="${d}" fill="none" stroke="${SV.acc}" stroke-width="1.9" stroke-linecap="round"/>`+
+    (l?svTxt(x+w/2,y-14,l,SV.tx,'middle',12):'')+(sub?svTxt(x+w/2,y+21,sub,SV.dim,'middle',10.5):'');
+}
+function svIndV(x,y,h,l,lx){
+  const n=4,dy=h/n,r=dy/2; let d=`M ${x} ${y}`;
+  for(let i=0;i<n;i++){ d+=` A ${r*1.15} ${r} 0 0 1 ${x} ${y+(i+1)*dy}`; }
+  return `<path d="${d}" fill="none" stroke="${SV.acc}" stroke-width="1.9" stroke-linecap="round"/>`+
+    (l?svTxt(x+(lx||14),y+h/2+4,l,SV.tx,(lx||14)>0?'start':'end',12):'');
+}
+function svCurArrow(x1,y1,x2,y2,lbl,col,lx,ly){
+  const c=col||SV.grn, mx=(x1+x2)/2, my=(y1+y2)/2, dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1, ux=dx/L, uy=dy/L, px=-uy, py=ux;
+  const ah=`<polygon points="${mx+ux*5},${my+uy*5} ${mx-ux*4+px*3.8},${my-uy*4+py*3.8} ${mx-ux*4-px*3.8},${my-uy*4-py*3.8}" fill="${c}"/>`;
+  const tx=lx!==undefined?mx+lx:mx+px*14, ty=ly!==undefined?my+ly:my+py*14+3;
+  return ah+(lbl?svTxt(tx,ty,lbl,c,'middle',11.5):'');
+}
+function svCoilBranch(x1,y1,x2,y2,n){
+  n=n||4; const dx=(x2-x1)/n, dy=(y2-y1)/n, L=Math.hypot(dx,dy)||1, nx=-dy/L, ny=dx/L, r=L/2;
+  let d=`M ${x1} ${y1}`;
+  for(let i=0;i<n;i++){
+    const sx=x1+i*dx, sy=y1+i*dy, ex=x1+(i+1)*dx, ey=y1+(i+1)*dy, cx=(sx+ex)/2+nx*r*1.25, cy=(sy+ey)/2+ny*r*1.25;
+    d+=` Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${ex.toFixed(1)} ${ey.toFixed(1)}`;
+  }
+  return `<path d="${d}" fill="none" stroke="${SV.ln}" stroke-width="1.8" stroke-linecap="round"/>`;
+}
+function svStar(cx,cy,L,tag){
+  const r=48,P=[[0,-r],[r*0.866,r/2],[-r*0.866,r/2]];
+  return P.map((p,i)=>{
+    const tx=cx+p[0], ty=cy+p[1], ex=cx+p[0]*1.25, ey=cy+p[1]*1.25;
+    return svCoilBranch(cx+p[0]*0.15,cy+p[1]*0.15,tx,ty,4)+svLine(cx,cy,cx+p[0]*0.15,cy+p[1]*0.15)+svLine(tx,ty,ex,ey)+
+      svTerm(ex,ey,'',0)+svTxt(cx+p[0]*1.46,cy+p[1]*1.46+4,L[i],SV.tx,'middle',12);
+  }).join('')+svDot(cx,cy)+svTxt(cx,cy+15,'N',SV.dim,'middle',10.5)+svTxt(cx,cy+r+38,tag,SV.dim,'middle',11.5);
+}
+function svDelta(cx,cy,L,tag){
+  const r=50,P=[[0,-r],[r*0.866,r/2],[-r*0.866,r/2]];
+  const edges=[[0,1],[1,2],[2,0]];
+  return edges.map(([a,b])=>{
+    const x1=cx+P[a][0],y1=cy+P[a][1],x2=cx+P[b][0],y2=cy+P[b][1];
+    const sx=x1+(x2-x1)*0.15,sy=y1+(y2-y1)*0.15,ex=x1+(x2-x1)*0.85,ey=y1+(y2-y1)*0.85;
+    return svLine(x1,y1,sx,sy)+svCoilBranch(sx,sy,ex,ey,4)+svLine(ex,ey,x2,y2);
+  }).join('')+P.map((p,i)=>{
+    const vx=cx+p[0],vy=cy+p[1],ex=cx+p[0]*1.22,ey=cy+p[1]*1.22;
+    return svDot(vx,vy)+svLine(vx,vy,ex,ey)+svTerm(ex,ey,'',0)+svTxt(cx+p[0]*1.42,cy+p[1]*1.42+4,L[i],SV.tx,'middle',12);
+  }).join('')+svTxt(cx,cy+r+38,tag,SV.dim,'middle',11.5);
+}
+function semaSvg(name){
+  name=String(name).toLowerCase().trim();
+  if(name==='trafo-esdeger'){
+    const Y1=85, Y2=215;
+    return `<svg viewBox="0 0 760 265" font-family="JetBrains Mono,monospace">`+
+      `<rect x="235" y="100" width="118" height="102" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>`+
+      svLine(46,Y1,95,Y1)+svCurArrow(46,Y1,95,Y1,'I₁',SV.grn,0,-12)+
+      svResH(95,Y1,62,'Rₚ (R₁)')+svLine(157,Y1,175,Y1)+
+      svIndH(175,Y1,62,'jXₚ (jX₁)')+svLine(237,Y1,380,Y1)+
+      svCurArrow(237,Y1,260,Y1,'I₀',SV.acc,0,-12)+
+      svDot(262,Y1)+svLine(262,Y1,262,118)+svCurArrow(262,92,262,118,'I_fe',SV.ln,-16,2)+
+      svResV(262,118,64,'R_fe',-12)+svLine(262,182,262,Y2)+svDot(262,Y2)+
+      svDot(324,Y1)+svLine(324,Y1,324,118)+svCurArrow(324,92,324,118,'I_m',SV.acc,16,2)+
+      svIndV(324,118,64,'jX_m',12)+svLine(324,182,324,Y2)+svDot(324,Y2)+
+      svCurArrow(330,Y1,380,Y1,'I₂′',SV.grn,0,-12)+
+      svResH(380,Y1,62,'Rₛ′ (a²R₂)')+svLine(442,Y1,462,Y1)+
+      svIndH(462,Y1,62,'jXₛ′ (a²X₂)')+svLine(524,Y1,615,Y1)+
+      svLine(640,Y1,690,Y1)+svLine(690,Y1,690,118)+
+      `<rect x="674" y="118" width="32" height="64" rx="4" fill="${SV.bg}" stroke="${SV.ln}" stroke-width="1.8"/>`+
+      svTxt(690,154,'Z_L′',SV.tx,'middle',12)+svLine(690,182,690,Y2)+svLine(640,Y2,690,Y2)+
+      svLine(46,Y2,615,Y2)+
+      svTerm(42,Y1,'+',-10)+svTerm(42,Y2,'−',18)+svTxt(24,154,'V₁',SV.ln,'middle',13)+
+      svTerm(620,Y1,'+',-10)+svTerm(620,Y2,'−',18)+svTxt(620,154,'V₂′ = aV₂',SV.ln,'middle',11.5)+
+      svTxt(372,154,'E₁ = E₂′',SV.dim,'start',11)+
+      svTxt(165,42,'Primer Sargı Empedansı',SV.dim,'middle',11)+
+      svTxt(293,238,'Uyarım / Demir Çekirdek Kolu (I₀ = I_fe + I_m)',SV.dim,'middle',11)+
+      svTxt(455,42,'Sekonder Sargı (Primere İndirgenmiş)',SV.dim,'middle',11)+
+      `</svg><div class="cap">Tek Fazlı Transformatör — Primere İndirgenmiş Tam Eşdeğer Devre</div>`;
+  }
+  if(name==='trafo-bosta'){
+    const Y1=75, Y2=200;
+    return `<svg viewBox="0 0 640 245" font-family="JetBrains Mono,monospace">`+
+      `<rect x="240" y="90" width="130" height="98" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>`+
+      svLine(50,Y1,105,Y1)+svCurArrow(50,Y1,105,Y1,'I₀',SV.grn,0,-12)+
+      svResH(105,Y1,56,'Rₚ')+svLine(161,Y1,180,Y1)+svIndH(180,Y1,56,'jXₚ')+svLine(236,Y1,490,Y1)+
+      svDot(272,Y1)+svLine(272,Y1,272,108)+svCurArrow(272,82,272,108,'I_fe',SV.ln,-16,2)+
+      svResV(272,108,62,'R_fe',-12)+svLine(272,170,272,Y2)+svDot(272,Y2)+
+      svDot(340,Y1)+svLine(340,Y1,340,108)+svCurArrow(340,82,340,108,'I_m',SV.acc,16,2)+
+      svIndV(340,108,62,'jX_m',12)+svLine(340,170,340,Y2)+svDot(340,Y2)+
+      svTxt(435,Y1-12,'I₂′ = 0 (Açık Devre)',SV.dim,'middle',11.5)+
+      svLine(50,Y2,490,Y2)+
+      svTerm(46,Y1,'+',-10)+svTerm(46,Y2,'−',18)+svTxt(26,142,'V₁ = Vₙ',SV.ln,'middle',12.5)+
+      svTerm(495,Y1,'+',-10)+svTerm(495,Y2,'−',18)+svTxt(555,142,'Açık Uç (V₂₀)',SV.dim,'middle',11.5)+
+      svTxt(306,225,'P₀ ≈ P_fe = V₁² / R_fe   ·   cos φ₀ = P₀ / (V₁·I₀)   ·   I_fe = I₀ cos φ₀   ·   I_m = I₀ sin φ₀',SV.tx,'middle',11)+
+      `</svg><div class="cap">Boşta Çalışma (Açık Devre) Deneyi Eşdeğer Devresi — Demir Kayıpları (R_fe, X_m)</div>`;
+  }
+  if(name==='trafo-kisadevre'){
+    const Y1=80, Y2=195;
+    return `<svg viewBox="0 0 640 235" font-family="JetBrains Mono,monospace">`+
+      svLine(55,Y1,140,Y1)+svCurArrow(55,Y1,130,Y1,'I_kd = I₁ₙ',SV.grn,0,-12)+
+      svResH(140,Y1,90,'R_eş = Rₚ + a²Rₛ','Bakır Kaybı (P_cu)')+svLine(230,Y1,285,Y1)+
+      svIndH(285,Y1,90,'jX_eş = j(Xₚ + a²Xₛ)','Kaçak Reaktans')+svLine(375,Y1,490,Y1)+
+      svLine(490,Y1,490,Y2,'var(--err)',2.5)+svCurArrow(490,Y1,490,Y2,'I₂′ (Kısa Devre)','var(--err)',62,4)+
+      svLine(55,Y2,490,Y2)+
+      svTerm(50,Y1,'+',-10)+svTerm(50,Y2,'−',18)+svTxt(28,140,'V_kd',SV.ln,'middle',12.5)+
+      svTxt(275,222,'Z_kd = V_kd / I_kd   ·   R_eş = P_kd / I_kd²   ·   X_eş = √(Z_kd² − R_eş²)   (I₀ ≈ 0 ihmal)',SV.tx,'middle',11)+
+      `</svg><div class="cap">Kısa Devre Deneyi Eşdeğer Devresi — Bakır Kayıpları (R_eş, X_eş)</div>`;
+  }
+  if(name==='dc-sont'){
+    const Y1=65, Y2=215;
+    return `<svg viewBox="0 0 620 250" font-family="JetBrains Mono,monospace">`+
+      svLine(55,Y1,210,Y1)+svCurArrow(55,Y1,195,Y1,'I = I_A + I_F')+
+      svDot(210,Y1)+svLine(210,Y1,370,Y1)+svCurArrow(215,Y1,290,Y1,'I_F (Şönt)',SV.acc)+
+      svLine(210,Y1,210,92)+svResV(210,92,48,'R_A',-12)+svLine(210,140,210,154)+
+      `<rect x="203" y="150" width="14" height="6" fill="${SV.ln}"/><circle cx="210" cy="176" r="20" fill="${SV.bg}" stroke="${SV.ln}" stroke-width="2"/><rect x="203" y="196" width="14" height="6" fill="${SV.ln}"/>`+
+      svTxt(210,180,'M',SV.ln,'middle',14)+svTxt(175,180,'E_A',SV.tx,'end',12)+
+      svLine(210,202,210,Y2)+svDot(210,Y2)+
+      svLine(370,Y1,370,98)+svIndV(370,98,64,'R_F / L_F',14)+svLine(370,162,370,174)+
+      svResV(370,174,30,'R_ayar',14)+svLine(370,204,370,Y2)+
+      svLine(55,Y2,370,Y2)+
+      svTerm(50,Y1,'+',-10)+svTerm(50,Y2,'−',18)+svTxt(28,142,'U (DC)',SV.ln,'middle',12.5)+
+      svTxt(495,115,'U = E_A + I_A·R_A',SV.tx,'middle',12)+
+      svTxt(495,140,'I_F = U / R_F',SV.acc,'middle',12)+
+      svTxt(495,165,'E_A = k·Φ·n',SV.grn,'middle',12)+
+      `</svg><div class="cap">DC Şönt Motor Eşdeğer Devresi — Endüvi (R_A, E_A) ve Paralel Uyarma Sargısı (R_F)</div>`;
+  }
+  const m=name.match(/^trafo-baglanti(?:-(yy|yd|dy|dd))?$/);
+  if(m){
+    const types=m[1]?[m[1]]:['yy','yd','dy','dd'];
+    const grp={yy:'Yy0 (0° faz farkı)',yd:'Yd11 (−30° faz farkı)',dy:'Dy11 (−30° faz farkı)',dd:'Dd0 (0° faz farkı)'};
+    const one=(t,ox)=>{
+      const P=t[0]==='y'?svStar:svDelta, S=t[1]==='y'?svStar:svDelta;
+      return `<g transform="translate(${ox},0)">`+
+        `<rect x="8" y="8" width="314" height="198" rx="8" fill="var(--bg2)" stroke="var(--line)"/>`+
+        P(86,105,['A','B','C'],'Primer ('+(t[0]==='y'?'Yıldız Y':'Üçgen Δ')+')')+
+        svLine(161,55,161,150,'var(--mut)',1.8)+svLine(169,55,169,150,'var(--mut)',1.8)+
+        S(244,105,['a','b','c'],'Sekonder ('+(t[1]==='y'?'Yıldız y':'Üçgen d')+')')+
+        svTxt(165,28,grp[t],SV.ln,'middle',12.5)+`</g>`;
+    };
+    const cols=types.length;
+    return `<svg viewBox="0 0 ${cols*330} 214" font-family="JetBrains Mono,monospace">`+types.map((t,i)=>one(t,i*330)).join('')+`</svg><div class="cap">3 Fazlı Transformatör Sargı Bağlantı Grupları — Y: V_hat = √3·V_faz, I_hat = I_faz  |  Δ: V_hat = V_faz, I_hat = √3·I_faz</div>`;
+  }
+  return `<div class="cap">Bilinmeyen şema: ${name}</div>`;
+}
+const LANG_NAMES={c:'C',cpp:'C++',h:'C/C++ Header',py:'Python',python:'Python',js:'JavaScript',ts:'TypeScript',html:'HTML',css:'CSS',bash:'Bash',sh:'Shell',powershell:'PowerShell',ps1:'PowerShell',json:'JSON',sql:'SQL',matlab:'MATLAB',vhdl:'VHDL',verilog:'Verilog',asm:'Assembly',rust:'Rust',go:'Go',java:'Java',md:'Markdown',yaml:'YAML',xml:'XML',txt:'Metin'};
+function hlCode(esc,lang){
+  const l=String(lang||'').toLowerCase();
+  if(!l||l==='txt'||l==='plaintext')return esc;
+  const slots=[];
+  const keep=h=>`@@HL_${slots.push(h)-1}@@`;
+  let s=esc.replace(/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)/g,m=>keep(`<span class="cm">${m}</span>`));
+  s=s.replace(/(&quot;.*?&quot;|'[^'\n]*')/g,m=>keep(`<span class="str">${m}</span>`));
+  s=s.replace(/\b(if|else|for|while|do|switch|case|break|continue|return|struct|typedef|enum|union|sizeof|static|volatile|const|extern|inline|def|class|import|from|as|async|await|try|except|finally|function|let|var|new|true|false|null|None|True|False)\b/g,m=>keep(`<span class="kw">${m}</span>`));
+  s=s.replace(/\b(void|int|char|float|double|long|short|unsigned|signed|bool|uint8_t|uint16_t|uint32_t|int32_t|size_t|GPIO_TypeDef|RCC|GPIOA|GPIOB|GPIOC|SYSCFG|TIM1|TIM2|ADC1|USART1|EXTI|NVIC)\b/g,m=>keep(`<span class="ty">${m}</span>`));
+  s=s.replace(/\b(0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b/g,m=>keep(`<span class="num">${m}</span>`));
+  return s.replace(/@@HL_(\d+)@@/g,(_,i)=>slots[+i]);
+}
+function copyBlock(btn){
+  const box=btn.closest('.cbox'); if(!box)return;
+  const pre=box.querySelector('pre');
+  const txt=pre?pre.innerText:(box.dataset.raw||'');
+  navigator.clipboard.writeText(txt).then(()=>{
+    const old=btn.innerHTML; btn.innerHTML='✓'; btn.classList.add('on');
+    setTimeout(()=>{btn.innerHTML=old;btn.classList.remove('on');},1400);
+  });
+}
+function wrapBlock(btn){
+  const box=btn.closest('.cbox'); if(!box)return;
+  box.classList.toggle('wrap'); btn.classList.toggle('on',box.classList.contains('wrap'));
+}
+function wrapWindow(innerHtml,label,isCode){
+  return `<div class="cbox"><span class="cdrag">⋮⋮</span><div class="ctool"><span class="clang">${label}</span>`+
+    (isCode?`<span class="csep"></span><button onclick="copyBlock(this)" title="Kodu kopyala">⧉</button><button onclick="wrapBlock(this)" title="Satır kaydırma (Wrap)">↵</button>`:'')+
+    `</div>${innerHtml}</div>`;
+}
+function mdToHtml(md,base){
+  const mathBlocks=[], codeBlocks=[];
+  let s=String(md).replace(/\r\n/g,'\n');
+  const resolveRel=t=>/^https?:\/\//i.test(t)?t:(base?base+'/'+t:t);
+  const imgPh=(t,alt)=>{
+    t=String(t).trim(); const e=p=>'/api/raw/'+encodeURI(p);
+    const rel=resolveRel(t);
+    const tag=/^https?:\/\//i.test(t)
+      ?`<img class="nimg" src="${t}" alt="${alt}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" onclick="openRightViewer('${t}','${alt||'Görsel'}')" ondblclick="openDocInTab('${t}','${alt||'Görsel'}')">`
+      :`<img class="nimg" src="${e(rel)}" data-alt="${e(t)}" data-rel="${rel}" alt="${alt}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" loading="lazy" onclick="openRightViewer(this.dataset.rel||this.src,this.alt)" ondblclick="openDocInTab(this.dataset.rel||this.src,this.alt)" onerror="if(this.dataset.alt&&!this.dataset.t){this.dataset.t=1;this.src=this.dataset.alt;this.dataset.rel='${t}'}"><button class="emb-x" onclick="event.stopPropagation();removeEmbed('${t}')" title="Bu eki nottan kaldır">✕ kaldır</button>`;
+    return `@@CODE_${codeBlocks.push(tag)-1}@@`;
+  };
+  const docPh=(t,alt)=>{
+    t=String(t).trim(); const rel=resolveRel(t);
+    const ext=t.slice(t.lastIndexOf('.')).toLowerCase();
+    const ic=ext==='.pdf'?'📄':(ext.startsWith('.ppt')?'📊':(ext.startsWith('.xls')||ext==='.csv'?'📗':'📘'));
+    const lbl=alt||t.split('/').pop();
+    const safeLbl=lbl.replace(/'/g,'');
+    const tag=`<span class="doc-chip" onclick="openRightViewer('${rel}','${safeLbl}')" ondblclick="openDocInTab('${rel}','${safeLbl}')" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç (${rel})">${ic} ${lbl} <small style="opacity:.65">👁 önizle</small><small style="opacity:.85;margin-left:3px;padding:1px 5px;border-radius:4px;background:var(--cu-d);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent)" onclick="event.stopPropagation();openDocInTab('${rel}','${safeLbl}')" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢ sekmede aç</small><button class="emb-x" onclick="event.stopPropagation();removeEmbed('${t}')" title="Bu eki nottan kaldır">✕ kaldır</button></span>`;
+    return `@@CODE_${codeBlocks.push(tag)-1}@@`;
+  };
+  s=s.replace(/```sema[ \t]+([\w-]+)[^\n]*\n([\s\S]*?)```/g,(_,n)=>{
+    const i=codeBlocks.push(wrapWindow(`<div class="sema">${semaSvg(n)}</div>`,'Devre Şeması · '+n,false))-1;
+    return `@@CODE_${i}@@`;
+  });
+  s=s.replace(/```mermaid\n([\s\S]*?)```/g,(_,c)=>{
+    const i=codeBlocks.push(wrapWindow(`<div class="mermaid" style="background:var(--bg);padding:14px;border-radius:10px;border:1px solid var(--line)">${c.trim()}</div>`,'Akış / Blok Diyagramı · Mermaid',false))-1;
+    return `@@CODE_${i}@@`;
+  });
+  s=s.replace(/```(\w*)\n([\s\S]*?)```/g,(_,l,c)=>{
+    const raw=l.trim().toLowerCase();
+    const guess=!raw&&(/(RCC|GPIO|TIM\d|ADC\d|uint\d+_t|#include|->|\|=)/.test(c)?'c':(/\b(def |import |print\()/.test(c)?'py':''));
+    const key=raw||guess;
+    const lbl=LANG_NAMES[key]||(key?key.toUpperCase():'Kod / Metin');
+    const esc=c.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    const i=codeBlocks.push(wrapWindow(`<pre><code>${hlCode(esc,key||'c')}</code></pre>`,lbl,true))-1;
+    return `@@CODE_${i}@@`;
+  });
+  s=s.replace(/\$\$([\s\S]*?)\$\$/g,(_,m)=>{
+    const i=mathBlocks.push({d:true,m:m.trim()})-1;
+    return `@@MATH_${i}@@`;
+  });
+  s=s.replace(/\$([^\$\n]+?)\$/g,(_,m)=>{
+    const i=mathBlocks.push({d:false,m:m.trim()})-1;
+    return `@@MATH_${i}@@`;
+  });
+  s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s=s.replace(/!\[\[([^\]|]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif))(?:\|([^\]]*))?\]\]/gi,(_,t,a)=>imgPh(t,a||''));
+  s=s.replace(/!?\[\[([^\]|]+\.(?:pdf|docx?|pptx?|xlsx?|csv|txt))(?:\|([^\]]*))?\]\]/gi,(_,t,a)=>docPh(t,a||''));
+  s=s.replace(/!\[([^\]]*)\]\(([^)\s]+\.(?:pdf|docx?|pptx?|xlsx?|csv|txt))\)/gi,(_,a,t)=>docPh(t,a));
+  s=s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,(_,a,t)=>imgPh(t,a));
+  s=s.replace(/\[\[([^\]]+)\]\]/g,(_,inner)=>{
+    const {id,label}=resolveWiki(inner);
+    return id?`<span class="link" onclick="openPage('${id}')">📄 ${label}</span>`:`<span class="link">[[${label}]]</span>`;
+  });
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  s=s.replace(/\*([^*\n]+)\*/g,'<i>$1</i>');
+  const lines=s.split('\n');
+  let out='', inList=false, inTable=false, inQuote=false;
+  const closeAll=()=>{
+    if(inList){out+='</ul>';inList=false;}
+    if(inTable){out+='</tbody></table>';inTable=false;}
+    if(inQuote){out+='</blockquote>';inQuote=false;}
+  };
+  for(let idx=0;idx<lines.length;idx++){
+    const ln=lines[idx];
+    if(/^@@CODE_\d+@@$/.test(ln.trim())||/^@@MATH_\d+@@$/.test(ln.trim())){closeAll();out+=ln+'\n';continue;}
+    if(/^---+$/.test(ln.trim())){closeAll();out+='<hr>';continue;}
+    if(/^#\s+(.+)/.test(ln)){closeAll();out+=`<h1>${RegExp.$1}</h1>`;continue;}
+    if(/^##\s+(.+)/.test(ln)){closeAll();out+=`<h2>${RegExp.$1}</h2>`;continue;}
+    if(/^###\s+(.+)/.test(ln)){closeAll();out+=`<h3>${RegExp.$1}</h3>`;continue;}
+    if(/^&gt;\s?(.*)/.test(ln)){
+      if(!inQuote){closeAll();out+='<blockquote>';inQuote=true;}
+      const qt=RegExp.$1.replace(/^\[!(\w+)\]\s*(.*)/,'<b style="color:var(--cu)">[$1] $2</b>');
+      out+=qt+'<br>';continue;
+    }
+    if(/^\|(.+)\|$/.test(ln.trim())){
+      const cells=ln.trim().slice(1,-1).split('|').map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c)))continue;
+      if(!inTable){
+        closeAll();
+        out+='<table><thead><tr>'+cells.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>';
+        inTable=true;
+      }else{
+        out+='<tr>'+cells.map(c=>`<td>${c}</td>`).join('')+'</tr>';
+      }
+      continue;
+    }
+    if(/^\s*[-*]\s+(.+)/.test(ln)||/^\s*\d+\.\s+(.+)/.test(ln)){
+      if(!inList){closeAll();out+='<ul>';inList=true;}
+      out+=`<li>${RegExp.$1}</li>`;continue;
+    }
+    if(!ln.trim()){closeAll();continue;}
+    closeAll();
+    out+=`<p>${ln}</p>`;
+  }
+  closeAll();
+  out=out.replace(/@@MATH_(\d+)@@/g,(_,i)=>{
+    const b=mathBlocks[+i];
+    if(window.katex){
+      try{return katex.renderToString(b.m,{displayMode:b.d,throwOnError:false});}catch(e){}
+    }
+    return b.d?`<div class="math">${b.m}</div>`:`<code style="color:var(--cu)">${b.m}</code>`;
+  });
+  out=out.replace(/@@CODE_(\d+)@@/g,(_,i)=>codeBlocks[+i]);
+  return out;
+}
+let openTabs=['kasalar'], active='kasalar';
+let checkedSources=new Set();
+
+function getCheckedSources(){
+  if(currentKasa!=='all'){
+    const allowed=new Set(allSources.filter(s=>s.kasa===currentKasa).map(s=>s.rel));
+    return [...checkedSources].filter(r=>allowed.has(r));
+  }
+  return [...checkedSources];
+}
+function updateSideAiCtx(){
+  const el=$('#sideAiCtx'); if(!el)return;
+  const n=getCheckedSources().length;
+  const hasNote=String(active).startsWith('note:');
+  const kName=currentKasa==='all'?'Tüm Kasalar':((kasalarData.find(k=>k.key===currentKasa)||{}).title||currentKasa);
+  el.textContent=`📚 ${kName} · ${n} kaynak${hasNote?' + aktif not':''}`;
+  const s1=$('#scSrc'); if(s1) s1.textContent=`📚 ${kName}`;
+  const s2=$('#scN'); if(s2) s2.textContent=n+' kaynak';
+  const stK=$('#stKasa');
+  if(stK) stK.textContent=`Kasa: ${kName} (${kasalarData.reduce((a,k)=>a+(k.counts?k.counts.total:0),0)} dosya)`;
+}
+function rebuildTreeAndSources(){
+  const filtered=currentKasa==='all'?vaultTree:vaultTree.filter(g=>g.kasa===currentKasa);
+  tree=[
+    ...filtered.map(g=>({...g,open:currentKasa!=='all'?true:g.open})),
+    {n:'Mühendislik Araçları',i:'⚡',open:currentKasa==='all',k:[
+      {n:'Kasalar (NotebookLM Ana Ekran)',id:'kasalar',i:'❖'},
+      {n:'Trafo Lab Analizörü',id:'trafo',i:'⚡'},
+      {n:'RC Filtre Bode Simülatörü',id:'sim',i:'∿'},
+      {n:'AgyCal · Akıllı Takvim',id:'cal',i:'▦'}
+    ]}
+  ];
+  const sh=$('#sources');
+  if(sh){
+    const srcs=currentKasa==='all'?allSources:allSources.filter(s=>s.kasa===currentKasa);
+    const chkCount=srcs.filter(s=>checkedSources.has(s.rel)).length;
+    sh.innerHTML=`<div class="ph"><span>Kasadan Kaynaklar</span><span>${chkCount}/${srcs.length} seçili</span></div>`+
+      `<div style="display:flex;gap:6px;padding:0 10px 6px"><button class="hb" style="flex:1;padding:3px 6px;font-size:11px;border-color:color-mix(in srgb,var(--cu) 45%,transparent);color:var(--cu)" onclick="triggerAssetUpload()">📎 Dosya Ekle</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="openNewNoteModal()">＋ Yeni Not</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="toggleAllSources(true)">Tümü</button><button class="hb" style="flex:1;padding:3px 6px;font-size:11px" onclick="toggleAllSources(false)">Temizle</button></div>`+
+      srcs.map(s=>{
+        const side=isSideDoc(s.rel||s.id);
+        const isChk=checkedSources.has(s.rel);
+        const lbl=currentKasa==='all'?s.title:(s.short_title||s.title);
+        const safeT=(s.title||'').replace(/'/g,'');
+        const act=side?`onclick="if(event.target.tagName!=='INPUT'&&!event.target.dataset.tabbtn){openRightViewer('${s.rel}','${safeT}')}" onmousedown="if(event.button===1)event.preventDefault()" onauxclick="if(event.button===1){event.preventDefault();event.stopPropagation();openPage('${s.id}',true,{newTab:true})}"`:`onclick="if(event.target.tagName!=='INPUT'){event.preventDefault();openPage('${s.id}')}"`;
+        const tabBtn=side?`<button class="ph-btn" data-tabbtn="1" style="width:18px;height:18px;font-size:10.5px;margin-left:auto;margin-right:4px" onclick="event.preventDefault();event.stopPropagation();openPage('${s.id}',true)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢</button>`:'';
+        return `<label class="src" style="cursor:pointer;gap:6px" ${act} title="${s.title}${side?' (Tıkla: Sağda önizle · Orta tuş veya ⤢: Sekmede aç)':''}"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${s.icon} ${lbl}</span>${tabBtn}<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-right:4px${side?'':';margin-left:auto'}" onclick="event.preventDefault();event.stopPropagation();deleteActiveNote('${s.id}')" title="Kasadan sil">🗑</button><input type="checkbox" data-src="${s.rel}" ${isChk?'checked':''} onchange="onSourceCheck('${s.rel}',this.checked)"></label>`;
+      }).join('');
+  }
+  updateSideAiCtx();
+}
+function onSourceCheck(rel,chk){
+  if(chk) checkedSources.add(rel); else checkedSources.delete(rel);
+  rebuildTreeAndSources();
+}
+function toggleAllSources(chk){
+  const srcs=currentKasa==='all'?allSources:allSources.filter(s=>s.kasa===currentKasa);
+  srcs.forEach(s=>{ if(chk) checkedSources.add(s.rel); else checkedSources.delete(s.rel); });
+  rebuildTreeAndSources();
+}
+function selectKasaFilter(val){
+  currentKasa=val||'all';
+  const sel=$('#kasaSelect'); if(sel&&sel.value!==currentKasa) sel.value=currentKasa;
+  rebuildTreeAndSources();
+  renderTree();
+  updateRightProps();
+}
+function openKasalarHome(){
+  layoutMode('kasalar');
+  openPage('kasalar');
+}
+function enterKasa(kasaKey,targetMode='write'){
+  currentKasa=kasaKey;
+  const sel=$('#kasaSelect'); if(sel) sel.value=kasaKey;
+  allSources.forEach(s=>{
+    if(s.kasa===kasaKey && (s.rel.includes('00_')||s.rel.includes('TEK_PARCA')||s.ext==='.md')) checkedSources.add(s.rel);
+  });
+  rebuildTreeAndSources();
+  const kObj=kasalarData.find(x=>x.key===kasaKey);
+  layoutMode(targetMode);
+  if(kObj&&kObj.index_id){
+    openPage(kObj.index_id);
+  }else{
+    renderTree(); renderTabs(); renderMain();
+  }
+}
+
+async function loadVault(){
+  try{
+    const v=await api('/api/vault');
+    Object.assign(pages,v.pages||{});
+    Object.assign(WIKI_MAP,v.wikimap||{});
+    vaultTree=v.tree||[];
+    kasalarData=v.kasalar||[];
+    allSources=v.sources||[];
+    backlinksMap=v.backlinks||{};
+    if(!checkedSources.size){
+      allSources.forEach(s=>{ if(s.checked) checkedSources.add(s.rel); });
+    }
+    const sel=$('#kasaSelect');
+    if(sel){
+      sel.innerHTML=`<option value="all">Tüm Kasalar (${kasalarData.length})</option>`+
+        kasalarData.map(k=>`<option value="${k.key}" ${currentKasa===k.key?'selected':''}>${k.icon} ${k.title} (${k.counts.total})</option>`).join('');
+    }
+    rebuildTreeAndSources();
+    renderTree(); renderTabs(); renderMain(); updateRightProps();
+  }catch(e){}
+}
+
+async function loadHealth(){
+  try{
+    const h=await api('/api/health');
+    const el=$('#stHealth');
+    if(el){
+      const parts=[];
+      if(h.agy) parts.push('agy CLI: aktif');
+      if(h.ollama) parts.push('Ollama: aktif');
+      if(h.git_checkpoints) parts.push('Git Checkpoint: açık');
+      el.textContent=parts.length?parts.join(' · '):'Sağlayıcı hazır';
+    }
+    if(h.running){
+      Object.entries(h.running).forEach(([sid,st])=>{
+        if(ai[sid]){ ai[sid].running=true; ai[sid].step=st; aiRefresh(sid); }
+      });
+    }
+  }catch(e){}
+}
+
+/* ---------- İkonlar & Ağaç ---------- */
+const CHEV_SVG='<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
+function svgIcon(raw){
+  if(raw==='❖') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
+  if(raw==='📘') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h2.9l1.4 1.6h5.3A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8Z"/></svg>';
+  if(raw==='⚡'||raw==='🌩') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.8 2 3.5 9h4.1l-.4 5 5.3-7H8.4Z"/></svg>';
+  if(raw==='🌐'||raw==='🛰') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.8"/><path d="M2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8c-1.6-1.6-2.4-3.6-2.4-5.8S6.4 3.8 8 2.2Z"/></svg>';
+  if(raw==='∿') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.8 8c1.5-4.5 3.1-4.5 4.6 0s3.1 4.5 4.6 0 2.2-2.2 3.2 0"/></svg>';
+  if(raw==='▦') return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.8" width="12" height="11.4" rx="2"/><path d="M2 5.8h12M5.2 1.6v2.2M10.8 1.6v2.2"/><text x="8" y="12.1" text-anchor="middle" fill="currentColor" stroke="none" font-size="6.2" font-weight="800" font-family="var(--mono)">${new Date().getDate()}</text></svg>`;
+  if(raw==='◆') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 2.2 13.8 8 8 13.8 2.2 8Z"/></svg>';
+  return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.2h5.5L12.5 5v8.8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z"/><path d="M9.2 2.2V5.2h3.2M5.5 8h5M5.5 10.6h3.5"/></svg>';
+}
+function firstVaultTab(){
+  for(const g of tree){ if(g.k&&g.k.length&&g.k[0].id) return g.k[0].id; }
+  return 'kasalar';
+}
+const TREE_OPEN={};
+function renderTree(){
+  const root=$('#tree'); root.innerHTML='';
+  const build=(arr,host)=>arr.forEach(x=>{
+    const d=document.createElement('div');
+    const side=x.id&&isSideDoc(x.id);
+    const tk=(x.id||'')+'|'+x.n; if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
+    d.className='ti'+(x.k?' folder':'')+(x.open?' open':'')+(x.id===active?' on':'');
+    d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:x.n;
+    const delBtn=(!x.k&&String(x.id||'').startsWith('note:'))?`<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-left:${side?'0':'auto'}" onclick="event.stopPropagation();deleteActiveNote('${x.id}')" title="Kasadan sil">🗑</button>`:'';
+    const addBtn=(x.k&&x.kasa)?`<span style="margin-left:auto;display:inline-flex;gap:2px"><button class="ph-btn" style="width:18px;height:18px;font-size:11.5px" onclick="event.stopPropagation();triggerAssetUpload('${x.kasa}')" title="Bu kasaya dosyadan belge/fotoğraf yükle">📎</button><button class="ph-btn" style="width:18px;height:18px;font-size:12px" onclick="event.stopPropagation();openNewNoteModal('${x.kasa}')" title="Bu kasaya yeni not ekle">＋</button></span>`:(side?`<button class="ph-btn" style="margin-left:auto;width:18px;height:18px;font-size:11px;opacity:.75" onclick="event.stopPropagation();openPage('${x.id}',true)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢</button>`:'');
+    d.innerHTML=`<span class="car">${x.k?CHEV_SVG:''}</span><span class="tic">${svgIcon(x.i)}</span><span class="tn">${x.n}</span>${addBtn}${delBtn}`;
+    host.appendChild(d);
+    let kids;
+    if(x.k){kids=document.createElement('div');kids.className='kids'+(x.open?' show':'');host.appendChild(kids);build(x.k,kids);}
+    d.onclick=e=>{
+      if(x.k){d.classList.toggle('open');kids.classList.toggle('show');x.open=d.classList.contains('open');TREE_OPEN[tk]=x.open;}
+      if(x.id&&(e.ctrlKey||e.metaKey)){ openPage(x.id,true,{newTab:true}); return; }
+      if(x.id&&!side)openPage(x.id,false,{replace:true});
+      if(x.id&&side){
+        if(isBlank(active)){ openPage(x.id,true,{replace:true}); return; }
+        const p=pages[x.id];
+        openRightViewer(p?p.rel:x.id.slice(5),p?p.t:x.n);
+      }
+    };
+    if(x.id){
+      d.onmousedown=e=>{ if(e.button===1) e.preventDefault(); };
+      d.onauxclick=e=>{ if(e.button===1){ e.preventDefault(); e.stopPropagation(); openPage(x.id,true,{newTab:true}); } };
+    }
+    if(x.id&&side){
+      d.ondblclick=e=>{ e.stopPropagation(); openPage(x.id,true,{replace:true}); };
+    }
+  });
+  build(tree,root);
+}
+const SIDE_EXT=['.pdf','.docx','.doc','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'];
+function isSideDoc(relOrId){
+  const s=String(relOrId||'').toLowerCase();
+  if(SIDE_EXT.some(e=>s.endsWith(e)))return true;
+  const p=pages[relOrId];
+  return !!(p&&p.ext&&SIDE_EXT.includes(p.ext));
+}
+let leftW=248, rightW=340, viewerPrev=null;
+const LEFT_MIN=200, LEFT_MAX=480, RIGHT_MIN=280, RIGHT_MAX=680, CENTER_MIN=420;
+function clampLeft(w){
+  const rOpen=!app.classList.contains('no-right');
+  const maxByCenter=window.innerWidth-52-(rOpen?rightW:0)-CENTER_MIN;
+  const hi=Math.max(LEFT_MIN,Math.min(LEFT_MAX,Math.floor(window.innerWidth*0.38),maxByCenter));
+  return Math.max(LEFT_MIN,Math.min(hi,Math.round(w)));
+}
+function clampRight(w){
+  const lOpen=!app.classList.contains('no-left');
+  const maxByCenter=window.innerWidth-52-(lOpen?leftW:0)-CENTER_MIN;
+  const hi=Math.max(RIGHT_MIN,Math.min(RIGHT_MAX,Math.floor(window.innerWidth*0.50),maxByCenter));
+  return Math.max(RIGHT_MIN,Math.min(hi,Math.round(w)));
+}
+function applyPaneWidths(){
+  app.style.setProperty('--left',leftW+'px');
+  app.style.setProperty('--right',rightW+'px');
+}
+let rvCurrentRel='', rvCurrentTitle='', rvNight=localStorage.getItem('agydesk_pdf_night')==='1';
+function toggleRightViewerNight(){
+  rvNight=!rvNight;
+  localStorage.setItem('agydesk_pdf_night',rvNight?'1':'0');
+  const nb=$('#rvNightBtn');
+  if(nb){ nb.classList.toggle('on',rvNight); nb.style.borderColor=rvNight?'var(--cu)':''; nb.style.color=rvNight?'var(--cu)':''; }
+  const fr=$('#rvBody iframe');
+  if(fr) fr.style.filter=rvNight?'invert(0.90) hue-rotate(180deg) contrast(0.96)':'none';
+}
+function openDocInTab(relOrUrl,title){
+  let raw=String(relOrUrl||'');
+  if(raw.startsWith('note:')) raw=raw.slice(5);
+  const cleanRel=raw.replace(/^.*\/api\/raw\//,'');
+  const id='note:'+cleanRel;
+  if(!pages[id]){
+    const ext=(cleanRel.includes('.')?cleanRel.slice(cleanRel.lastIndexOf('.')):'').toLowerCase();
+    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(ext)?'🖼':(/\.(docx?)$/i.test(ext)?'📘':'📄'));
+    const fKey=cleanRel.includes('/')?cleanRel.split('/')[0]:'';
+    const kObj=kasalarData.find(k=>k.key===fKey);
+    pages[id]={t:title||decodeURIComponent(cleanRel.split('/').pop()||cleanRel),i:ic,rel:cleanRel,folder:kObj?kObj.title:(fKey||'Obsidian Kasası'),kasa:fKey,ext:ext||'.pdf'};
+  }
+  if(viewerPrev) closeRightViewer();
+  openPage(id,true);
+}
+async function openRightViewer(relOrUrl,title){
+  let raw=String(relOrUrl||'');
+  if(raw.startsWith('note:'))raw=raw.slice(5);
+  const isHttp=/^https?:\/\//i.test(raw)&&!raw.includes('/api/raw/');
+  const cleanRel=raw.replace(/^.*\/api\/raw\//,'');
+  const url=isHttp?raw:('/api/raw/'+encodeURI(cleanRel));
+  const low=cleanRel.toLowerCase();
+  const name=title||decodeURIComponent(cleanRel.split('/').pop()||'Dosya');
+  rvCurrentRel=cleanRel; rvCurrentTitle=name;
+  $('#rvTitle').textContent=name;
+  const op=$('#rvOpen');
+  if(op){
+    op.style.display='';
+    op.onclick=e=>{ e.preventDefault(); openDocInTab(cleanRel,name); };
+  }
+  const nb=$('#rvNightBtn');
+  if(nb){
+    nb.style.display=low.endsWith('.pdf')?'':'none';
+    nb.classList.toggle('on',rvNight);
+    nb.style.borderColor=rvNight?'var(--cu)':'';
+    nb.style.color=rvNight?'var(--cu)':'';
+  }
+  const b=$('#rvBody');
+  if(!viewerPrev){
+    const curRt=$('.rt.on');
+    viewerPrev={wasClosed:app.classList.contains('no-right'),rt:curRt?curRt.dataset.rt:'ai',w:rightW};
+  }
+  rightW=clampRight(Math.max(rightW,500));
+  applyPaneWidths();
+  $('#rtabsBar').style.display='none';
+  $$('.rbody').forEach(el=>el.classList.toggle('on',el.id==='rb-viewer'));
+  app.classList.remove('no-right');
+  syncPaneBtns();
+  if(/\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(low)){
+    const safeName=name.replace(/'/g,'');
+    b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="openDocInTab('${cleanRel}','${safeName}')" title="AgyDesk içinde yeni sekmede tam boy aç"><div class="mono" style="font-size:11px;color:var(--mut)">${cleanRel} · <span class="link" onclick="openDocInTab('${cleanRel}','${safeName}')">⤢ Sekmede Tam Ekran Aç</span></div></div>`;
+  }else if(low.endsWith('.pdf')){
+    const filt=rvNight?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
+    b.innerHTML=`<iframe src="${url}#view=FitH" style="flex:1;width:100%;height:100%;border:0;background:#fff;transition:filter .2s;${filt}"></iframe>`;
+  }else if(/\.(docx?)$/i.test(low)){
+    b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Word belgesi okunuyor: ${name}…</div>`;
+    try{
+      const d=await api('/api/docx?rel='+encodeURIComponent(cleanRel));
+      b.innerHTML=`<div class="rview-docx">${d.html}</div>`;
+    }catch(e){
+      b.innerHTML=`<div style="padding:20px;color:var(--err)">Belge okunamadı: ${e.message}</div>`;
+    }
+  }else{
+    b.innerHTML=`<iframe src="${url}" style="flex:1;width:100%;height:100%;border:0;background:#fff"></iframe>`;
+  }
+}
+function closeRightViewer(){
+  $('#rtabsBar').style.display='';
+  const prev=viewerPrev;
+  viewerPrev=null;
+  if(prev){
+    rightW=clampRight(prev.w||340);
+    applyPaneWidths();
+    const prt=(curMode==='study'&&prev.rt==='ai')?'studio':prev.rt;
+    const t=$(`.rt[data-rt=${prt}]`)||$('.rt[data-rt=ai]');
+    if(t){
+      $$('.rt').forEach(x=>x.classList.toggle('on',x===t));
+      $$('.rbody').forEach(b=>b.classList.toggle('on',b.id==='rb-'+t.dataset.rt));
+    }
+    if(prev.wasClosed) app.classList.add('no-right');
+  }else{
+    app.classList.add('no-right');
+  }
+  syncPaneBtns();
+}
+const isBlank=id=>String(id).startsWith('blank:');
+let blankN=0;
+function newBlankTab(){
+  blankN++;
+  const id='blank:'+blankN;
+  const i=openTabs.indexOf(active);
+  openTabs.splice(i===-1?openTabs.length:i+1,0,id);
+  openPage(id);
+}
+/* opts.replace: aktif sekmenin içeriğini değiştir (Obsidian tıklama) · opts.newTab: her zaman yeni sekme (orta tık) */
+function openPage(id,forceTab=false,opts={}){
+  if(isAI(id)&&!ai[id])return;
+  const p=pages[id];
+  if(!forceTab&&!openTabs.includes(id)&&((p&&p.ext&&SIDE_EXT.includes(p.ext))||(String(id).startsWith('note:')&&isSideDoc(id)))){
+    openRightViewer(p?p.rel:id.slice(5),p?p.t:'');
+    return;
+  }
+  if(!openTabs.includes(id)){
+    const ai_=openTabs.indexOf(active);
+    const canReplace=opts.replace&&!opts.newTab&&ai_!==-1&&!isAI(active)&&active!=='kasalar'&&!isAI(id);
+    if(canReplace) openTabs[ai_]=id;
+    else if(opts.newTab&&ai_!==-1) openTabs.splice(ai_+1,0,id);
+    else openTabs.push(id);
+  }
+  active=id;
+  if(p&&p.kasa&&currentKasa!=='all'&&currentKasa!==p.kasa){
+    currentKasa=p.kasa;
+    const sel=$('#kasaSelect'); if(sel) sel.value=currentKasa;
+    rebuildTreeAndSources();
+  }
+  if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
+  else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
+  else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
+  renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps();
+}
+function closeTab(id){
+  if(isAI(id)){ closeSession(id); return; }
+  const idx=openTabs.indexOf(id);
+  openTabs=openTabs.filter(t=>t!==id);
+  if(!openTabs.length)openTabs=['kasalar'];
+  if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
+  if(active==='kasalar') layoutMode('kasalar');
+  renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();
+}
+const isAI=id=>id.startsWith('ai');
+pages.studychat={t:'Sohbet',i:'❖'};
+const pg=id=>isAI(id)?{t:(ai[id]?ai[id].title:id),i:'◆'}:(isBlank(id)?{t:'Yeni sekme',i:'📄'}:(pages[id]||{t:id,i:'📝'}));
+let draggedTabId=null, isTabDragging=false;
+function moveActiveTab(dir){
+  const idx=openTabs.indexOf(active);
+  if(idx===-1) return;
+  const newIdx=idx+dir;
+  if(newIdx<0||newIdx>=openTabs.length) return;
+  const [moved]=openTabs.splice(idx,1);
+  openTabs.splice(newIdx,0,moved);
+  renderTabs();
+}
+function renderTabs(){
+  const t=$('#tabs'); t.innerHTML='';
+  t.ondragover=e=>{
+    e.preventDefault();
+    e.dataTransfer.dropEffect='move';
+  };
+  t.ondrop=e=>{
+    if(e.target===t||e.target.classList.contains('tab-add')){
+      e.preventDefault();
+      const srcId=e.dataTransfer.getData('text/plain')||draggedTabId;
+      if(!srcId) return;
+      const srcIdx=openTabs.indexOf(srcId);
+      if(srcIdx!==-1&&srcIdx!==openTabs.length-1){
+        const [moved]=openTabs.splice(srcIdx,1);
+        openTabs.push(moved);
+        renderTabs();
+      }
+    }
+  };
+  openTabs.forEach((id,idx)=>{
+    const d=document.createElement('div'); d.className='tab'+(id===active?' on':'');
+    d.draggable=true;
+    d.dataset.tabId=id;
+    const s=isAI(id)?ai[id]:null;
+    const info=pg(id);
+    const shortcutHint=idx<8?` (Ctrl+${idx+1})`:(idx===openTabs.length-1?' (Ctrl+9)':'');
+    d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir';
+    let calBadge='';
+    if(id==='cal'&&typeof GCAL!=='undefined'){
+      if(GCAL.pomo&&GCAL.pomo.running){
+        calBadge=`<span class="acal-tab-pill pomo" id="acalTabPomo">⏱ ${gcalPad(Math.floor(GCAL.pomo.sec/60))}:${gcalPad(GCAL.pomo.sec%60)}</span>`;
+      }else if(typeof calEvents!=='undefined'&&calEvents.length){
+        const todayIso=gcalTodayISO();
+        const nx=calEvents.filter(e=>!e.done&&e.kind==='exam'&&gcalDiffDays(e.date,todayIso)>=0).sort((a,b)=>a.date.localeCompare(b.date))[0];
+        if(nx){ const df=gcalDiffDays(nx.date,todayIso); calBadge=`<span class="acal-tab-pill exam" title="Yaklaşan Sınav: ${nx.title}">${df===0?'BUGÜN':'🔥 '+df+'g'}</span>`; }
+      }
+    }
+    const badge=s?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`+(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):calBadge;
+    d.innerHTML=`<span class="tic">${svgIcon(info.i)}</span><span class="tt">${info.t}</span>${badge}<span class="x" data-x="${id}" title="Sekmeyi kapat (Ctrl+W)">✕</span>`;
+    d.ondragstart=e=>{
+      isTabDragging=true;
+      draggedTabId=id;
+      e.dataTransfer.setData('text/plain',id);
+      e.dataTransfer.effectAllowed='move';
+      d.classList.add('dragging');
+    };
+    d.ondragend=()=>{
+      setTimeout(()=>{ isTabDragging=false; },60);
+      draggedTabId=null;
+      t.querySelectorAll('.tab').forEach(el=>el.classList.remove('dragging','drag-over-left','drag-over-right'));
+    };
+    d.ondragover=e=>{
+      e.preventDefault();
+      e.dataTransfer.dropEffect='move';
+      if(!draggedTabId||draggedTabId===id) return;
+      const rect=d.getBoundingClientRect();
+      const mid=rect.left+rect.width/2;
+      if(e.clientX<mid){
+        d.classList.add('drag-over-left');
+        d.classList.remove('drag-over-right');
+      }else{
+        d.classList.add('drag-over-right');
+        d.classList.remove('drag-over-left');
+      }
+    };
+    d.ondragleave=e=>{
+      if(!d.contains(e.relatedTarget)){
+        d.classList.remove('drag-over-left','drag-over-right');
+      }
+    };
+    d.ondrop=e=>{
+      e.preventDefault();
+      d.classList.remove('drag-over-left','drag-over-right');
+      const srcId=e.dataTransfer.getData('text/plain')||draggedTabId;
+      if(!srcId||srcId===id) return;
+      let dropIdx=openTabs.indexOf(id);
+      const rect=d.getBoundingClientRect();
+      if(e.clientX>rect.left+rect.width/2){
+        dropIdx++;
+      }
+      const srcIdx=openTabs.indexOf(srcId);
+      if(srcIdx===-1||dropIdx===-1) return;
+      const [moved]=openTabs.splice(srcIdx,1);
+      if(srcIdx<dropIdx) dropIdx--;
+      openTabs.splice(dropIdx,0,moved);
+      renderTabs();
+    };
+    d.onclick=e=>{
+      if(isTabDragging) return;
+      if(e.target.dataset.x){closeTab(id);return;}
+      openPage(id);
+    };
+    d.onauxclick=e=>{ if(e.button===1){e.preventDefault();closeTab(id);} };
+    t.appendChild(d);
+  });
+  const a=document.createElement('div');a.className='tab-add';a.title=curMode==='ai'?'Yeni AI oturumu':'Yeni boş sekme (Ctrl+T)';a.textContent='＋';
+  a.onclick=()=>{
+    if(curMode==='ai'){newSession();return;}
+    newBlankTab();
+  };
+  t.appendChild(a);
+  const n=Object.values(ai).filter(s=>s.running).length;
+  $('#bgStat').innerHTML=n?`<span class="spin"></span> ${n} AI görevi çalışıyor`:'<i class="dot"></i>Yönlendirici hazır';
+}
+
+/* ---------- AI oturumları ---------- */
+const DEFAULT_AI_WELCOME='Merhaba, bu sekme tam ekran AI çalışma alanı. Aktif kasa kaynakların ve notların otomatik bağlıdır. Uzun bir görev verip başka sekmeye geçebilirsin.';
+const ai={
+  ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null},
+  side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null}
+};
+let aiN=1;
+function newSession(){
+  aiN++;
+  while(ai['ai'+aiN]) aiN++;
+  const id='ai'+aiN;
+  ai[id]={title:'AI Oturumu '+aiN,msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null};
+  openPage(id);
+}
+function closeSession(id,ev){
+  if(ev) ev.stopPropagation();
+  if(id==='side_ai') return;
+  const s=ai[id];
+  if(s&&s.running) api('/api/stop',{session:id}).catch(()=>{});
+  api('/api/clear',{session:id}).catch(()=>{});
+  const tabIdx=openTabs.indexOf(id);
+  openTabs=openTabs.filter(t=>t!==id);
+  delete ai[id];
+  const realSessions=Object.keys(ai).filter(k=>k!=='side_ai');
+  if(!realSessions.length){
+    aiN=1;
+    ai.ai1={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null};
+  }
+  if(!openTabs.length){
+    const fallback=(curMode==='ai')?'ai1':'kasalar';
+    openTabs=[fallback];
+  }
+  if(active===id){
+    const nextInTabs=openTabs[Math.min(Math.max(0,tabIdx),openTabs.length-1)];
+    const remAI=openTabs.find(isAI)||'ai1';
+    if(curMode==='ai'&&openTabs.some(isAI)){
+      active=openTabs.find(isAI);
+    }else if(curMode==='ai'&&!nextInTabs){
+      if(!openTabs.includes(remAI)) openTabs.push(remAI);
+      active=remAI;
+    }else{
+      active=nextInTabs||openTabs[openTabs.length-1];
+      if(!isAI(active)&&curMode==='ai') layoutMode(active==='kasalar'?'kasalar':'write');
+    }
+  }
+  renderSessions(); renderTabs(); renderTree(); renderMain();
+}
+function renderSessions(){
+  const l=$('#sessions'); if(!l)return; l.innerHTML='';
+  Object.entries(ai).filter(([id])=>id!=='side_ai').forEach(([id,s])=>{
+    const d=document.createElement('div'); d.className='ses'+(id===active?' on':'');
+    d.title=s.title;
+    d.innerHTML=`<span class="sic">${svgIcon('◆')}</span><span class="st">${s.title}</span><small>${s.running?'<span class="spin"></span> çalışıyor':(s.unread?'● yeni sonuç':'boşta')}</small><button class="ses-x" title="Oturumu kapat" data-del="${id}">✕</button>`;
+    d.onclick=e=>{
+      if(e.target.closest('.ses-x')){ closeSession(id,e); return; }
+      openPage(id);
+    };
+    l.appendChild(d);
+  });
+}
+function aiBody(id){
+  const s=ai[id];
+  return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map(x=>`<div class="msg ${x.w==='me'?'me':''}">${x.h}</div>`).join('')+
+    (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
+}
+function renderSideAi(){
+  const c=$('#chat'), s=ai.side_ai;
+  if(!c||!s) return;
+  c.innerHTML=aiBody('side_ai');
+  c.scrollTop=c.scrollHeight;
+  const stBtn=$('#sideAiStop');
+  if(stBtn) stBtn.style.display=(s.running||s.pending)?'inline-flex':'none';
+  runMermaid('#chat .mermaid');
+  renderStudyChatBody();
+}
+function clearSideAi(){
+  api('/api/clear',{session:'side_ai'}).catch(()=>{});
+  ai.side_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
+  ai.side_ai.running=false; ai.side_ai.pending=null;
+  renderSideAi();
+}
+function runMermaid(sel,force=false){
+  if(!window.mermaid)return;
+  const mTheme=(typeof curTheme!=='undefined'&&(curTheme==='eink'||curTheme==='sepia'||curTheme==='mono-light'))?'neutral':'dark';
+  $$(sel).forEach(el=>{
+    if(!el.dataset.msrc) el.dataset.msrc=el.textContent;
+    else if(force){ el.removeAttribute('data-processed'); el.textContent=el.dataset.msrc; }
+  });
+  try{ mermaid.initialize({startOnLoad:false,theme:mTheme}); mermaid.run({querySelector:sel}); }catch(e){}
+}
+function aiRefresh(id){
+  if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
+  if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);c.scrollTop=c.scrollHeight;aiHead(id);runMermaid('#aichat .mermaid');}
+  renderTabs(); renderSessions();
+}
+/* ---------- İzin modları ---------- */
+const MODES={g:{n:'Onaylı',i:'🟢',d:'Her yazma/silme/komut için sorar'},y:{n:'Akıllı',i:'🟡',d:'Güvenli işleri sormadan yapar, riskli işte durur'},r:{n:'Tam otomatik',i:'🔴',d:'Hiçbir şey sormaz (agya)'}};
+const RISKY=/\bsil|force|push|yazdır|gönder|drop|reset|rm -rf/i, WRITE=/yaz\b|oluştur|düzenle|kaydet|çalıştır|\bkod|pcb|refactor|patch|kur\b|ekle/i;
+const WRITE_SK=['surgical-patch','safe-refactor','lean-build','pcb','replica-skill','fisle'];
+function classify(text,skill){ if(RISKY.test(text))return 'risky'; if((skill&&WRITE_SK.includes(skill))||WRITE.test(text))return 'write'; return 'safe'; }
+const api=async(url,body,method)=>{const r=await fetch(url,body||method?{method:method||'POST',headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined}:undefined);if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}return r.json()};
+function logAct(id,msg,kind){ api('/api/log',{session:id,msg,kind:kind||''}).catch(()=>{}); }
+async function loadLog(){
+  try{ const rows=await api('/api/log'); const l=$('#logList'); if(!l)return;
+    l.innerHTML=rows.length?rows.map(e=>`<div class="lg ${e.kind}"><span>${new Date(e.ts*1000).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</span><div>${e.msg.replace(/</g,'&lt;')}<small>${ai[e.session]?ai[e.session].title:e.session}</small></div></div>`).join(''):'<div style="color:var(--mut);font-size:12.5px">Henüz etkinlik yok.</div>';
+  }catch(e){}
+}
+const renderLog=loadLog;
+function setMode2(id,m){ ai[id].mode=m; logAct(id,`İzin modu → ${MODES[m].i} ${MODES[m].n}`,'m'); aiHead(id); renderTabs(); }
+function cycleMode(id){ const o=['g','y','r']; setMode2(id,o[(o.indexOf(ai[id].mode)+1)%3]); }
+function aiHead(id){
+  const h=$('#aihead'); if(!h)return; const s=ai[id];
+  h.innerHTML=`<div class="seg">${Object.entries(MODES).map(([k,m])=>`<button class="${s.mode===k?'on '+k:''}" onclick="setMode2('${id}','${k}')" title="${m.d}">${m.i} ${m.n}</button>`).join('')}</div>
+   <span class="mdesc">${MODES[s.mode].d}</span><span style="flex:1"></span>
+   <button class="hb" ${s.checkpoints?'':'disabled'} onclick="aiUndo('${id}')">↶ Geri al (${s.checkpoints})</button>
+   <button class="hb stop" ${s.running||s.pending?'':'disabled'} onclick="aiStop('${id}')">■ Dur</button>`;
+}
+async function aiUndo(id){ const s=ai[id]; if(!s.checkpoints)return;
+  try{ const r=await api('/api/undo',{session:id}); s.checkpoints=0; s.msgs.push({w:'a',h:`↶ ${r.undone} checkpoint geri alındı. İzlenen dosyalar önceki duruma döndü.`}); }
+  catch(e){ s.msgs.push({w:'a',h:'⚠ Geri alma başarısız: '+e.message}); }
+  aiRefresh(id); }
+async function aiStop(id){ const s=ai[id]; try{await api('/api/stop',{session:id});}catch(e){} s.pending=null; s.msgs=s.msgs.filter(m=>!m.ap); s.running=false; s.msgs.push({w:'a',h:'■ Durduruldu. Çalışan iş kesildi.'}); aiRefresh(id); }
+function approve(id,yes){
+  const s=ai[id],p=s.pending; if(!p)return;
+  const alw=document.getElementById('alw-'+id); if(yes&&alw&&alw.checked){s.allow[p.risk]=true;}
+  s.msgs=s.msgs.filter(m=>!m.ap); s.pending=null;
+  if(yes){logAct(id,`✓ Onaylandı: ${p.text}`,'ok'); aiSend(id,p.text,p.skill,true,true);}
+  else{s.msgs.push({w:'a',h:'✗ Reddedildi. İşlem yapılmadı.'}); logAct(id,`✗ Reddedildi: ${p.text}`,'w'); aiRefresh(id);}
+}
+function renderAI(m){
+  const s=ai[active]; s.unread=false;
+  m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
+   <div class="aiin" id="aidrop"><div class="col"><div class="aihint">⬇ Skill kartını buraya bırak · / ile komut</div>
+   <div class="inp"><textarea id="aiInput" rows="1" placeholder="Bu oturuma bir görev ver…"></textarea><button class="btn" id="aiSend">Gönder</button></div></div></div></div>`;
+  aiHead(active);
+  const inp=$('#aiInput'),go=()=>{const v=inp.value.trim();if(v){inp.value='';autoGrow(inp);aiSend(active,v);}};
+  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>autoGrow(inp); inp.focus();
+  const dz=$('#aidrop');
+  ['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('hot')}));
+  dz.addEventListener('dragleave',()=>dz.classList.remove('hot'));
+  dz.addEventListener('drop',ev=>{ev.preventDefault();dz.classList.remove('hot');const k=ev.dataTransfer.getData('text/plain');if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
+  const c=$('#aichat'); c.scrollTop=c.scrollHeight; renderSessions(); renderTabs(); runMermaid('#aichat .mermaid');
+}
+async function aiSend(id,text,skill,ok,resume){
+  const s=ai[id];
+  if(!skill&&text.startsWith('/')){const k=text.slice(1).split(' ')[0]; if(SK[k])skill=k;}
+  if(skill&&SK[skill]&&(SK[skill].kind==='cmd'||SK[skill].kind==='mode')){s.msgs.push({w:'me',h:'/'+skill});aiInstant(id,skill);return;}
+  if(s.running||s.pending){s.msgs.push({w:'a',h:'Bu oturum meşgul veya onay bekliyor. Onayla ya da ■ Dur butonuna bas.'});aiRefresh(id);return;}
+  if(!ok){ s.msgs.push({w:'me',h:text.replace(/</g,'&lt;')}); api('/api/chats',{session:id,w:'me',h:text.replace(/</g,'&lt;')}).catch(()=>{}); }
+  if(id!=='side_ai'&&s.title.startsWith('AI Oturumu')) s.title=text.replace(/^Skill: /,'').slice(0,22);
+  const actNote=String(active).startsWith('note:')?active.slice(5):null;
+  let res;
+  try{
+    res=await api('/api/run',{
+      session:id,
+      text,
+      skill:skill||null,
+      mode:s.mode,
+      allow:s.allow,
+      approved:!!ok,
+      sources:getCheckedSources(),
+      active_note:actNote
+    });
+  }catch(e){ s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
+  if(res.status==='approval'){
+    s.pending={text,skill,risk:res.risk};
+    const why=res.risk==='risky'?'Riskli işlem (silme / dış gönderim / geri alınamaz)':'Dosya yazma / komut çalıştırma';
+    s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${text.replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
+    aiRefresh(id); return;
+  }
+  s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label; aiRefresh(id);
+}
+/* ---------- Sunucu olayları (SSE) ---------- */
+function startEvents(){
+  const es=new EventSource('/api/events');
+  es.onmessage=e=>{
+    const d=JSON.parse(e.data), s=ai[d.session];
+    if(d.event==='step'&&s){s.step=d.step;aiRefresh(d.session);}
+    else if(d.event==='done'&&s){
+      s.running=false; if(d.quota)applyQuota(d.quota);
+      linkifyAndOpen(d.reply);
+      const r=d.route, c=r.provider==='local'?'l':'c', safe=mdToHtml(d.reply);
+      const tok=d.tokens?`<span class="chip">${d.tokens} token</span>`:'';
+      const badge=d.real?(r.provider==='local'?'':'<span class="chip c">agy CLI</span>'):'<span class="chip">Yerel</span>';
+      const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
+      const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span><span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
+      s.msgs.push({w:'a',h});
+      if(d.session==='side_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
+      api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
+      if(d.session==='side_ai' && $('#outs')){
+        const outBox=document.createElement('div'); outBox.className='out';
+        outBox.innerHTML=`<div class="oh"><span>◆ AI Çıktısı · ${r.label}</span><span><button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="appendReplyToNote(this)" data-md="${encodeURIComponent(d.reply)}">📝 Nota Ekle</button> <button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()">🖨 Canon A4 Yazdır</button></span></div><div class="ob">${safe}</div>`;
+        $('#outs').appendChild(outBox);
+        runMermaid('#outs .mermaid');
+      }
+      if(d.session!=='side_ai'&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
+      aiRefresh(d.session);
+      loadVault();
+    }
+    else if(d.event==='error'&&s){ s.running=false; if(d.quota)applyQuota(d.quota); s.msgs.push({w:'a',h:'⚠ Sağlayıcı hatası: '+String(d.error).replace(/</g,'&lt;')}); aiRefresh(d.session); }
+    else if(d.event==='log'){ loadLog(); }
+  };
+  es.onerror=()=>{ setTimeout(()=>{ loadChats(); loadVault(); loadHealth(); }, 2500); };
+}
+async function appendReplyToNote(btn){
+  if(!String(active).startsWith('note:')) return;
+  const raw=decodeURIComponent(btn.dataset.md||'');
+  const rel=active.slice(5);
+  const n=noteCache[active];
+  if(!n) return;
+  try{
+    noteCache[active]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
+    renderMain();
+    toast('💾 Yanıt nota eklendi ve kaydedildi',active);
+  }catch(e){ alert('Nota eklenemedi: '+e.message); }
+}
+async function loadChats(){
+  try{
+    const all=await api('/api/chats');
+    Object.entries(all).forEach(([sid,msgs])=>{
+      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null}; }
+      if(msgs&&msgs.length){
+        ai[sid].msgs=msgs.map(m=>({w:m.w,h:(m.w==='a'&&m.h&&!String(m.h).trim().startsWith('<'))?mdToHtml(m.h):m.h}));
+        if(sid!=='side_ai'){
+          const firstMe=msgs.find(m=>m.w==='me');
+          if(firstMe) ai[sid].title=firstMe.h.replace(/<[^>]+>/g,'').slice(0,22);
+        }
+      }
+    });
+    renderSessions(); renderTabs(); renderSideAi();
+    if(isAI(active)) renderMain();
+  }catch(e){}
+}
+function toast(t,id){
+  const d=document.createElement('div'); d.className='toast'; d.textContent=t; d.onclick=()=>{if(id)openPage(id);d.remove()};
+  document.body.appendChild(d); setTimeout(()=>d.remove(),6000);
+}
+
+/* ---------- NotebookLM Tarzı Kasalar Ana Ekranı & Modallar ---------- */
+function fmtRelTime(ts){
+  if(!ts) return '';
+  const diff=Math.max(0,Math.floor(Date.now()/1000-ts));
+  if(diff<60) return 'Az önce';
+  if(diff<3600) return `${Math.floor(diff/60)} dk önce`;
+  if(diff<86400) return `Bugün ${new Date(ts*1000).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}`;
+  return new Date(ts*1000).toLocaleDateString('tr-TR',{day:'numeric',month:'short'});
+}
+function renderKasalarHome(m){
+  const q=kasaSearchQ.trim().toLowerCase();
+  const filtered=kasalarData.filter(k=>!q || k.title.toLowerCase().includes(q) || k.desc.toLowerCase().includes(q) || k.tag.toLowerCase().includes(q) || (k.previews||[]).some(p=>p.title.toLowerCase().includes(q)));
+  const totalNotes=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
+  const totalDocs=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
+
+  m.innerHTML=`<div class="khome">
+    <div class="khero">
+      <div>
+        <h1><span style="color:var(--cu)">❖</span> Atölye Kasaları</h1>
+        <p>NotebookLM tarzı ders ve proje çalışma kasaların · <b>${kasalarData.length} kasa</b>, <b>${totalNotes} not</b>, <b>${totalDocs} PDF/görsel kaynak</b> gerçek diske bağlı.</p>
+      </div>
+      <div class="kbar">
+        <input class="ksrch" id="kasaSrchIn" placeholder="Kasa veya ders notu ara…" value="${kasaSearchQ.replace(/"/g,'&quot;')}">
+        <button class="btn" style="padding:8px 14px" onclick="triggerAssetUpload()">📎 Dosyadan Belge / Fotoğraf Ekle</button>
+        <button class="hb" onclick="openNewNoteModal()">＋ Yeni Not</button>
+        <button class="hb" onclick="openNewKasaModal()">＋ Yeni Kasa Oluştur</button>
+      </div>
+    </div>
+
+    <div class="kgrid">
+      ${filtered.map(k=>`
+        <div class="kcard" style="--kacc:${k.accent||'#e0a458'}" onclick="enterKasa('${k.key}','write')">
+          <div class="kcard-top">
+            <div class="kcard-ic">${k.icon}</div>
+            <span class="kcard-tag">${k.tag}</span>
+          </div>
+          <div>
+            <h3>${k.title}</h3>
+            <div class="kcard-desc" style="margin-top:4px">${k.desc}</div>
+          </div>
+          <div class="kcard-previews">
+            ${(k.previews||[]).slice(0,3).map(p=>`
+              <div class="kprev" onclick="event.stopPropagation();currentKasa='${k.key}';rebuildTreeAndSources();openPage('${p.id}')" title="${p.title}">
+                <span>${p.icon}</span><span style="overflow:hidden;text-overflow:ellipsis">${p.title}</span>
+              </div>
+            `).join('')||'<div class="kprev" style="color:var(--mut)">Henüz not yok — tıklayıp ekle</div>'}
+          </div>
+          <div class="kcard-foot">
+            <span><b>${k.counts.total} kaynak</b> (${k.counts.notes} not${k.counts.docs?`, ${k.counts.docs} belge`:''}${k.counts.images?`, ${k.counts.images} görsel`:''}) · ${fmtRelTime(k.mtime)}</span>
+            <div class="kcard-acts" onclick="event.stopPropagation()">
+              <button onclick="triggerAssetUpload('${k.key}')" title="Bu kasaya bilgisayardan belge veya fotoğraf yükle">📎 Dosya Ekle</button>
+              <button onclick="openNewNoteModal('${k.key}')" title="Bu kasaya yeni not ekle">＋ Not</button>
+              <button onclick="enterKasa('${k.key}','study')" title="NotebookLM Çalışma Modunda Aç">◈ Çalış</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+      <div class="kcard new-card" onclick="openNewKasaModal()">
+        <div style="font-size:28px;margin-bottom:4px">＋</div>
+        <b style="font-size:15px;color:var(--txt)">Yeni Kasa Oluştur</b>
+        <span style="font-size:12.5px;max-width:220px">Yeni bir ders, laboratuvar veya proje için Obsidian kasası klasörü aç</span>
+      </div>
+    </div>
+
+    <div class="ph" style="padding:0 0 10px;font-size:11.5px"><span>Mühendislik Araçları &amp; Çalışma Alanları</span></div>
+    <div class="ktools">
+      <div class="ktool" onclick="openPage('trafo')">
+        <div class="ic">⚡</div>
+        <div><b>Trafo Lab Analizörü</b><small>Boşta &amp; kısa devre hesabı, canlı fazör</small></div>
+      </div>
+      <div class="ktool" onclick="openPage('sim')">
+        <div class="ic">∿</div>
+        <div><b>RC Filtre Simülatörü</b><small>Canlı Bode genlik eğrisi &amp; kesim frekansı</small></div>
+      </div>
+      <div class="ktool" onclick="setMode('plan')">
+        <div class="ic">▦</div>
+        <div><b>AgyCal</b><small>Akıllı takvim, doğal dil komutu &amp; sınav radarı</small></div>
+      </div>
+      <div class="ktool" onclick="setMode('ai')">
+        <div class="ic">◆</div>
+        <div><b>Tam Ekran AI İstasyonu</b><small>Çoklu oturum, agy CLI &amp; yerel modeller</small></div>
+      </div>
+    </div>
+  </div>`;
+  const sIn=$('#kasaSrchIn');
+  if(sIn){
+    sIn.oninput=e=>{ kasaSearchQ=e.target.value; renderKasalarHome(m); const el=$('#kasaSrchIn'); if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);} };
+  }
+}
+
+function closeKasaModal(){ $('#kasaModal').classList.remove('show'); }
+$('#kasaModal').onclick=e=>{ if(e.target.id==='kasaModal') closeKasaModal(); };
+
+function openNewKasaModal(){
+  const box=$('#kasaModalBox');
+  box.innerHTML=`
+    <h3>❖ Yeni Çalışma Kasası Oluştur</h3>
+    <label>Kasa / Ders Adı
+      <input id="mkTitle" placeholder="ör. Güç Elektroniği veya Mikroişlemciler Lab">
+    </label>
+    <label>Etiket (Kısa Kategori)
+      <input id="mkTag" placeholder="ör. EEM · Dönem 5" value="Çalışma Kasası">
+    </label>
+    <label>İkon Seç
+      <select id="mkIcon">
+        <option value="📘">📘 Ders Kasası</option>
+        <option value="⚡">⚡ Elektrik &amp; Enerji</option>
+        <option value="∿">∿ Kontrol &amp; Sinyal</option>
+        <option value="🛰">🛰 Tasarım &amp; Yapay Zeka</option>
+        <option value="🌩">🌩 Yüksek Gerilim</option>
+      </select>
+    </label>
+    <label>Kısa Açıklama
+      <textarea id="mkDesc" rows="2" placeholder="Bu kasada tutulacak ders notları, deney föyleri ve kaynaklar…"></textarea>
+    </label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+      <button class="hb" onclick="closeKasaModal()">İptal</button>
+      <button class="btn" style="padding:7px 16px" onclick="submitNewKasa()">Oluştur ve Aç</button>
+    </div>`;
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>$('#mkTitle').focus(),50);
+}
+async function submitNewKasa(){
+  const title=$('#mkTitle').value.trim();
+  const tag=$('#mkTag').value.trim();
+  const icon=$('#mkIcon').value;
+  const desc=$('#mkDesc').value.trim();
+  if(!title){ $('#mkTitle').focus(); return; }
+  try{
+    const res=await api('/api/kasa',{title,tag,icon,desc});
+    closeKasaModal();
+    await loadVault();
+    enterKasa(res.key,'write');
+    toast(`❖ "${title}" kasası oluşturuldu`,res.index_id);
+  }catch(e){ alert('Kasa oluşturulamadı: '+e.message); }
+}
+
+function openNewNoteModal(defaultKasa){
+  const targetKasa=defaultKasa||(currentKasa!=='all'?currentKasa:(kasalarData[0]?kasalarData[0].key:'Elektrik_Makineleri_Lab'));
+  const box=$('#kasaModalBox');
+  box.innerHTML=`
+    <h3>📝 Kasaya Yeni Not &amp; Belge/Fotoğraf Ekle</h3>
+    <label>Hedef Kasa
+      <select id="mnKasa">
+        ${kasalarData.map(k=>`<option value="${k.key}" ${k.key===targetKasa?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+      </select>
+    </label>
+    <label>📎 Bilgisayardan Belge / Fotoğraf Seç (PDF, Word, Görsel, MD, TXT)
+      <input type="file" id="mnFiles" multiple accept=".md,.txt,.html,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,image/*" style="cursor:pointer" onchange="if(this.files.length&&!$('#mnTitle').value.trim()){$('#mnTitle').value=this.files[0].name.replace(/\\.[^.]+$/,'').replace(/[_-]+/g,' ');}">
+    </label>
+    <label>Not Başlığı (Sadece dosya yüklüyorsan boş bırakabilirsin)
+      <input id="mnTitle" placeholder="ör. Deney 4 — Asenkron Motor Hız Kontrolü">
+    </label>
+    <label>İlk İçerik (Markdown / LaTeX)
+      <textarea id="mnBody" rows="4" placeholder="# Başlık\n\nNot içeriğini buraya yazabilir veya yukarıdan belge/fotoğraf seçebilirsin…"></textarea>
+    </label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+      <button class="hb" onclick="closeKasaModal()">İptal</button>
+      <button class="btn" style="padding:7px 16px" onclick="submitNewNote()">Ekle ve Aç</button>
+    </div>`;
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>$('#mnTitle').focus(),50);
+}
+async function submitNewNote(){
+  const kasa=$('#mnKasa').value;
+  const title=$('#mnTitle').value.trim();
+  const content=$('#mnBody').value;
+  const filesEl=$('#mnFiles');
+  const files=filesEl&&filesEl.files?[...filesEl.files]:[];
+  if(!title&&!files.length){ $('#mnTitle').focus(); return; }
+  try{
+    closeKasaModal();
+    currentKasa=kasa;
+    if(title){
+      const res=await api('/api/note/create',{kasa,title,content});
+      if(files.length){
+        await dropImagesToNote(res.id,files);
+      }
+      await loadVault();
+      openPage(res.id);
+      toast(`📝 "${title}"${files.length?` (+${files.length} ek dosya)`:''} oluşturuldu`,res.id);
+    }else if(files.length){
+      pendingUploadTarget=kasa;
+      await handleGlobalUpload(files);
+    }
+  }catch(e){ alert('İşlem hatası: '+e.message); }
+}
+
+let pendingUploadTarget=null;
+function triggerAssetUpload(targetKasaOrRel){
+  pendingUploadTarget=targetKasaOrRel||null;
+  const inp=$('#hiddenFileIn');
+  if(inp){ inp.value=''; inp.click(); }
+}
+async function handleGlobalUpload(fileList){
+  if(!fileList||!fileList.length) return;
+  const explicitTarget=pendingUploadTarget;
+  pendingUploadTarget=null;
+  const attachToNote=explicitTarget
+    ?(String(explicitTarget).startsWith('note:')?explicitTarget:null)
+    :(String(active).startsWith('note:')?active:null);
+  const targetRel=attachToNote
+    ?attachToNote.slice(5)
+    :(explicitTarget||(currentKasa!=='all'?currentKasa:(kasalarData[0]?kasalarData[0].key:'')));
+  try{
+    if(attachToNote){
+      await dropImagesToNote(attachToNote,[...fileList]);
+      return;
+    }
+    const uploaded=[];
+    for(const f of fileList){
+      const r=await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(targetRel)}`,{method:'POST',body:f});
+      if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
+      uploaded.push(await r.json());
+    }
+    await loadVault();
+    if(uploaded.length===1){
+      const u=uploaded[0];
+      if(isSideDoc(u.rel||u.id)){
+        openRightViewer(u.rel,u.name);
+      }else{
+        openPage(u.id);
+      }
+    }else{
+      renderMain();
+    }
+    toast(`📎 ${uploaded.length} belge/fotoğraf kasaya eklendi`,uploaded[0]?uploaded[0].id:undefined);
+  }catch(e){ alert('Yükleme hatası: '+e.message); }
+}
+
+async function removeEmbed(fileRef){
+  const id=active; if(!String(id).startsWith('note:')) return;
+  const noteRel=id.slice(5); const n=noteCache[id]; if(!n) return;
+  const base=String(fileRef).split('/').pop().split('\\').pop();
+  const esc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const b=esc(base);
+  const re=new RegExp('[ \\t]*!?\\[\\[[^\\]\\n]*'+b+'[^\\]\\n]*\\]\\][ \\t]*\\n?|[ \\t]*!?\\[[^\\]\\n]*\\]\\([^)\\n]*'+b+'[^)\\n]*\\)[ \\t]*\\n?','gi');
+  if(!re.test(n.content)){ alert('Not metninde bu ek bulunamadı.'); return; }
+  re.lastIndex=0;
+  if(!confirm('"'+base+'" eki bu nottan kaldırılsın mı?')) return;
+  const content=n.content.replace(re,'');
+  try{
+    noteCache[id]=await api('/api/note',{rel:noteRel,content});
+    await loadVault(); renderMain();
+    toast('Ek nottan kaldırıldı');
+    const fileRel=String(fileRef).includes('/')?String(fileRef):(noteRel.split('/')[0]+'/'+base);
+    if(pages['note:'+fileRel]&&confirm('Dosya kasada duruyor. Tamamen silinsin mi?')) deleteActiveNote('note:'+fileRel);
+  }catch(e){ alert('Kaldırılamadı: '+e.message); }
+}
+async function deleteActiveNote(id){
+  if(!String(id).startsWith('note:')) return;
+  const rel=id.slice(5);
+  if(!confirm(`"${rel}" dosyasını kasadan silmek istediğine emin misin?`)) return;
+  try{
+    await api('/api/note?rel='+encodeURIComponent(rel),null,'DELETE');
+    delete noteCache[id];
+    delete pages[id];
+    checkedSources.delete(rel);
+    closeTab(id);
+    if(typeof rvCurrentRel!=='undefined'&&rvCurrentRel===rel&&viewerPrev) closeRightViewer();
+    await loadVault();
+    renderTree();
+    if(String(active).startsWith('note:')||openTabs.length) try{renderMain()}catch(e){}
+    toast(`🗑 Silindi: ${rel}`);
+  }catch(e){ alert('Silinemedi: '+e.message); }
+}
+
+/* ---------- Sağ Panel: Gerçek Sayfa & Kasa Özellikleri ---------- */
+function updateRightProps(){
+  const host=$('#propsContent'); if(!host) return;
+  if(String(active).startsWith('note:')){
+    const rel=active.slice(5);
+    const p=pages[active]||{t:rel,folder:'Kasa',ext:'.md'};
+    if((p.ext||'').toLowerCase()==='.pdf'){
+      const info=pdfInfoCache[active];
+      const inLinks=backlinksMap[active]||[];
+      host.innerHTML=`
+        <div class="src" style="margin:0"><span>Kasa</span><b class="mono" style="color:var(--cu)">${p.folder||'—'}</b></div>
+        <div class="src" style="margin:0"><span>PDF Dosyası</span><b class="mono" style="font-size:11px">${rel}</b></div>
+        <div class="src" style="margin:0"><span>Boyut &amp; Sayfa</span><b class="mono">${info?`${info.pages} sayfa · ${info.size_kb} KB`:'Okunuyor…'}</b></div>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button class="hb" style="flex:1" onclick="togglePdfDrawer('${active}','text')">🔍 Metin &amp; OCR</button>
+          <button class="hb" style="flex:1" onclick="togglePdfDrawer('${active}','scratch')">✎ Not Tut</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:4px">
+          <button class="hb" style="flex:1" onclick="dockDocToRightAndReturn('${active}')">📌 Sağ Panele Al</button>
+          <button class="hb" style="flex:1" onclick="printPdfFrame('${rel}')">🖨 Yazdır</button>
+        </div>
+        <div class="ph" style="padding:10px 0 2px"><span>Buraya Bağlananlar (${inLinks.length})</span></div>
+        ${inLinks.length?inLinks.map(x=>`<div class="ti" onclick="openPage('${x.id}')">↖ ${x.title}</div>`).join(''):'<div style="color:var(--mut);font-size:12px;padding:2px 6px">Geri bağlantı yok</div>'}
+      `;
+      return;
+    }
+    const n=noteCache[active];
+    const txt=n&&n.content?n.content:'';
+    const words=txt.trim()?txt.trim().split(/\s+/).length:0;
+    const lines=txt?txt.split('\n').length:0;
+    const readMin=Math.max(1,Math.ceil(words/180));
+    const headings=[...txt.matchAll(/^(#{1,3})\s+(.+)$/gm)].map(m=>({lvl:m[1].length,t:m[2].replace(/[*_`]/g,'').trim()}));
+    const outLinks=[...txt.matchAll(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g)].map(m=>resolveWiki(m[0].slice(2,-2))).filter(x=>x.id);
+    const uniqOut=[]; outLinks.forEach(x=>{if(!uniqOut.some(u=>u.id===x.id))uniqOut.push(x);});
+    const inLinks=backlinksMap[active]||[];
+
+    host.innerHTML=`
+      <div class="src" style="margin:0"><span>Kasa</span><b class="mono" style="color:var(--cu)">${p.folder||'—'}</b></div>
+      <div class="src" style="margin:0"><span>Dosya</span><b class="mono" style="font-size:11px">${rel}</b></div>
+      <div class="src" style="margin:0"><span>İstatistik</span><b class="mono">${words} kelime · ${lines} satır (~${readMin} dk)</b></div>
+      <div style="display:flex;gap:6px;margin-top:4px">
+        <button class="hb" style="flex:1" onclick="window.print()">🖨 A4 Yazdır</button>
+        <button class="hb" style="flex:1" onclick="openNewNoteModal('${p.kasa||''}')">＋ Yeni Not</button>
+      </div>
+      ${headings.length?`<div class="ph" style="padding:10px 0 2px"><span>İçindekiler (${headings.length})</span></div>`+
+        headings.slice(0,14).map(h=>`<div class="ti" style="padding-left:${(h.lvl-1)*10+6}px;font-size:12px" onclick="scrollToHeading('${h.t.replace(/'/g,"\\'")}')">§ ${h.t}</div>`).join(''):''}
+      <div class="ph" style="padding:10px 0 2px"><span>Not İçi Bağlantılar (${uniqOut.length})</span></div>
+      ${uniqOut.length?uniqOut.map(x=>`<div class="ti" onclick="openPage('${x.id}')">↗ ${x.label}</div>`).join(''):'<div style="color:var(--mut);font-size:12px;padding:2px 6px">Bağlantı yok</div>'}
+      <div class="ph" style="padding:10px 0 2px"><span>Buraya Bağlananlar (${inLinks.length})</span></div>
+      ${inLinks.length?inLinks.map(x=>`<div class="ti" onclick="openPage('${x.id}')">↖ ${x.title}</div>`).join(''):'<div style="color:var(--mut);font-size:12px;padding:2px 6px">Geri bağlantı yok</div>'}
+    `;
+  }else{
+    const kObj=kasalarData.find(k=>k.key===currentKasa);
+    host.innerHTML=`
+      <div class="src" style="margin:0"><span>Görünüm</span><b class="mono">${pg(active).t}</b></div>
+      <div class="src" style="margin:0"><span>Aktif Kasa</span><b class="mono" style="color:var(--cu)">${kObj?kObj.title:'Tüm Kasalar'}</b></div>
+      <div class="src" style="margin:0"><span>Seçili Kaynak</span><b class="mono">${checkedSources.size} kaynak AI'a bağlı</b></div>
+      <div class="ph" style="padding:10px 0 2px"><span>Hızlı Kasa Geçişi</span></div>
+      ${kasalarData.map(k=>`<div class="ti" onclick="enterKasa('${k.key}','write')">${k.icon} ${k.title} <small style="margin-left:auto;color:var(--mut)">${k.counts.total}</small></div>`).join('')}
+    `;
+  }
+}
+function scrollToHeading(text){
+  const view=$('#mdView'); if(!view) return;
+  const els=[...view.querySelectorAll('h1,h2,h3')];
+  const hit=els.find(el=>el.textContent.trim().toLowerCase().includes(text.toLowerCase()));
+  if(hit) hit.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+/* ---------- Ana alan & PDF/Belge Stüdyosu ---------- */
+const pdfState={};
+const pdfInfoCache={};
+function getPdfState(id){
+  if(!pdfState[id]){
+    pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:localStorage.getItem('agydesk_pdf_filter')||'normal',drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
+  }
+  return pdfState[id];
+}
+function buildPdfUrl(rel,st){
+  const z=st.zoom||'FitH';
+  const zoomParam=(z==='FitH'||z==='Fit')?`view=${z}`:`zoom=${z}`;
+  return `/api/raw/${encodeURI(rel)}#page=${st.page||1}&${zoomParam}`;
+}
+function updatePdfFrame(id,reloadHash=false){
+  const st=getPdfState(id);
+  const wrap=$('#pdfFrameWrap');
+  if(wrap){
+    wrap.classList.toggle('night',st.filter==='night');
+    wrap.classList.toggle('sepia',st.filter==='sepia');
+  }
+  $$('.pdf-flt-btn').forEach(b=>b.classList.toggle('on',b.dataset.flt===st.filter));
+  $$('.pdf-zm-btn').forEach(b=>b.classList.toggle('on',b.dataset.zm===String(st.zoom)));
+  const pgIn=$('#pdfPgIn');
+  if(pgIn&&document.activeElement!==pgIn) pgIn.value=st.page;
+  if(reloadHash){
+    const rel=id.slice(5);
+    const fr=$('#pdfMainFrame');
+    if(fr){
+      const nextUrl=buildPdfUrl(rel,st);
+      fr.src=nextUrl;
+    }
+  }
+}
+function setPdfFilter(id,flt){
+  const st=getPdfState(id);
+  st.filter=(st.filter===flt&&flt!=='normal')?'normal':flt;
+  localStorage.setItem('agydesk_pdf_filter',st.filter);
+  updatePdfFrame(id,false);
+}
+function setPdfZoom(id,zm){
+  const st=getPdfState(id);
+  st.zoom=zm;
+  updatePdfFrame(id,true);
+}
+function stepPdfZoom(id,dir){
+  const st=getPdfState(id);
+  const steps=[75,90,100,115,125,150,175,200];
+  let cur=typeof st.zoom==='number'?st.zoom:100;
+  let idx=steps.findIndex(x=>x>=cur);
+  if(idx===-1) idx=steps.length-1;
+  idx=Math.max(0,Math.min(steps.length-1,idx+dir));
+  st.zoom=steps[idx];
+  updatePdfFrame(id,true);
+}
+function stepPdfPage(id,delta){
+  const st=getPdfState(id);
+  const maxP=st.totalPages||999;
+  st.page=Math.max(1,Math.min(maxP,(st.page||1)+delta));
+  updatePdfFrame(id,true);
+}
+function jumpPdfPage(id,val){
+  const st=getPdfState(id);
+  const maxP=st.totalPages||999;
+  const n=parseInt(val,10);
+  if(!isNaN(n)&&n>=1){
+    st.page=Math.min(maxP,n);
+    updatePdfFrame(id,true);
+  }
+}
+function togglePdfDrawer(id,mode){
+  const st=getPdfState(id);
+  st.drawer=(st.drawer===mode)?null:mode;
+  renderPdfDrawer(id);
+}
+function renderPdfDrawer(id){
+  const st=getPdfState(id);
+  const dr=$('#pdfDrawer');
+  if(!dr) return;
+  $$('.pdf-drw-btn').forEach(b=>b.classList.toggle('on',b.dataset.drw===st.drawer));
+  if(!st.drawer){
+    dr.classList.remove('open');
+    return;
+  }
+  dr.classList.add('open');
+  const rel=id.slice(5);
+  const p=pages[id]||{t:rel,kasa:''};
+  const info=pdfInfoCache[id];
+  if(st.drawer==='text'){
+    const pgs=info&&info.pages_text?info.pages_text:[];
+    dr.innerHTML=`
+      <div class="pdf-drawer-head">
+        <span>🔍 PDF Metin &amp; Formül İnceleyici</span>
+        <div style="display:flex;gap:4px">
+          ${info&&info.full_text?`<button class="hb" style="padding:2px 7px;font-size:10.5px" onclick="convertPdfToMdNote('${id}')" title="Çıkarılan metni yeni bir Markdown ders notuna dönüştür">📝 Nota Dönüştür</button>`:''}
+          <button class="hb" style="padding:2px 6px;font-size:10.5px" onclick="togglePdfDrawer('${id}',null)">✕</button>
+        </div>
+      </div>
+      <div class="pdf-drawer-body">
+        ${!info?`<div style="color:var(--mut)"><span class="spin"></span> PDF sayfaları taranıyor…</div>`:
+          (info.scanned?`<div class="pdf-pg-card">⚠ Bu PDF taranmış görsel (el yazısı / kamera taraması) içeriyor. Doğrudan metin katmanı bulunamadı ancak sağdaki <b>AI Asistanı</b> veya <b>Skill</b> araçlarıyla analiz edebilirsin.</div>`:
+          pgs.filter(x=>x.text).map(x=>`
+            <div class="pdf-pg-card">
+              <div class="phdr">
+                <span style="cursor:pointer" onclick="jumpPdfPage('${id}',${x.page})" title="PDF'de bu sayfaya git">📄 Sayfa ${x.page} ↗</span>
+                <div style="display:flex;gap:4px">
+                  <button class="hb" style="padding:1px 6px;font-size:10px" onclick="navigator.clipboard.writeText(decodeURIComponent('${encodeURIComponent(x.text)}'));toast('✓ Sayfa ${x.page} metni kopyalandı')">⧉ Kopyala</button>
+                  <button class="hb" style="padding:1px 6px;font-size:10px" onclick="askAiAboutPdfPage('${id}',${x.page})">◆ AI'a Sor</button>
+                </div>
+              </div>
+              <div style="white-space:pre-wrap;font-family:var(--sans);max-height:180px;overflow:auto">${x.text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+            </div>
+          `).join(''))}
+      </div>`;
+  }else if(st.drawer==='scratch'){
+    dr.innerHTML=`
+      <div class="pdf-drawer-head">
+        <span>✎ Hızlı Çalışma &amp; Okuma Notu</span>
+        <div style="display:flex;gap:4px">
+          <button class="btn" style="padding:2px 8px;font-size:10.5px" onclick="savePdfScratchAsNote('${id}')" title="Bu çalışma notunu kasaya gerçek Markdown notu olarak kaydet">💾 Kasaya Not Olarak Kaydet</button>
+          <button class="hb" style="padding:2px 6px;font-size:10.5px" onclick="togglePdfDrawer('${id}',null)">✕</button>
+        </div>
+      </div>
+      <div class="pdf-drawer-body">
+        <div style="font-size:11.5px;color:var(--mut)">PDF'i okurken çıkardığın formülleri, önemli noktaları veya soruları buraya not al (otomatik saklanır):</div>
+        <textarea class="pdf-scratch" id="pdfScratchArea" placeholder="# ${p.t} — Çalışma Notlarım\n\n- Kritik formül: $...$\n- Hoca vurgusu: ...">${(st.scratch||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+      </div>`;
+    const ta=$('#pdfScratchArea');
+    if(ta){
+      ta.oninput=e=>{
+        st.scratch=e.target.value;
+        localStorage.setItem('agydesk_scratch_'+id,st.scratch);
+      };
+      ta.focus();
+    }
+  }
+}
+async function convertPdfToMdNote(id){
+  const rel=id.slice(5);
+  const p=pages[id]||{t:rel,kasa:''};
+  const info=pdfInfoCache[id];
+  if(!info||!info.full_text){ toast('⚠ Bu PDF dosyasında metin katmanı bulunamadı'); return; }
+  const kasa=p.kasa||(rel.includes('/')?rel.split('/')[0]:(currentKasa!=='all'?currentKasa:'Difransiyel_Denklemler'));
+  const title=`${p.t.replace(/\.pdf$/i,'')} (Çıkarılmış Not)`;
+  const content=`# ${title}\n\n> [!NOTE] **Kaynak PDF Bağlantısı**\n> Bu not ![[${rel}]] dosyasından AgyDesk PDF Stüdyosu ile çıkarılmıştır.\n\n${info.full_text}\n`;
+  try{
+    const res=await api('/api/note/create',{kasa,title,content});
+    await loadVault();
+    openPage(res.id);
+    toast(`📝 "${title}" oluşturuldu ve açıldı`,res.id);
+  }catch(e){ alert('Not oluşturulamadı: '+e.message); }
+}
+async function savePdfScratchAsNote(id){
+  const st=getPdfState(id);
+  const rel=id.slice(5);
+  const p=pages[id]||{t:rel,kasa:''};
+  const txt=(st.scratch||'').trim();
+  if(!txt){ toast('⚠ Kaydedilecek not metni boş'); return; }
+  const kasa=p.kasa||(rel.includes('/')?rel.split('/')[0]:(currentKasa!=='all'?currentKasa:'Difransiyel_Denklemler'));
+  const baseTitle=p.t.replace(/\.[^.]+$/,'');
+  const title=`${baseTitle} — Okuma Notları`;
+  const content=`# ${title}\n\n> **İlgili Kaynak:** ![[${rel}]]\n\n${txt}\n`;
+  try{
+    const res=await api('/api/note/create',{kasa,title,content});
+    await loadVault();
+    openRightViewer(rel,p.t);
+    openPage(res.id);
+    toast(`💾 Çalışma notun kasaya kaydedildi (PDF sağ panele alındı!)`,res.id);
+  }catch(e){ alert('Kaydedilemedi: '+e.message); }
+}
+function askAiAboutPdfPage(id,pgNum){
+  const info=pdfInfoCache[id];
+  const pgObj=info&&info.pages_text?info.pages_text.find(x=>x.page===pgNum):null;
+  const snippet=pgObj&&pgObj.text?pgObj.text.slice(0,1500):'';
+  rtab('ai');
+  aiSend('side_ai',`Açık olan PDF'in ${pgNum}. sayfasındaki şu içeriği adım adım açıkla ve sınav için kritik noktalarını vurgula:\n\n${snippet}`);
+}
+function dockDocToRightAndReturn(id){
+  const rel=id.slice(5);
+  const p=pages[id]||{t:rel};
+  const otherTab=openTabs.find(t=>t!==id&&t!=='kasalar')||firstVaultTab();
+  openTabs=openTabs.filter(t=>t!==id);
+  if(!openTabs.length) openTabs=[otherTab];
+  active=openTabs[openTabs.length-1];
+  renderTabs(); renderTree(); renderMain();
+  openRightViewer(rel,p.t);
+  toast('📌 Belge sağ panele sabitlendi, sol/orta alanda notunla yan yana çalışabilirsin');
+}
+function printPdfFrame(rel){
+  const fr=$('#pdfMainFrame');
+  if(fr&&fr.contentWindow){
+    try{ fr.contentWindow.focus(); fr.contentWindow.print(); return; }catch(e){}
+  }
+  window.print();
+}
+
+async function renderVaultNote(m,id){
+  const rel=id.slice(5);
+  const p=pages[id]||{t:decodeURIComponent(rel.split('/').pop()||rel),folder:'Obsidian Kasası',ext:(rel.includes('.')?rel.slice(rel.lastIndexOf('.')).toLowerCase():'.md')};
+  const ext=(p.ext||(rel.includes('.')?rel.slice(rel.lastIndexOf('.')).toLowerCase():'.md')).toLowerCase();
+
+  if(ext==='.pdf'){
+    const st=getPdfState(id);
+    const isSrcChecked=checkedSources.has(rel);
+    const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <button class="hb" onclick="openKasalarHome()" title="Kasalar Ana Ekranına Dön">❖ Kasalar</button>
+        <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}">
+          <span>📄</span><b>${p.t}</b>
+        </div>
+        <span class="pdf-badge" id="pdfMetaBadge">${st.totalPages?`${st.totalPages} sayfa`:'PDF Stüdyosu'}</span>
+
+        <div class="pdf-grp" title="Sayfa Gezgini">
+          <button onclick="stepPdfPage('${id}',-1)" title="Önceki Sayfa">◀</button>
+          <input class="pg-in" id="pdfPgIn" type="number" min="1" value="${st.page}" onchange="jumpPdfPage('${id}',this.value)" title="Sayfa numarası yazıp Enter'a bas">
+          <span id="pdfPgTotal">/ ${st.totalPages||'?'}</span>
+          <button onclick="stepPdfPage('${id}',1)" title="Sonraki Sayfa">▶</button>
+        </div>
+
+        <div class="pdf-grp" title="Yakınlaştırma &amp; Sığdırma">
+          <button onclick="stepPdfZoom('${id}',-1)" title="Uzaklaştır">−</button>
+          <button class="pdf-zm-btn ${st.zoom==='FitH'?'on':''}" data-zm="FitH" onclick="setPdfZoom('${id}','FitH')" title="Genişliğe Sığdır">↔ Genişlik</button>
+          <button class="pdf-zm-btn ${st.zoom==='Fit'?'on':''}" data-zm="Fit" onclick="setPdfZoom('${id}','Fit')" title="Tam Sayfa Sığdır">⊡ Sayfa</button>
+          <button onclick="stepPdfZoom('${id}',1)" title="Yakınlaştır">＋</button>
+        </div>
+
+        <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
+          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')" title="Orijinal Beyaz Kağıt">☀ Orijinal</button>
+          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')" title="Gece Okuma Modu (Göz Yormayan Karanlık Filtre)">🌙 Gece</button>
+          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')" title="Sıcak Sepya Kitap Modu">📜 Sepya</button>
+        </div>
+
+        <span style="flex:1"></span>
+
+        <div class="pdf-grp">
+          <button class="pdf-drw-btn ${st.drawer==='text'?'on':''}" data-drw="text" onclick="togglePdfDrawer('${id}','text')" title="PDF içindeki metinleri ve formülleri sayfa sayfa incele / kopyala">🔍 Metin &amp; OCR</button>
+          <button class="pdf-drw-btn ${st.drawer==='scratch'?'on':''}" data-drw="scratch" onclick="togglePdfDrawer('${id}','scratch')" title="PDF okurken yan tarafta hızlı çalışma notu tut">✎ Not Tut</button>
+        </div>
+
+        <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()" title="Bu PDF'i AI kaynaklarına bağla/çıkar">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
+        <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')" title="Bu PDF'i sağdaki AI asistanına özetlet">✨ AI Özetle</button>
+        <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')" title="Bu PDF'ten A4 Sınav Föyü çıkar">▤ Sınav Föyü</button>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Bu PDF'i sağ panele sabitleyip not sekmene geri dön (Yan Yana Çalışma)">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="toggleZen()" title="Kenar panellerini gizle / Tam odak modu (Ctrl+.)">◐ Odak</button>
+        <button class="hb" onclick="printPdfFrame('${rel}')" title="Yazdır">🖨</button>
+      </div>
+      <div class="pdf-stage">
+        <div class="pdf-frame-wrap ${filtCls}" id="pdfFrameWrap">
+          <iframe id="pdfMainFrame" src="${buildPdfUrl(rel,st)}"></iframe>
+        </div>
+        <div class="pdf-side-drawer ${st.drawer?'open':''}" id="pdfDrawer"></div>
+      </div>
+    </div>`;
+    if(st.drawer) renderPdfDrawer(id);
+    if(!pdfInfoCache[id]){
+      api('/api/pdf_info?rel='+encodeURIComponent(rel)).then(info=>{
+        pdfInfoCache[id]=info;
+        st.totalPages=info.pages||0;
+        const b=$('#pdfMetaBadge');
+        if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
+        const pt=$('#pdfPgTotal');
+        if(pt) pt.textContent=`/ ${info.pages||'?'}`;
+        if(st.drawer==='text') renderPdfDrawer(id);
+        updateRightProps();
+      }).catch(()=>{});
+    }else{
+      const info=pdfInfoCache[id];
+      st.totalPages=info.pages||0;
+      const b=$('#pdfMetaBadge');
+      if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
+      const pt=$('#pdfPgTotal');
+      if(pt) pt.textContent=`/ ${info.pages||'?'}`;
+    }
+    updateRightProps();
+    return;
+  }
+
+  if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)){
+    const st=getPdfState(id);
+    if(typeof st.imgZoom!=='number') st.imgZoom=100;
+    if(typeof st.imgRot!=='number') st.imgRot=0;
+    if(typeof st.imgInv!=='boolean') st.imgInv=false;
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
+        <div class="pdf-title-wrap"><span>🖼</span><b>${p.t}</b></div>
+        <span class="pdf-badge">${p.folder||''}</span>
+        <div class="pdf-grp">
+          <button onclick="const s=getPdfState('${id}');s.imgZoom=Math.max(25,(s.imgZoom||100)-25);renderMain()">−</button>
+          <span>%${st.imgZoom}</span>
+          <button onclick="const s=getPdfState('${id}');s.imgZoom=Math.min(400,(s.imgZoom||100)+25);renderMain()">＋</button>
+          <button onclick="const s=getPdfState('${id}');s.imgZoom=100;s.imgRot=0;s.imgInv=false;renderMain()">Sıfırla</button>
+        </div>
+        <div class="pdf-grp">
+          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)-90)%360;renderMain()" title="Sola Döndür">↺ 90°</button>
+          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)+90)%360;renderMain()" title="Sağa Döndür">↻ 90°</button>
+          <button class="${st.imgInv?'on':''}" onclick="const s=getPdfState('${id}');s.imgInv=!s.imgInv;renderMain()" title="Renkleri Ters Çevir (Şema/Tahta İnceleme)">◑ Kontrast</button>
+        </div>
+        <span style="flex:1"></span>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Görseli sağ panele sabitleyip nota dön">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="toggleZen()">◐ Odak</button>
+      </div>
+      <div class="img-studio">
+        <img src="/api/raw/${encodeURI(rel)}" style="transform:scale(${(st.imgZoom||100)/100}) rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
+      </div>
+    </div>`;
+    updateRightProps();
+    return;
+  }
+
+  if(/\.(docx?)$/i.test(ext)){
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
+        <div class="pdf-title-wrap"><span>📘</span><b>${p.t}</b></div>
+        <span class="pdf-badge">Word Belgesi · ${p.folder||''}</span>
+        <span style="flex:1"></span>
+        <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')">✨ AI Özetle</button>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="window.print()">🖨 A4 Yazdır</button>
+      </div>
+      <div style="flex:1;overflow:auto;padding:8px 0"><div class="doc" id="docxMainBody"><span class="spin"></span> Word belgesi okunuyor…</div></div>
+    </div>`;
+    try{
+      const d=await api('/api/docx?rel='+encodeURIComponent(rel));
+      const host=$('#docxMainBody');
+      if(host) host.innerHTML=`<h1>${p.t}</h1><div class="meta"><span>📘 ${p.folder||''}</span><span>·</span><span>${rel}</span></div><div class="rview-docx" style="padding:0">${d.html}</div>`;
+    }catch(e){
+      const host=$('#docxMainBody');
+      if(host) host.innerHTML=`<h1>Belge okunamadı</h1><p>${e.message}</p>`;
+    }
+    updateRightProps();
+    return;
+  }
+
+  if(ext==='.html'){
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
+        <div class="pdf-title-wrap"><span>${p.i||'🌐'}</span><b>${p.t}</b></div>
+        <span class="pdf-badge">${p.folder} · ${rel}</span>
+        <span style="flex:1"></span>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="toggleZen()">◐ Odak</button>
+      </div>
+      <iframe src="/api/raw/${encodeURI(rel)}" style="flex:1;border:0;width:100%;background:#fff"></iframe>
+    </div>`;
+    return;
+  }
+  if(!noteCache[id]){
+    m.innerHTML=`<div class="doc"><div class="meta"><span class="spin"></span> Not yükleniyor: ${rel}…</div></div>`;
+    try{ noteCache[id]=await api('/api/note?rel='+encodeURIComponent(rel)); }
+    catch(e){ m.innerHTML=`<div class="doc"><h1>Not okunamadı</h1><p>${e.message}</p></div>`; return; }
+  }
+  const n=noteCache[id];
+  updateRightProps();
+  const bodyHtml=editMode
+    ?`<textarea class="md-ed" id="mdEd">${n.content.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>`
+    :`<div id="mdView">${mdToHtml(n.content,n.rel.includes('/')?n.rel.slice(0,n.rel.lastIndexOf('/')):'')}</div>`;
+  m.innerHTML=`<div class="doc" id="doc">
+    <div class="meta">
+      <span class="link" onclick="openKasalarHome()" title="Kasalar Ana Ekranına Dön">❖ Kasalar</span><span>›</span>
+      <span class="link" onclick="enterKasa('${n.kasa||p.kasa||''}','write')">📘 ${n.folder}</span><span>·</span><span>${n.rel}</span>
+      <span style="flex:1"></span>
+      <button class="btn" style="padding:4px 11px;font-size:12px" onclick="triggerAssetUpload('${id}')" title="Bilgisayardan bu nota belge (PDF, Word) veya fotoğraf ekle">📎 Belge / Fotoğraf Ekle</button>
+      <button class="hb" onclick="openNewNoteModal('${n.kasa||p.kasa||''}')" title="Bu kasaya yeni not ekle (Alt+N)">＋ Yeni Not</button>
+      <button class="hb" onclick="toggleEditNote('${id}')">${editMode?'👁 Önizleme':'✎ Düzenle'}</button>
+      ${editMode?`<button class="btn" style="padding:4px 10px;font-size:12px" onclick="saveActiveNote('${id}')">💾 Kaydet</button>`:''}
+      <button class="hb" onclick="window.print()" title="Canon G3080 A4 İki Sütun Sınav Föyü Yazdır">🖨 A4 Yazdır</button>
+      <button class="hb stop" onclick="deleteActiveNote('${id}')" title="Notu Sil">🗑</button>
+    </div>
+    ${bodyHtml}
+    <div class="drop" id="drop" onclick="triggerAssetUpload('${id}')" style="cursor:pointer">📎 <b>Bilgisayardan Belge / Fotoğraf Ekle (Tıkla veya Sürükle-Bırak)</b> · PDF, Word, Görsel veya sağdaki <b>Skill</b> kartlarını buraya bırak</div>
+    <div id="outs"></div>
+  </div>`;
+  wireDrop();
+  wireNoteImages(m,id);
+  if(!editMode&&window.mermaid){
+    runMermaid('#mdView .mermaid');
+  }
+}
+/* ---------- Not içine görsel / PDF / DOCX sürükle-bırak & yapıştır ---------- */
+const isUploadable=f=>f&&(f.type.startsWith('image/')||/\.(pdf|docx?|pptx?|xlsx?|csv|txt|md|html|png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
+async function uploadImages(files,rel){
+  const out=[];
+  for(const f of files){
+    if(!isUploadable(f))continue;
+    const r=await fetch(`/api/upload?name=${encodeURIComponent(f.name||'gorsel.png')}&note=${encodeURIComponent(rel)}`,{method:'POST',body:f});
+    if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
+    out.push(await r.json());
+  }
+  return out;
+}
+async function dropImagesToNote(id,files){
+  const rel=id.slice(5);
+  try{
+    const items=await uploadImages(files,rel); if(!items.length)return;
+    const embeds=items.map(x=>x.embed);
+    const block='\n\n'+embeds.join('\n\n')+'\n\n';
+    if(editMode&&$('#mdEd')){ const ed=$('#mdEd'),p=ed.selectionStart; ed.setRangeText(block,p,p,'end'); ed.focus(); toast(`📎 ${embeds.length} dosya eklendi (Kaydet'e bas)`,id); }
+    else{ const n=noteCache[id]; noteCache[id]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+block}); await loadVault(); renderMain(); toast(`📎 ${embeds.length} dosya nota eklendi (Önizlemek için çift tıkla)`,id); }
+  }catch(e){ alert('Dosya eklenemedi: '+e.message); }
+}
+const hasFiles=e=>e.dataTransfer&&[...e.dataTransfer.types].includes('Files');
+function wireNoteImages(m,id){
+  m.ondragover=e=>{ if(hasFiles(e)){e.preventDefault();m.classList.add('imgdrop');} };
+  m.ondragleave=e=>{ if(e.target===m)m.classList.remove('imgdrop'); };
+  m.ondrop=e=>{ m.classList.remove('imgdrop'); if(hasFiles(e)){e.preventDefault(); dropImagesToNote(id,[...e.dataTransfer.files]);} };
+}
+window.addEventListener('dragover',e=>{ if(hasFiles(e))e.preventDefault(); });
+window.addEventListener('drop',e=>{ if(hasFiles(e))e.preventDefault(); });
+window.addEventListener('paste',e=>{
+  if(!String(active).startsWith('note:'))return;
+  const files=[...(e.clipboardData?e.clipboardData.files:[])].filter(f=>f.type.startsWith('image/'));
+  if(files.length){e.preventDefault(); dropImagesToNote(active,files);}
+});
+function toggleEditNote(id){ editMode=!editMode; renderMain(); }
+async function saveActiveNote(id){
+  const ed=$('#mdEd'); if(!ed)return;
+  const rel=id.slice(5);
+  try{
+    noteCache[id]=await api('/api/note',{rel,content:ed.value});
+    editMode=false;
+    await loadVault();
+    toast('💾 Not diske kaydedildi: '+rel, id);
+    renderMain();
+  }catch(e){ alert('Kaydetme hatası: '+e.message); }
+}
+function renderBlankTab(m){
+  const lk='display:block;color:var(--cu);cursor:pointer;padding:5px 0;font-size:14px';
+  m.innerHTML=`<div style="height:100%;min-height:60vh;display:flex;align-items:center;justify-content:center">
+    <div style="text-align:left;min-width:240px">
+      <div style="font-size:12px;color:var(--mut);margin-bottom:10px">Sol panelden bir dosya seç · orta tık: yeni sekme</div>
+      <span style="${lk}" onclick="openNewNoteModal()">Yeni not oluştur (Alt+N)</span>
+      <span style="${lk}" onclick="openPal()">Dosyaya git (Ctrl+K)</span>
+      <span style="${lk}" onclick="openPage('kasalar')">Kasalar ana ekranı</span>
+      <span style="${lk}" onclick="closeTab(active)">Sekmeyi kapat (Ctrl+W)</span>
+    </div></div>`;
+}
+function renderMain(){
+  const m=$('#main');
+  if(active==='kasalar') renderKasalarHome(m);
+  else if(isBlank(active)) renderBlankTab(m);
+  else if(active.startsWith('note:')) renderVaultNote(m,active);
+  else if(active==='studychat') renderStudyChat(m);
+  else if(active==='cal') renderCal(m);
+  else if(active==='trafo') renderTrafoLab(m);
+  else if(isAI(active)) renderAI(m);
+  else renderSim(m);
+}
+
+const SK={
+ ozet:{h:'Özet Çıkar',prompt:'Açık olan notu ve seçili kaynakları maddeler halinde, sınavda çıkabilecek kritik formülleri ve kavramları vurgulayarak özetle.',r:['yerel/hızlı','özet']},
+ fisle:{h:'Sınav Föyü Hazırla (A4)',prompt:'Açık olan nottan A4 iki sütun sığacak yoğunlukta, tüm temel formülleri, birimleri ve hoca tuzak sorularını içeren eksiksiz bir Sınav Çalışma Föyü hazırla.',r:['sınav föyü','A4 çift yüz']},
+ spice:{h:'Devre → SPICE & Analiz',prompt:'Açık olan nottaki devreyi analiz et, eşdeğer devre parametrelerini, transfer fonksiyonunu ve SPICE netlist taslağını çıkar.',r:['devre','SPICE']},
+ teardown:{h:'Sistem & Mekanizma Analizi',prompt:'Bu konudaki fiziksel/elektriksel yapıyı katmanlarına ayırarak çalışma prensibini ve arıza/kayıp mekanizmalarını açıkla.',r:['derin analiz','mimari']},
+ whisper:{h:'Ders Notu Yapılandır',prompt:'Bu ham ders/deney içeriğini temiz başlıklar, tablolar ve LaTeX formüllerle yapılandırılmış ders notuna dönüştür.',r:['yapılandırma','not']},
+ pcb:{h:'Donanım & Шema Taslağı',prompt:'Bu devre/sistem için gerekli donanım bloklarını, pin/bağlantı kurallarını ve koruma elemanlarını listele.',r:['donanım','şema']}
+};
+function runSkill(k){
+  const s=SK[k]; if(!s)return;
+  if(curMode==='study'){ studioPendingTitle=s.h; if(active!=='studychat') openPage('studychat'); }
+  rtab('ai');
+  const promptText=s.prompt||(`/${k} — aktif not ve seçili kaynaklar üzerinde uygula.`);
+  aiSend('side_ai',promptText,k);
+}
+function wireDrop(){
+  const dz=$('#drop'); if(!dz)return;
+  ['dragenter','dragover'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('hot')}));
+  dz.addEventListener('dragleave',()=>dz.classList.remove('hot'));
+  dz.addEventListener('drop',ev=>{if(ev.dataTransfer.files.length)return;ev.preventDefault();dz.classList.remove('hot');runSkill(ev.dataTransfer.getData('text/plain'));});
+}
+
+/* ---------- Google Takvim Esinli Akademik Takvim & Planlama Stüdyosu ---------- */
+let calEvents=[];
+let calLoaded=false;
+const GCAL_MONTHS=['Ocak','Şubat','Mart','Nisan','Mayıs','Haziran','Temmuz','Ağustos','Eylül','Ekim','Kasım','Aralık'];
+const GCAL_MONTHS_SHORT=['Oca','Şub','Mar','Nis','May','Haz','Tem','Ağu','Eyl','Eki','Kas','Ara'];
+const GCAL_DAYS=['Pzt','Sal','Çar','Per','Cum','Cmt','Paz'];
+const GCAL_DAYS_FULL=['Pazar','Pazartesi','Salı','Çarşamba','Perşembe','Cuma','Cumartesi'];
+
+const GCAL_KINDS={
+  exam:{id:'exam',label:'Sınav / Vize / Quiz',icon:'🔴',solid:'#d93025',color:'#ff6b6b',bg:'#ff6b6b22',bd:'#ff6b6b88'},
+  lab:{id:'lab',label:'Lab & Deney',icon:'⚡',solid:'#188038',color:'#52b788',bg:'#52b78824',bd:'#52b78888'},
+  task:{id:'task',label:'Ödev & Proje Teslimi',icon:'📘',solid:'#e37400',color:'#e0a458',bg:'#e0a45824',bd:'#e0a45888'},
+  study:{id:'study',label:'Derin Çalışma / Pomodoro',icon:'🎯',solid:'#1a73e8',color:'#7aa2f7',bg:'#7aa2f724',bd:'#7aa2f788'},
+  lecture:{id:'lecture',label:'Ders / Amfi',icon:'🏛',solid:'#8e24aa',color:'#bb9af7',bg:'#bb9af720',bd:'#bb9af788'}
+};
+const isLightTheme=()=>typeof curTheme!=='undefined'&&(curTheme==='mono-light'||curTheme==='eink'||curTheme==='sepia');
+const gcalInk=k=>(isLightTheme()?k.solid:k.color);
+
+// Sabit Haftalık EEM Ders Programı (Pzt=1 .. Cum=5)
+const EEM_WEEKLY_SCHEDULE=[];
+
+const SEED_META_DEFAULTS={
+  3:{start:'19:00',end:'21:00',loc:'Çalışma Masası',desc:'Blok diyagram indirgeme, Mason kazanç formülü ve Routh-Hurwitz soru çözümü.'},
+  6:{start:'13:30',end:'16:00',loc:'Elektrik Makineleri Lab',desc:'3 fazlı transformatör bağlantı grupları (Dy11/Yy0), boşta ve kısa devre deney föyü.'},
+  9:{start:'15:00',end:'17:00',loc:'Proje Atölyesi',desc:'İHA itki sistemi, BLDC motor-ESC seçimi ve güç bütçesi ara raporu teslimi.'},
+  12:{start:'14:00',end:'16:00',loc:'D-204 / Kütüphane',desc:'Townsend & Streamer mekanizmaları, Paschen yasası ve kısmi deşarj (PD) not tekrarı.'},
+  18:{start:'10:00',end:'12:00',loc:'Amfi B-102',desc:'VİZE SINAVI: Transfer fonksiyonu, Routh-Hurwitz kararlılık kriteri, kararlı hal hatası ve köklerin yer eğrisi.'},
+  20:{start:'14:00',end:'16:00',loc:'Amfi A-201',desc:'VİZE SINAVI: Gazlarda/sıvılarda/katılarda delinme, küre elektrotlar, darbe gerilimi üreteçleri.'},
+  24:{start:'10:30',end:'12:00',loc:'EM Laboratuvarı',desc:'Tek fazlı ve 3 fazlı transformatör eşdeğer devre, fazör diyagramı ve verim/regülasyon sözlü sınavı.'}
+};
+
+const GCAL={
+  view:localStorage.getItem('agydesk_gcal_view')||'month', // 'day' | 'week' | 'month' | 'agenda' | 'semester'
+  cursor:gcalTodayISO(), // YYYY-MM-DD
+  miniMonth:null, // Date object for mini calendar month
+  sideOpen:localStorage.getItem('agydesk_gcal_side')!=='0',
+  showSchedule:localStorage.getItem('agydesk_gcal_sched')!=='0',
+  search:'',
+  agendaFilter:'all', // 'all' | 'exam' | 'pending' | 'done'
+  kasaFilter:'all',
+  kinds:{exam:true,lab:true,task:true,study:true,lecture:true},
+  editingId:null,
+  pomo:{sec:25*60,total:25*60,running:false,timer:null,mode:'25 dk Odak',taskTitle:'Yüksek Gerilim & Kontrol Vize Hazırlığı'}
+};
+
+function gcalPad(n){ return String(n).padStart(2,'0'); }
+function gcalToISO(d){ return `${d.getFullYear()}-${gcalPad(d.getMonth()+1)}-${gcalPad(d.getDate())}`; }
+function gcalFromISO(s){
+  const [y,m,d]=(s||'2026-11-12').split('-').map(Number);
+  return new Date(y||2026,(m||11)-1,d||12,12,0,0);
+}
+function gcalTodayISO(){
+  const now=new Date();
+  return gcalToISO(now);
+}
+function gcalDowMon(d){
+  // Pazartesi=0 .. Pazar=6
+  return (d.getDay()+6)%7;
+}
+function gcalStartOfWeek(d){
+  const c=new Date(d.getFullYear(),d.getMonth(),d.getDate(),12,0,0);
+  c.setDate(c.getDate()-gcalDowMon(c));
+  return c;
+}
+function gcalAddDays(d,n){
+  const c=new Date(d.getFullYear(),d.getMonth(),d.getDate(),12,0,0);
+  c.setDate(c.getDate()+n);
+  return c;
+}
+function gcalMin(hhmm){
+  if(!hhmm||!hhmm.includes(':')) return 9*60;
+  const [h,m]=hhmm.split(':').map(Number);
+  return (isNaN(h)?9:h)*60+(isNaN(m)?0:m);
+}
+function gcalFmtMin(m){
+  const c=Math.max(0,Math.min(23*60+59,Math.round(m)));
+  return `${gcalPad(Math.floor(c/60))}:${gcalPad(c%60)}`;
+}
+function gcalDiffDays(isoA,isoB){
+  const a=gcalFromISO(isoA), b=gcalFromISO(isoB);
+  return Math.round((a-b)/(86400*1000));
+}
+function gcalKasaTitle(k){
+  if(!k||k==='all') return 'Genel Akademik';
+  const found=(window.kasalarData||[]).find(x=>x.key===k);
+  return found?found.title:k.replace(/_/g,' ');
+}
+
+function gcalFmtDateHuman(iso){
+  const d=gcalFromISO(iso);
+  return `${GCAL_DAYS_FULL[d.getDay()]}, ${d.getDate()} ${GCAL_MONTHS[d.getMonth()]}`;
+}
+
+function parseCalEvent(raw){
+  let meta={};
+  let kasaStr=raw.kasa||'';
+  if(kasaStr.trim().startsWith('{')){
+    try{ meta=JSON.parse(kasaStr); kasaStr=meta.kasa||''; }catch(e){}
+  }
+  const dayNum=Math.max(1,Math.min(31,Number(raw.day)||12));
+  const seedDef=SEED_META_DEFAULTS[dayNum]||{};
+  const kind=GCAL_KINDS[raw.kind]?raw.kind:(GCAL_KINDS[meta.kind]?meta.kind:'task');
+  const defStart=kind==='exam'?'10:00':kind==='lab'?'13:30':kind==='study'?'20:00':'15:00';
+  const defEnd=kind==='exam'?'12:00':kind==='lab'?'16:00':kind==='study'?'21:30':'16:30';
+  const date=meta.date||`2026-11-${gcalPad(dayNum)}`;
+  return {
+    id:raw.id,
+    day:dayNum,
+    date,
+    title:raw.title||'Etkinlik',
+    kind,
+    kasa:kasaStr||'',
+    start:meta.start||seedDef.start||defStart,
+    end:meta.end||seedDef.end||defEnd,
+    allDay:!!meta.allDay,
+    loc:meta.loc||seedDef.loc||(kind==='exam'?'Sınav Amfisi':kind==='lab'?'Laboratuvar':''),
+    desc:meta.desc||seedDef.desc||'',
+    guests:meta.guests||'',
+    meet:meta.meet||'',
+    repeat:meta.repeat||'Yinelenmez',
+    notify:meta.notify||'Bir gün önce şu saatte: 5pm bildir',
+    done:!!meta.done,
+    recurring:false
+  };
+}
+
+function packCalMeta(ev){
+  return JSON.stringify({
+    kasa:ev.kasa||'',
+    date:ev.date,
+    start:ev.start||'10:00',
+    end:ev.end||'11:30',
+    allDay:!!ev.allDay,
+    loc:ev.loc||'',
+    desc:ev.desc||'',
+    guests:ev.guests||'',
+    meet:ev.meet||'',
+    repeat:ev.repeat||'Yinelenmez',
+    notify:ev.notify||'Bir gün önce şu saatte: 5pm bildir',
+    done:!!ev.done,
+    kind:ev.kind||'task'
+  });
+}
+
+function getAllEventsForDate(isoDate){
+  const list=calEvents.filter(e=>e.date===isoDate && GCAL.kinds[e.kind]!==false);
+  if(GCAL.showSchedule && GCAL.kinds.lecture!==false){
+    const d=gcalFromISO(isoDate);
+    const dow=d.getDay(); // 0=Paz, 1=Pzt..6=Cmt
+    // Sadece akademik dönem ayları için haftalık dersleri üret
+    EEM_WEEKLY_SCHEDULE.filter(s=>s.dow===dow).forEach((s,idx)=>{
+      list.push({
+        id:`lec_${isoDate}_${idx}`,
+        day:d.getDate(),
+        date:isoDate,
+        title:s.title,
+        kind:'lecture',
+        kasa:s.kasa,
+        start:s.start,
+        end:s.end,
+        allDay:false,
+        loc:s.loc,
+        desc:s.desc,
+        done:false,
+        recurring:true
+      });
+    });
+  }
+  return list.filter(e=>{
+    if(GCAL.kasaFilter!=='all' && e.kasa!==GCAL.kasaFilter) return false;
+    if(GCAL.search){
+      const q=GCAL.search.toLowerCase();
+      const hay=`${e.title} ${e.loc||''} ${e.desc||''} ${gcalKasaTitle(e.kasa)}`.toLowerCase();
+      if(!hay.includes(q)) return false;
+    }
+    return true;
+  }).sort((a,b)=>gcalMin(a.start)-gcalMin(b.start));
+}
+
+async function loadCalEvents(force=false){
+  if(!calLoaded||force){
+    try{
+      const rows=await api('/api/calendar');
+      if(Array.isArray(rows)) calEvents=rows.map(parseCalEvent);
+      calLoaded=true;
+    }catch(e){
+      if(!calEvents.length){ calEvents=[]; }
+    }
+  }
+}
+
+document.addEventListener('click',()=>{const d=document.getElementById('gcalViewDd');if(d)d.classList.remove('open')});
+function gcalSetView(v){
+  GCAL.view=v;
+  localStorage.setItem('agydesk_gcal_view',v);
+  renderCal($('#main'),false);
+}
+function gcalToggleSide(){
+  GCAL.sideOpen=!GCAL.sideOpen;
+  localStorage.setItem('agydesk_gcal_side',GCAL.sideOpen?'1':'0');
+  const el=$('.gcal');
+  if(el) el.classList.toggle('no-side',!GCAL.sideOpen);
+}
+function gcalToggleSchedule(){
+  GCAL.showSchedule=!GCAL.showSchedule;
+  localStorage.setItem('agydesk_gcal_sched',GCAL.showSchedule?'1':'0');
+  renderCal($('#main'),false);
+  toast(GCAL.showSchedule?'🎓 Haftalık EEM ders programı katmanı açıldı':'🎓 Haftalık ders programı katmanı gizlendi');
+}
+function gcalGoToday(){
+  GCAL.cursor=gcalTodayISO();
+  GCAL.miniMonth=gcalFromISO(GCAL.cursor);
+  renderCal($('#main'),false);
+}
+function gcalStep(dir){
+  const d=gcalFromISO(GCAL.cursor);
+  if(GCAL.view==='day') d.setDate(d.getDate()+dir);
+  else if(GCAL.view==='week') d.setDate(d.getDate()+dir*7);
+  else if(GCAL.view==='month') d.setMonth(d.getMonth()+dir);
+  else if(GCAL.view==='agenda') d.setMonth(d.getMonth()+dir);
+  else if(GCAL.view==='semester') d.setMonth(d.getMonth()+dir*4);
+  GCAL.cursor=gcalToISO(d);
+  GCAL.miniMonth=new Date(d.getFullYear(),d.getMonth(),1,12,0,0);
+  renderCal($('#main'),false);
+}
+function gcalSelectDate(iso,switchView=null){
+  GCAL.cursor=iso;
+  GCAL.miniMonth=gcalFromISO(iso);
+  if(switchView) GCAL.view=switchView;
+  renderCal($('#main'),false);
+}
+function gcalStepMini(dir){
+  const m=GCAL.miniMonth||gcalFromISO(GCAL.cursor);
+  GCAL.miniMonth=new Date(m.getFullYear(),m.getMonth()+dir,1,12,0,0);
+  renderCal($('#main'),false);
+}
+function gcalToggleKind(k){
+  GCAL.kinds[k]=!(GCAL.kinds[k]!==false);
+  const el=document.querySelector(`.gcal-flt[data-kind="${k}"]`);
+  if(el){
+    el.classList.toggle('off',GCAL.kinds[k]===false);
+    renderCalStageOnly();
+    return;
+  }
+  renderCal($('#main'),false);
+}
+function gcalHeaderTitle(){
+  const d=gcalFromISO(GCAL.cursor);
+  if(GCAL.view==='day'){
+    return `${d.getDate()} ${GCAL_MONTHS[d.getMonth()]} ${d.getFullYear()} · ${GCAL_DAYS_FULL[d.getDay()]}`;
+  }
+  if(GCAL.view==='week'){
+    const s=gcalStartOfWeek(d), e=gcalAddDays(s,6);
+    if(s.getMonth()===e.getMonth()) return `${s.getDate()} – ${e.getDate()} ${GCAL_MONTHS[s.getMonth()]} ${s.getFullYear()}`;
+    return `${s.getDate()} ${GCAL_MONTHS_SHORT[s.getMonth()]} – ${e.getDate()} ${GCAL_MONTHS_SHORT[e.getMonth()]} ${e.getFullYear()}`;
+  }
+  if(GCAL.view==='semester'){
+    return `Güz – Kış Akademik Dönemi (${d.getFullYear()})`;
+  }
+  return `${GCAL_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function renderMiniCal(){
+  const m=GCAL.miniMonth||gcalFromISO(GCAL.cursor);
+  const y=m.getFullYear(), mo=m.getMonth();
+  const first=new Date(y,mo,1,12,0,0);
+  const startOffset=gcalDowMon(first);
+  const startDate=gcalAddDays(first,-startOffset);
+  const todayIso=gcalTodayISO();
+  let cells='';
+  GCAL_DAYS.forEach(dn=>{ cells+=`<div class="gmini-dh">${dn[0]}</div>`; });
+  for(let i=0;i<42;i++){
+    const cur=gcalAddDays(startDate,i);
+    const iso=gcalToISO(cur);
+    const isOther=cur.getMonth()!==mo;
+    const isToday=iso===todayIso;
+    const isSel=iso===GCAL.cursor;
+    const dayEvs=calEvents.filter(e=>e.date===iso);
+    const dots=dayEvs.slice(0,3).map(e=>`<i style="background:${(GCAL_KINDS[e.kind]||GCAL_KINDS.task).color}"></i>`).join('');
+    cells+=`<div class="gmini-d ${isOther?'dim':''} ${isSel?'sel':''} ${isToday?'today':''}" onclick="gcalSelectDate('${iso}')">
+      <span>${cur.getDate()}</span>
+      ${dots?`<div class="gmini-dots">${dots}</div>`:''}
+    </div>`;
+  }
+  return `<div class="gmini">
+    <div class="gmini-hd">
+      <span>${GCAL_MONTHS[mo]} ${y}</span>
+      <div style="display:flex;gap:2px">
+        <button class="gcal-icbtn" style="width:22px;height:22px" onclick="gcalStepMini(-1)" title="Önceki Ay">◀</button>
+        <button class="gcal-icbtn" style="width:22px;height:22px" onclick="gcalStepMini(1)" title="Sonraki Ay">▶</button>
+      </div>
+    </div>
+    <div class="gmini-grid">${cells}</div>
+  </div>`;
+}
+
+function renderExamRadar(){
+  const todayIso=gcalTodayISO();
+  const upcoming=calEvents
+    .filter(e=>!e.done && (e.kind==='exam'||e.kind==='lab'||e.kind==='task') && gcalDiffDays(e.date,todayIso)>=-1)
+    .sort((a,b)=>a.date.localeCompare(b.date)||gcalMin(a.start)-gcalMin(b.start))
+    .slice(0,5);
+  if(!upcoming.length){
+    return `<div style="font-size:12px;color:var(--mut);padding:6px 4px">Yaklaşan sınav veya teslim bulunmuyor.</div>`;
+  }
+  return upcoming.map(e=>{
+    const diff=gcalDiffDays(e.date,todayIso);
+    const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+    const badgeTxt=diff<0?'Dün':diff===0?'BUGÜN!':diff===1?'Yarın':`${diff} gün kaldı`;
+    const pct=Math.max(8,Math.min(100,Math.round((14-Math.min(14,Math.max(0,diff)))/14*100)));
+    return `<div class="gcal-cd" onclick="openCalModal(${e.id})" title="${e.title} · ${e.date} ${e.start}">
+      <div class="gcal-cd-top">
+        <span>${k.icon} ${e.title}</span>
+        <span class="gcal-cd-badge" style="background:${k.solid};color:#fff;border:1px solid ${k.solid}">${badgeTxt}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font:10.5px var(--mono);color:var(--mut)">
+        <span>${e.date.split('-').reverse().slice(0,2).join('.')} · ${e.start}</span>
+        <span>${gcalKasaTitle(e.kasa).slice(0,18)}</span>
+      </div>
+      <div class="gcal-cd-bar"><i style="width:${pct}%;background:${k.color}"></i></div>
+    </div>`;
+  }).join('');
+}
+
+function renderMonthStage(){
+  const d=gcalFromISO(GCAL.cursor);
+  const y=d.getFullYear(), mo=d.getMonth();
+  const first=new Date(y,mo,1,12,0,0);
+  const startOffset=gcalDowMon(first);
+  const startDate=gcalAddDays(first,-startOffset);
+  const todayIso=gcalTodayISO();
+
+  let hdr=GCAL_DAYS.map(dn=>`<div>${dn}</div>`).join('');
+  let cells='';
+  for(let i=0;i<42;i++){
+    const cur=gcalAddDays(startDate,i);
+    const iso=gcalToISO(cur);
+    const isOther=cur.getMonth()!==mo;
+    const isToday=iso===todayIso;
+    const isWknd=cur.getDay()===0||cur.getDay()===6;
+    const evs=getAllEventsForDate(iso);
+    const dayLabel=(cur.getDate()===1||i===0)?`${cur.getDate()} ${GCAL_MONTHS_SHORT[cur.getMonth()]}`:cur.getDate();
+    cells+=`<div class="gmcell ${isOther?'other':''} ${isWknd?'wknd':''} ${isToday?'today':''}" data-date="${iso}"
+      onclick="gcalCellClick(event,'${iso}')"
+      ondblclick="openCalModal(null,'${iso}')"
+      ondragover="gcalDragOver(event)"
+      ondragleave="gcalDragLeave(event)"
+      ondrop="gcalDropOnDay(event,'${iso}')">
+      <div class="gmcell-top">
+        <span class="gmcell-num" onclick="event.stopPropagation();gcalSelectDate('${iso}','day')" title="Günlük görünüme git">${dayLabel}</span>
+        ${isToday?`<span style="font:700 9.5px var(--mono);color:var(--cu)">BUGÜN</span>`:(evs.length?`<span style="font:10px var(--mono);opacity:.6">${evs.length}</span>`:'')}
+      </div>
+      <div class="gmcell-evs">
+        ${evs.map(e=>{
+          const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+          const safeTitle=e.title.replace(/"/g,'&quot;');
+          return `<div class="gev-pill ${e.done?'done':''}" draggable="${!e.recurring}"
+            ondragstart="gcalDragStart(event,'${e.id}')"
+            onclick="event.stopPropagation();openCalModal('${e.id}')"
+            style="background:${k.solid};color:#fff;border-left-color:transparent"
+            title="${e.start}–${e.end} · ${safeTitle}${e.loc?' ('+e.loc+')':''}">
+            <b>${e.start}</b><span>${e.title}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+  return `<div class="gmonth">
+    <div class="gmonth-hdr">${hdr}</div>
+    <div class="gmonth-grid">${cells}</div>
+  </div>`;
+}
+
+function layoutOverlappingEvents(evs){
+  // Çakışan saatli etkinlikleri yan yana sütunlara böler (Google Calendar algoritması)
+  const sorted=[...evs].sort((a,b)=>gcalMin(a.start)-gcalMin(b.start)||(gcalMin(b.end)-gcalMin(a.end)));
+  const clusters=[];
+  let curCluster=[], clusterEnd=-1;
+  sorted.forEach(e=>{
+    const s=gcalMin(e.start), en=Math.max(s+30,gcalMin(e.end));
+    if(curCluster.length && s<clusterEnd){
+      curCluster.push(e);
+      clusterEnd=Math.max(clusterEnd,en);
+    }else{
+      if(curCluster.length) clusters.push(curCluster);
+      curCluster=[e];
+      clusterEnd=en;
+    }
+  });
+  if(curCluster.length) clusters.push(curCluster);
+
+  const positioned=[];
+  clusters.forEach(cl=>{
+    const cols=[];
+    cl.forEach(e=>{
+      const s=gcalMin(e.start), en=Math.max(s+30,gcalMin(e.end));
+      let placed=false;
+      for(let c=0;c<cols.length;c++){
+        if(cols[c]<=s){
+          cols[c]=en;
+          positioned.push({ev:e,col:c,totalCols:0});
+          placed=true;
+          break;
+        }
+      }
+      if(!placed){
+        cols.push(en);
+        positioned.push({ev:e,col:cols.length-1,totalCols:0});
+      }
+    });
+    const nCols=cols.length;
+    positioned.slice(-cl.length).forEach(p=>{ p.totalCols=nCols; });
+  });
+  return positioned;
+}
+
+function renderTimeGrid(daysList,isSingleDay=false){
+  const START_H=7, END_H=23; // 07:00 .. 23:00 (16 saat * 60px = 960px)
+  const todayIso=gcalTodayISO();
+  const now=new Date();
+  const nowMin=now.getHours()*60+now.getMinutes();
+  const colCls=isSingleDay?'cols-1':'cols-7';
+
+  let topHdr=`<div class="gw-tz">GMT+3</div>`;
+  let allDayCells=`<div class="gw-ad-lbl">TÜM GÜN</div>`;
+  daysList.forEach(d=>{
+    const iso=gcalToISO(d);
+    const isToday=iso===todayIso;
+    const dn=GCAL_DAYS[gcalDowMon(d)];
+    topHdr+=`<div class="gw-dh ${isToday?'today':''}" onclick="gcalSelectDate('${iso}','day')" title="Günlük görünüme geç">
+      <div class="dn">${dn}</div>
+      <div class="dd">${d.getDate()}</div>
+    </div>`;
+    const allEvs=getAllEventsForDate(iso);
+    const adEvs=allEvs.filter(e=>e.allDay||e.kind==='exam');
+    allDayCells+=`<div class="gw-ad-cell">
+      ${adEvs.map(e=>{
+        const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+        return `<div class="gev-pill ${e.done?'done':''}" onclick="openCalModal('${e.id}')" style="background:${k.solid};color:#fff;border-left-color:transparent">
+          <span>${k.icon} ${e.title}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  });
+
+  let timeLabels='';
+  for(let h=START_H;h<END_H;h++){
+    timeLabels+=`<div class="gw-tlbl">${h===START_H?'':`${gcalPad(h)}:00`}</div>`;
+  }
+
+  let colsHtml='';
+  daysList.forEach(d=>{
+    const iso=gcalToISO(d);
+    const isToday=iso===todayIso;
+    let slots='';
+    for(let h=START_H;h<END_H;h++){
+      const hh=`${gcalPad(h)}:00`;
+      slots+=`<div class="gw-slot" onclick="openCalModal(null,'${iso}','${hh}')"
+        ondragover="gcalDragOver(event)"
+        ondragleave="gcalDragLeave(event)"
+        ondrop="gcalDropOnSlot(event,'${iso}',${h})"
+        title="${iso} ${hh} — Etkinlik eklemek için tıkla"></div>`;
+    }
+    const evs=getAllEventsForDate(iso).filter(e=>!e.allDay);
+    const pos=layoutOverlappingEvents(evs);
+    const evBlocks=pos.map(({ev,col,totalCols})=>{
+      const k=GCAL_KINDS[ev.kind]||GCAL_KINDS.task;
+      const sMin=Math.max(START_H*60,gcalMin(ev.start));
+      const eMin=Math.min(END_H*60,Math.max(sMin+35,gcalMin(ev.end)));
+      const topPx=Math.max(0,(sMin-START_H*60));
+      const heightPx=Math.max(28,(eMin-sMin)-2);
+      const widthPct=100/totalCols;
+      const leftPct=col*widthPct;
+      return `<div class="gw-ev ${ev.recurring?'lec':''} ${ev.done?'done':''}"
+        draggable="${!ev.recurring}"
+        ondragstart="gcalDragStart(event,'${ev.id}')"
+        onclick="event.stopPropagation();openCalModal('${ev.id}')"
+        style="top:${topPx}px;height:${heightPx}px;left:calc(${leftPct}% + 2px);width:calc(${widthPct}% - 5px);background:${k.solid};color:#fff;border:1px solid ${k.solid}">
+        <div class="et">${ev.start} – ${ev.end}</div>
+        <div class="en">${k.icon} ${ev.title}</div>
+        ${heightPx>=48&&ev.loc?`<div class="el">📍 ${ev.loc}</div>`:''}
+        ${heightPx>=68&&ev.kasa?`<div class="el">❖ ${gcalKasaTitle(ev.kasa)}</div>`:''}
+      </div>`;
+    }).join('');
+
+    let nowLine='';
+    if(isToday && nowMin>=START_H*60 && nowMin<=END_H*60){
+      const nowTop=nowMin-START_H*60;
+      nowLine=`<div class="gw-now" style="top:${nowTop}px"><span class="gw-now-tag">${gcalPad(now.getHours())}:${gcalPad(now.getMinutes())}</span></div>`;
+    }
+    colsHtml+=`<div class="gw-col ${isToday?'today':''}">${slots}${evBlocks}${nowLine}</div>`;
+  });
+
+  return `<div class="gweek">
+    <div class="gweek-top ${colCls}">${topHdr}</div>
+    <div class="gw-allday ${colCls}">${allDayCells}</div>
+    <div class="gweek-scroll" id="gweekScroll">
+      <div class="gweek-grid ${colCls}" style="height:${(END_H-START_H)*60}px">
+        <div class="gw-times">${timeLabels}</div>
+        ${colsHtml}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderWeekStage(){
+  const start=gcalStartOfWeek(gcalFromISO(GCAL.cursor));
+  const days=Array.from({length:7},(_,i)=>gcalAddDays(start,i));
+  return renderTimeGrid(days,false);
+}
+
+function renderDayStage(){
+  const cur=gcalFromISO(GCAL.cursor);
+  const iso=GCAL.cursor;
+  const dayEvs=getAllEventsForDate(iso);
+  const p=GCAL.pomo;
+  const pct=Math.round((p.sec/Math.max(1,p.total))*100);
+  const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+
+  // O günkü ders kasalarına ait notları bul
+  const activeKasas=new Set(dayEvs.map(e=>e.kasa).filter(Boolean));
+  const relatedNotes=Object.entries(window.pages||{}).filter(([id,pg])=>id.startsWith('note:')&&(activeKasas.size?activeKasas.has(pg.kasa):true)).slice(0,6);
+
+  return `<div class="gday-wrap">
+    ${renderTimeGrid([cur],true)}
+    <div class="gday-cockpit">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font:600 11px var(--mono);color:var(--cu);text-transform:uppercase">GÜNLÜK ODAK KOKPİTİ</div>
+          <div style="font-size:16px;font-weight:600">${cur.getDate()} ${GCAL_MONTHS[cur.getMonth()]} ${GCAL_DAYS_FULL[cur.getDay()]}</div>
+        </div>
+        <button class="gcal-btn pri" onclick="openCalModal(null,'${iso}','14:00')">＋ Saat Ekle</button>
+      </div>
+
+      <!-- Pomodoro Odak Sayacı -->
+      <div class="gpomo">
+        <div class="gpomo-ring" id="gpomoRing" style="--pp:${pct}">
+          <span class="gpomo-time" id="gpomoTime">${mm}:${ss}</span>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
+          <div style="font:600 11px var(--mono);color:var(--cu)">⏱ POMODORO ÇALIŞMA SAYACI · ${p.mode}</div>
+          <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.taskTitle}">🎯 ${p.taskTitle}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">
+            <button class="gcal-btn ${p.running?'on':''}" onclick="gcalPomoToggle()">${p.running?'⏸ Duraklat':'▶ Başlat'}</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(25,'25 dk Odak')">25 dk</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(50,'50 dk Derin')">50 dk</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(5,'5 dk Mola')">Mola</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Seçili Günün Görev & Etkinlik Listesi -->
+      <div class="gcal-sec">
+        <div class="gcal-sec-hd"><span>GÜNÜN PLANI (${dayEvs.length})</span><span style="color:var(--cu);cursor:pointer" onclick="gcalAskAiForDay('${iso}')">✨ AI ile Günü Planla</span></div>
+        ${dayEvs.length?dayEvs.map(e=>{
+          const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+          return `<div class="gag-card" style="padding:8px 11px" onclick="openCalModal('${e.id}')">
+            ${!e.recurring?`<input type="checkbox" ${e.done?'checked':''} onclick="event.stopPropagation();gcalToggleDone(${e.id})" style="accent-color:var(--cu);cursor:pointer">`:`<span class="gag-dot" style="background:${k.color}"></span>`}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12.5px;font-weight:600;${e.done?'text-decoration:line-through;opacity:.55':''}">${k.icon} ${e.title}</div>
+              <div style="font:11px var(--mono);color:var(--mut)">${e.start}–${e.end}${e.loc?' · 📍 '+e.loc:''}</div>
+            </div>
+            <button class="gcal-icbtn" onclick="event.stopPropagation();gcalStartPomoFor('${e.title.replace(/'/g,"\\'")}')" title="Bu görev için Pomodoro başlat">⏱</button>
+          </div>`;
+        }).join(''):`<div style="padding:14px;border:1px dashed var(--line);border-radius:10px;color:var(--mut);font-size:12.5px;text-align:center">Bu gün için kayıtlı sınav veya görev yok. Zaman çizelgesinde bir saate tıklayarak ekleyebilirsin.</div>`}
+      </div>
+
+      <!-- İlgili Kasa Notları -->
+      <div class="gcal-sec">
+        <div class="gcal-sec-hd"><span>İLGİLİ DERS NOTLARI &amp; KAYNAKLAR</span></div>
+        ${relatedNotes.map(([id,pg])=>`
+          <div class="gag-card" style="padding:7px 10px" onclick="openPage('${id}',true,{newTab:true})">
+            <span>${pg.i||'📄'}</span>
+            <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">${pg.t}</div>
+            <span style="font:10px var(--mono);color:var(--cu)">${pg.folder||''} ↗</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderAgendaStage(){
+  const todayIso=gcalTodayISO();
+  let list=calEvents.filter(e=>GCAL.kinds[e.kind]!==false);
+  if(GCAL.kasaFilter!=='all') list=list.filter(e=>e.kasa===GCAL.kasaFilter);
+  if(GCAL.agendaFilter==='exam') list=list.filter(e=>e.kind==='exam'||e.kind==='lab');
+  if(GCAL.agendaFilter==='pending') list=list.filter(e=>!e.done);
+  if(GCAL.agendaFilter==='done') list=list.filter(e=>e.done);
+  if(GCAL.search){
+    const q=GCAL.search.toLowerCase();
+    list=list.filter(e=>`${e.title} ${e.loc||''} ${e.desc||''} ${gcalKasaTitle(e.kasa)}`.toLowerCase().includes(q));
+  }
+  list.sort((a,b)=>a.date.localeCompare(b.date)||gcalMin(a.start)-gcalMin(b.start));
+
+  const byDate={};
+  list.forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
+  const dates=Object.keys(byDate).sort();
+
+  return `<div class="gagenda">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line)">
+      <div>
+        <h2 style="font-size:20px;letter-spacing:-.02em">📋 Akademik Planlama &amp; Sınav Ajandası</h2>
+        <div style="font-size:12.5px;color:var(--mut)">Tüm vize, lab, proje teslimi ve çalışma bloklarının kronolojik yol haritası</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div class="gcal-seg">
+          <button class="${GCAL.agendaFilter==='all'?'on':''}" onclick="GCAL.agendaFilter='all';renderCal($('#main'),false)">Tümü (${calEvents.length})</button>
+          <button class="${GCAL.agendaFilter==='exam'?'on':''}" onclick="GCAL.agendaFilter='exam';renderCal($('#main'),false)">🔴 Sınav &amp; Lab</button>
+          <button class="${GCAL.agendaFilter==='pending'?'on':''}" onclick="GCAL.agendaFilter='pending';renderCal($('#main'),false)">⏳ Bekleyenler</button>
+          <button class="${GCAL.agendaFilter==='done'?'on':''}" onclick="GCAL.agendaFilter='done';renderCal($('#main'),false)">✓ Tamamlananlar</button>
+        </div>
+        <button class="gcal-btn pri" onclick="gcalAskAiStudyPlan()">✨ AI Çalışma Programı Çıkar</button>
+      </div>
+    </div>
+    ${dates.length?dates.map(iso=>{
+      const d=gcalFromISO(iso);
+      const diff=gcalDiffDays(iso,todayIso);
+      const isToday=diff===0;
+      const relTxt=diff===0?'BUGÜN':diff===1?'YARIN':diff===-1?'DÜN':diff>1?`${diff} gün sonra`:`${Math.abs(diff)} gün önce`;
+      return `<div class="gag-day">
+        <div class="gag-date ${isToday?'today':''}">
+          <span class="dnum">${d.getDate()}</span>
+          <div>
+            <div class="dmeta">${GCAL_MONTHS_SHORT[d.getMonth()]} · ${GCAL_DAYS[gcalDowMon(d)]}</div>
+            <div style="font:600 10.5px var(--mono);color:${isToday?'var(--cu)':diff>0&&diff<=7?'var(--err)':'var(--mut)'}">${relTxt}</div>
+          </div>
+        </div>
+        <div class="gag-list">
+          ${byDate[iso].map(e=>{
+            const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+            return `<div class="gag-card" onclick="openCalModal('${e.id}')">
+              <input type="checkbox" ${e.done?'checked':''} onclick="event.stopPropagation();gcalToggleDone(${e.id})" style="accent-color:var(--cu);width:15px;height:15px;cursor:pointer" title="Tamamlandı olarak işaretle">
+              <span class="gag-dot" style="background:${k.color}"></span>
+              <span class="gag-time">${e.allDay?'Tüm Gün':`${e.start} – ${e.end}`}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:600;font-size:13.5px;${e.done?'text-decoration:line-through;opacity:.55':''}">${k.icon} ${e.title}</div>
+                ${e.desc?`<div style="font-size:12px;color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.desc}</div>`:''}
+              </div>
+              ${e.loc?`<span style="font:11px var(--mono);color:var(--mut);padding:2px 7px;background:var(--bg2);border-radius:6px;white-space:nowrap">📍 ${e.loc}</span>`:''}
+              ${e.kasa?`<span class="pdf-badge" onclick="event.stopPropagation();enterKasa('${e.kasa}','write')" title="Dersin kasasına git">❖ ${gcalKasaTitle(e.kasa)}</span>`:''}
+              <button class="gcal-btn" style="padding:3px 8px;font-size:11px" onclick="event.stopPropagation();gcalPrepWithAi(${e.id})" title="AI ile bu sınava/göreve çalış">✨ Hazırlan</button>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }).join(''):`<div style="padding:40px;text-align:center;color:var(--mut)">Seçili filtreye uygun etkinlik bulunamadı.</div>`}
+  </div>`;
+}
+
+function renderSemesterStage(){
+  const baseYear=gcalFromISO(GCAL.cursor).getFullYear();
+  const semMonths=[
+    {y:baseYear,m:9},  // Ekim
+    {y:baseYear,m:10}, // Kasım
+    {y:baseYear,m:11}, // Aralık
+    {y:baseYear+1,m:0} // Ocak
+  ];
+  const exams=calEvents.filter(e=>e.kind==='exam').length;
+  const labs=calEvents.filter(e=>e.kind==='lab').length;
+  const tasks=calEvents.filter(e=>e.kind==='task'||e.kind==='study').length;
+  const doneCount=calEvents.filter(e=>e.done).length;
+  const todayIso=gcalTodayISO();
+
+  const monthCards=semMonths.map(({y,m})=>{
+    const first=new Date(y,m,1,12,0,0);
+    const offset=gcalDowMon(first);
+    const start=gcalAddDays(first,-offset);
+    let cells=GCAL_DAYS.map(d=>`<div class="gmini-dh">${d[0]}</div>`).join('');
+    for(let i=0;i<42;i++){
+      const cur=gcalAddDays(start,i);
+      const iso=gcalToISO(cur);
+      const isOther=cur.getMonth()!==m;
+      const evs=calEvents.filter(e=>e.date===iso);
+      const hasExam=evs.some(e=>e.kind==='exam');
+      const hasLab=evs.some(e=>e.kind==='lab');
+      const hasTask=evs.length>0;
+      const bg=isOther?'transparent':hasExam?'#ff6b6b38':hasLab?'#52b78838':hasTask?'#e0a45835':'transparent';
+      const bd=iso===todayIso?'2px solid var(--cu)':hasExam?'1px solid #ff6b6b':hasLab?'1px solid #52b788':'0';
+      cells+=`<div class="gmini-d ${isOther?'dim':''}" style="background:${bg};border:${bd}" onclick="gcalSelectDate('${iso}','month')" title="${iso}${evs.length?' · '+evs.map(x=>x.title).join(', '):''}">${cur.getDate()}</div>`;
+    }
+    return `<div class="gmini" style="padding:14px">
+      <div class="gmini-hd" style="font-size:14px;margin-bottom:10px">
+        <span>${GCAL_MONTHS[m]} ${y}</span>
+        <span style="font:11px var(--mono);color:var(--cu)">${calEvents.filter(e=>e.date.startsWith(`${y}-${gcalPad(m+1)}`)).length} etkinlik</span>
+      </div>
+      <div class="gmini-grid" style="gap:4px">${cells}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="gsem">
+    <div>
+      <h2 style="font-size:21px;letter-spacing:-.02em">🎓 Akademik Dönem Haritası &amp; Yoğunluk Radarı</h2>
+      <div style="font-size:12.5px;color:var(--mut)">4 aylık Güz/Kış dönemi sınav yoğunluğu ısı haritası — bir güne tıklayarak o aya/güne odaklanabilirsin</div>
+    </div>
+    <div class="gsem-stats">
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">TOPLAM SINAV / VİZE</span><b style="color:${gcalInk(GCAL_KINDS.exam)}">${exams}</b><small style="color:var(--mut)">Kırmızı işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">LAB &amp; DENEY</span><b style="color:${gcalInk(GCAL_KINDS.lab)}">${labs}</b><small style="color:var(--mut)">Yeşil işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">ÖDEV &amp; ÇALIŞMA BLOĞU</span><b style="color:${gcalInk(GCAL_KINDS.task)}">${tasks}</b><small style="color:var(--mut)">Kehribar işaretli günler</small></div>
+      <div class="gsem-stat"><span style="font:11px var(--mono);color:var(--mut)">TAMAMLAMA ORANI</span><b style="color:var(--ok)">${calEvents.length?Math.round(doneCount/calEvents.length*100):0}%</b><small style="color:var(--mut)">${doneCount}/${calEvents.length} tamamlandı</small></div>
+    </div>
+    <div class="gsem-months">${monthCards}</div>
+  </div>`;
+}
+
+async function renderCal(m,fetchApi=true){
+  if(!m) m=$('#main');
+  if(fetchApi) await loadCalEvents(false);
+  if(!GCAL.miniMonth) GCAL.miniMonth=gcalFromISO(GCAL.cursor);
+  if(typeof renderTabs==='function') renderTabs();
+
+  const stageHtml=GCAL.view==='day'?renderDayStage()
+    :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='agenda'?renderAgendaStage()
+    :GCAL.view==='semester'?renderSemesterStage()
+    :renderMonthStage();
+
+  const p=GCAL.pomo;
+  const pomoMm=gcalPad(Math.floor(p.sec/60)), pomoSs=gcalPad(p.sec%60);
+  const nowDt=new Date();
+  const curMonShort=GCAL_MONTHS[nowDt.getMonth()].slice(0,3).toUpperCase();
+  const conflicts=gcalDetectConflicts();
+  const prevSideScroll=m.querySelector('.gcal-side')?.scrollTop||0;
+
+  m.innerHTML=`<div class="gcal ${GCAL.sideOpen?'':'no-side'}">
+    <!-- Üst AgyCal Araç Çubuğu -->
+    <div class="gcal-top">
+      <button class="gcal-icbtn" onclick="gcalToggleSide()" title="Sol Mini Takvim &amp; Filtre Panelini Aç/Kapat">☰</button>
+      <div class="gcal-brand">
+        <div class="gic">
+          <div class="gic-m">${curMonShort}</div>
+          <div class="gic-d">${nowDt.getDate()}</div>
+        </div>
+        <span class="gcal-brand-txt"><b>Agy</b><span>Cal</span></span>
+        <span class="gcal-brand-badge">PRO</span>
+      </div>
+      <div class="gcal-nav">
+        <button class="gcal-btn" onclick="gcalGoToday()" title="Bugüne Git (Kısayol: T)">Bugün</button>
+        <button class="gcal-icbtn" onclick="gcalStep(-1)" title="Önceki Dönem">◀</button>
+        <button class="gcal-icbtn" onclick="gcalStep(1)" title="Sonraki Dönem">▶</button>
+      </div>
+      <div class="gcal-title">${gcalHeaderTitle()}</div>
+
+      ${conflicts.length?`<span class="acal-tab-pill exam" style="padding:3px 8px;font-size:11px;cursor:pointer" onclick="gcalSelectDate('${conflicts[0].date}','day')" title="${conflicts.map(c=>c.label).join(' | ')}">⚠️ ${conflicts.length} Saat Çakışması</span>`:''}
+
+      <span style="flex:1"></span>
+
+      <div class="gcal-search">
+        <i>🔍</i>
+        <input id="gcalSearchIn" value="${GCAL.search.replace(/"/g,'&quot;')}" placeholder="AgyCal'de ara…" oninput="GCAL.search=this.value;renderCalStageOnly()">
+      </div>
+
+      <button class="gcal-btn ${GCAL.showSchedule?'on':''}" onclick="gcalToggleSchedule()" title="Haftalık sabit EEM ders programını takvimde göster/gizle">🎓 Ders Programı</button>
+
+      <button class="gcal-btn ${p.running?'on':''}" onclick="gcalSetView('day')" title="Günlük Odak &amp; Pomodoro Sayacı">⏱ <span id="gcalTopPomo">${pomoMm}:${pomoSs}</span></button>
+
+      <button class="gcal-btn" onclick="gcalExportICS()" title="AgyCal takvimini .ics olarak indir (Google/Apple/Telefon Takvimine aktar)">📲 .ics</button>
+
+      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();document.getElementById('gcalViewDd').classList.toggle('open')" title="Görünüm Değiştir (D/W/M/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
+
+      <button class="gcal-btn pri" onclick="openCalModal(null,GCAL.cursor)" title="Yeni Etkinlik / Sınav Oluştur (Kısayol: C)">＋ Oluştur</button>
+    </div>
+
+    <!-- AgyCal Doğal Dil Sihirli Komut Çubuğu -->
+    <div class="gcal-smartbar">
+      <div class="gcal-smart-in">
+        <span style="color:var(--cu);font-size:14px">⚡</span>
+        <input id="gcalSmartInput" placeholder="AgyCal Sihirli Ekle: &quot;Cuma 14:00 Yüksek Gerilim Lab #lab @D-204&quot; veya &quot;20 Kasım 09:00 Makinalar Quiz&quot; yazıp Enter'a bas (Kısayol: Q)" oninput="gcalSmartPreview(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();gcalSmartSubmit();}">
+        <button class="gcal-btn pri" style="padding:3px 9px;font-size:11.5px" onclick="gcalSmartSubmit()">Ekle ↵</button>
+      </div>
+      <div class="gcal-smart-prev" id="gcalSmartPrev">
+        <span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>
+      </div>
+    </div>
+
+    <!-- Gövde: Sol Mini Takvim + Ana Görünüm Sahnesi -->
+    <div class="gcal-body">
+      <aside class="gcal-side">
+        <button class="gcal-create-big" onclick="openCalModal(null,GCAL.cursor)">
+          <span style="font-size:18px;line-height:1">＋</span>
+          <span>Yeni Sınav / Etkinlik</span>
+        </button>
+
+        ${renderMiniCal()}
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd">
+            <span>🔥 YAKLAŞAN SINAV RADARI</span>
+            <span style="color:var(--ok)">● Canlı</span>
+          </div>
+          ${renderExamRadar()}
+        </div>
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd"><span>TAKVİMLERİM (KATEGORİLER)</span></div>
+          ${Object.values(GCAL_KINDS).map(k=>{
+            const on=GCAL.kinds[k.id]!==false;
+            const cnt=k.id==='lecture'?EEM_WEEKLY_SCHEDULE.length+' ders/hf':calEvents.filter(e=>e.kind===k.id).length;
+            return `<div class="gcal-flt ${on?'':'off'}" data-kind="${k.id}" onclick="gcalToggleKind('${k.id}')">
+              <span class="chk" style="background:${k.color}">✓</span>
+              <span style="flex:1">${k.icon} ${k.label}</span>
+              <small style="font:10.5px var(--mono);color:var(--mut)">${cnt}</small>
+            </div>`;
+          }).join('')}
+        </div>
+
+        <div class="gcal-sec">
+          <div class="gcal-sec-hd"><span>DERS KASASI FİLTRESİ</span></div>
+          <select class="gmodal-in" style="padding:5px 8px;font-size:12px" onchange="GCAL.kasaFilter=this.value;renderCalStageOnly()">
+            <option value="all" ${GCAL.kasaFilter==='all'?'selected':''}>❖ Tüm Ders Kasaları</option>
+            ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${GCAL.kasaFilter===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+          </select>
+        </div>
+
+        <button class="gcal-btn" style="width:100%;justify-content:center;border-color:var(--cu);color:var(--cu);margin-top:auto" onclick="gcalAskAiStudyPlan()">
+          ✨ Bu Haftayı AI ile Planla
+        </button>
+      </aside>
+
+      <div class="gcal-stage" id="gcalStage">
+        ${stageHtml}
+      </div>
+    </div>
+
+    <!-- Etkinlik Oluşturma / Düzenleme / Detay Modalı -->
+    <div class="gmodal-bg" id="gcalModalBg" onclick="if(event.target.id==='gcalModalBg')closeCalModal()">
+      <div class="gmodal" id="gcalModal"></div>
+    </div>
+  </div>`;
+  const nextSide=m.querySelector('.gcal-side');
+  if(nextSide&&prevSideScroll) nextSide.scrollTop=prevSideScroll;
+}
+
+function renderCalStageOnly(){
+  const st=$('#gcalStage');
+  if(!st) return;
+  const scrollSel=['.gweek-scroll','.gday-cockpit','.gagenda','.gsem'];
+  const saved=scrollSel.map(sel=>[sel,st.querySelector(sel)?.scrollTop||0]);
+  st.innerHTML=GCAL.view==='day'?renderDayStage()
+    :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='agenda'?renderAgendaStage()
+    :GCAL.view==='semester'?renderSemesterStage()
+    :renderMonthStage();
+  saved.forEach(([sel,top])=>{
+    const el=st.querySelector(sel);
+    if(el&&top) el.scrollTop=top;
+  });
+}
+
+function gcalCellClick(ev,iso){
+  GCAL.cursor=iso;
+  $$('.gmcell').forEach(c=>c.style.outline=c.dataset.date===iso?'1.5px solid var(--cu)':'');
+}
+
+/* --- Sürükle & Bırak (Drag & Drop) ile Etkinlik Taşıma --- */
+let gcalDraggedId=null;
+function gcalDragStart(ev,id){
+  gcalDraggedId=id;
+  ev.dataTransfer.setData('text/gcal',String(id));
+  ev.dataTransfer.effectAllowed='move';
+}
+function gcalDragOver(ev){
+  ev.preventDefault();
+  ev.dataTransfer.dropEffect='move';
+  ev.currentTarget.classList.add('drop-hot');
+}
+function gcalDragLeave(ev){
+  ev.currentTarget.classList.remove('drop-hot');
+}
+async function gcalDropOnDay(ev,targetIso){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drop-hot');
+  const id=Number(ev.dataTransfer.getData('text/gcal')||gcalDraggedId);
+  const item=calEvents.find(x=>x.id===id);
+  if(!item||item.date===targetIso) return;
+  item.date=targetIso;
+  item.day=gcalFromISO(targetIso).getDate();
+  await persistCalEventUpdate(item);
+  toast(`▦ "${item.title}" → ${targetIso} tarihine taşındı`);
+}
+async function gcalDropOnSlot(ev,targetIso,hour){
+  ev.preventDefault();
+  ev.currentTarget.classList.remove('drop-hot');
+  const id=Number(ev.dataTransfer.getData('text/gcal')||gcalDraggedId);
+  const item=calEvents.find(x=>x.id===id);
+  if(!item) return;
+  const dur=Math.max(30,gcalMin(item.end)-gcalMin(item.start));
+  const newStart=hour*60;
+  item.date=targetIso;
+  item.day=gcalFromISO(targetIso).getDate();
+  item.start=gcalFmtMin(newStart);
+  item.end=gcalFmtMin(newStart+dur);
+  await persistCalEventUpdate(item);
+  toast(`▦ "${item.title}" → ${targetIso} ${item.start} saatine taşındı`);
+}
+
+async function persistCalEventUpdate(item){
+  try{
+    if(item.id && typeof item.id==='number'){
+      await api('/api/calendar/'+item.id,null,'DELETE').catch(()=>{});
+    }
+    const saved=await api('/api/calendar',{
+      day:item.day,
+      title:item.title,
+      kind:item.kind,
+      kasa:packCalMeta(item)
+    });
+    if(saved&&saved.id) item.id=saved.id;
+  }catch(e){}
+  renderCal($('#main'),false);
+}
+
+/* --- Etkinlik Oluşturma / Düzenleme Modalı (Google Takvim Birebir UI) --- */
+function openCalModal(evId=null,defaultDate=null,defaultStart=null){
+  const bg=$('#gcalModalBg'), box=$('#gcalModal');
+  if(!bg||!box) return;
+  box.style.transform='';
+  let ev=null;
+  if(evId!==null && evId!==undefined){
+    ev=calEvents.find(x=>String(x.id)===String(evId));
+    if(!ev && String(evId).startsWith('lec_')){
+      const parts=String(evId).split('_');
+      const iso=parts[1];
+      const all=getAllEventsForDate(iso);
+      ev=all.find(x=>String(x.id)===String(evId));
+    }
+  }
+  const isRec=ev&&ev.recurring;
+  const isEdit=!!(ev&&!isRec);
+  GCAL.editingId=isEdit?ev.id:null;
+
+  const dateVal=ev?ev.date:(defaultDate||GCAL.cursor||gcalTodayISO());
+  const hasExplicitTime=!!(ev||defaultStart);
+  const startVal=ev?ev.start:(defaultStart||'10:00');
+  const endVal=ev?ev.end:gcalFmtMin(gcalMin(startVal)+60);
+  const kindVal=ev?ev.kind:'exam';
+  const kasaVal=ev?ev.kasa:(currentKasa!=='all'?currentKasa:'');
+  const locVal=ev?(ev.loc||''):'';
+  const descVal=ev?(ev.desc||''):'';
+  const guestsVal=ev?(ev.guests||''):'';
+  const meetVal=ev?(ev.meet||''):'';
+  const repeatVal=ev?(ev.repeat||'Yinelenmez'):'Yinelenmez';
+  const notifyVal=ev?(ev.notify||'Bir gün önce şu saatte: 5pm bildir'):'Bir gün önce şu saatte: 5pm bildir';
+  const titleVal=ev?ev.title:'';
+  const humanDate=gcalFmtDateHuman(dateVal);
+  const curKindObj=GCAL_KINDS[kindVal]||GCAL_KINDS.exam;
+
+  if(isRec){
+    const k=GCAL_KINDS[ev.kind]||GCAL_KINDS.lecture;
+    box.innerHTML=`
+      <div class="gm-top" onmousedown="gcalStartModalDrag(event)">
+        <span class="gm-handle" title="Taşı">＝</span>
+        <button class="gm-close" onclick="closeCalModal()" title="Kapat">✕</button>
+      </div>
+      <div class="gm-title-wrap">
+        <div style="font:600 20px var(--sans);color:var(--txt);padding-bottom:6px;border-bottom:2px solid ${k.color}">${k.icon} ${ev.title}</div>
+      </div>
+      <div class="gm-rows" style="padding:8px 20px 14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;font:12.5px var(--mono);color:var(--cu);margin-bottom:8px">
+          <span>📅 ${humanDate}</span><span>·</span><span>⏰ ${ev.start} – ${ev.end}</span><span>·</span><span>📍 ${ev.loc||'Amfi'}</span>
+        </div>
+        <div style="font-size:13.5px;color:var(--txt);line-height:1.55;margin-bottom:10px">${ev.desc||'Haftalık sabit EEM ders programı bloğu.'}</div>
+        <div style="padding:10px 12px;background:var(--bg);border-radius:10px;font-size:12px;color:var(--mut)">
+          💡 Bu blok haftalık EEM ders programından otomatik yansıtılmaktadır.
+        </div>
+      </div>
+      <div class="gm-foot">
+        <button class="gm-more-btn" onclick="closeCalModal();enterKasa('${ev.kasa}','write')">❖ Ders Kasasını Aç</button>
+        <div style="display:flex;gap:8px">
+          <button class="gm-pill-btn" onclick="closeCalModal();gcalStartPomoFor('${ev.title.replace(/'/g,"\\'")}')">⏱ Pomodoro</button>
+          <button class="gm-save-btn" onclick="closeCalModal();rtab('ai');aiSend('side_ai','${ev.title} dersinin bu haftaki konuları (${ev.desc}) için sınav odaklı özet ve çalışma soruları hazırla.')">✨ AI ile Çalış</button>
+        </div>
+      </div>`;
+    bg.classList.add('show');
+    return;
+  }
+
+  box.innerHTML=`
+    <!-- Üst Sürükleme Çubuğu (= ve ✕) -->
+    <div class="gm-top" onmousedown="gcalStartModalDrag(event)">
+      <span class="gm-handle" title="Paneli sürükle">＝</span>
+      <div style="display:flex;align-items:center;gap:4px">
+        ${isEdit?`
+          <button class="gm-close" onclick="closeCalModal();gcalPrepWithAi(${ev.id})" title="AI ile Sınava Hazırlan" style="font-size:14px">✨</button>
+          <button class="gm-close" onclick="deleteCalFromModal(${ev.id})" title="Etkinliği Sil" style="color:var(--err);font-size:14px">🗑</button>
+        `:''}
+        <button class="gm-close" onclick="closeCalModal()" title="Kapat (Esc)">✕</button>
+      </div>
+    </div>
+
+    <!-- Başlık ve Zaman Ekle (Mavi alt çizgili) -->
+    <div class="gm-title-wrap">
+      <input class="gm-title-in" id="gmTitle" placeholder="Başlık ve zaman ekle" value="${titleVal.replace(/"/g,'&quot;')}" onkeydown="if(event.key==='Enter')saveCalFromModal()">
+    </div>
+
+    <!-- Etkinlik / Görev / Sınav / Lab Sekmeleri -->
+    <div class="gm-tabs" id="gmKindWrap">
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='exam'?'on':''}" data-k="exam" onclick="gcalSetModalKind('exam')">Etkinlik / Sınav</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='task'?'on':''}" data-k="task" onclick="gcalSetModalKind('task')">Görev</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='lab'?'on':''}" data-k="lab" onclick="gcalSetModalKind('lab')">Lab Deneyi</button>
+      <button type="button" class="gm-tab gm-kbtn ${kindVal==='study'?'on':''}" data-k="study" onclick="gcalSetModalKind('study')">Çalışma</button>
+    </div>
+
+    <!-- İkonlu Google Calendar Satırları -->
+    <div class="gm-rows">
+      <!-- 1. Saat / Tarih Satırı -->
+      <div class="gm-r align-top" onclick="gcalExpandTimeRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+            <span id="gmDateHuman" style="font-weight:500">${humanDate} &nbsp;–&nbsp; ${humanDate}</span>
+            <button type="button" class="gm-pill-btn" id="gmAddTimeBtn" style="display:${hasExplicitTime?'none':'inline-block'}" onclick="event.stopPropagation();gcalExpandTimeRow(true)">Zaman ekle</button>
+          </div>
+          <div class="gm-sub" id="gmRepeatSub">${repeatVal}${hasExplicitTime?` · ${startVal} – ${endVal}`:''}</div>
+          <div id="gmTimeExpand" style="display:${hasExplicitTime?'flex':'none'};flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center" onclick="event.stopPropagation()">
+            <input type="date" class="gmodal-in" id="gmDate" value="${dateVal}" style="width:138px" onchange="$('#gmDateHuman').innerHTML=gcalFmtDateHuman(this.value)+' &nbsp;–&nbsp; '+gcalFmtDateHuman(this.value)">
+            <input type="time" class="gmodal-in" id="gmStart" value="${startVal}" style="width:98px">
+            <span style="color:var(--mut)">–</span>
+            <input type="time" class="gmodal-in" id="gmEnd" value="${endVal}" style="width:98px">
+            <select class="gmodal-in" id="gmRepeat" style="width:130px;font-size:12px" onchange="$('#gmRepeatSub').textContent=this.value">
+              <option value="Yinelenmez" ${repeatVal==='Yinelenmez'?'selected':''}>Yinelenmez</option>
+              <option value="Her hafta" ${repeatVal==='Her hafta'?'selected':''}>Her hafta</option>
+              <option value="Her gün" ${repeatVal==='Her gün'?'selected':''}>Her gün</option>
+              <option value="Sınav haftası boyunca" ${repeatVal==='Sınav haftası boyunca'?'selected':''}>Sınav haftası boyunca</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. Davetli / Çalışma Grubu Ekle -->
+      <div class="gm-r" onclick="$('#gmGuests')?.focus()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmGuests" placeholder="Davetli ekle" value="${guestsVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 3. Google Meet / Canlı AI Çalışma Görüşmesi Ekle -->
+      <div class="gm-r" onclick="gcalToggleMeetRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24" style="stroke:none">
+            <rect x="2" y="6" width="13" height="12" rx="2.5" fill="#fbbc04"/>
+            <path d="M15 9.5l5-3.5v12l-5-3.5v-5z" fill="#34a853"/>
+            <rect x="2" y="6" width="6" height="6" rx="1.5" fill="#ea4335"/>
+            <rect x="9" y="12" width="6" height="6" rx="1" fill="#4285f4"/>
+          </svg>
+        </div>
+        <div class="gm-rbody">
+          <div id="gmMeetTxt" style="color:${meetVal?'var(--gblue)':'var(--mut)'};font-weight:${meetVal?'500':'400'}">${meetVal||'Google Meet video konferans görüşmesi ekle'}</div>
+          <input type="hidden" id="gmMeet" value="${meetVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 4. Konum Ekle -->
+      <div class="gm-r" onclick="$('#gmLoc')?.focus()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmLoc" placeholder="konum ekle" value="${locVal.replace(/"/g,'&quot;')}">
+        </div>
+      </div>
+
+      <!-- 5. Açıklama veya Google Drive / Kasa Eki Ekle -->
+      <div class="gm-r align-top" onclick="gcalExpandDescRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="14" y2="12"/><line x1="4" y1="18" x2="18" y2="18"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <input class="gm-inline-in" id="gmDescShort" placeholder="açıklama veya Google Drive eki ekle" value="${descVal.replace(/"/g,'&quot;')}" style="display:${descVal?'none':'block'}" onfocus="gcalExpandDescRow()">
+          <div id="gmDescWrap" style="display:${descVal?'flex':'none'};flex-direction:column;gap:6px" onclick="event.stopPropagation()">
+            <textarea class="gmodal-in" id="gmDesc" rows="2" placeholder="Açıklama, sınav konuları veya çalışma notu ekle…" style="resize:vertical">${descVal.replace(/</g,'&lt;')}</textarea>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select class="gmodal-in" style="font-size:11.5px;padding:4px 8px" onchange="if(this.value){const ta=$('#gmDesc');ta.value=(ta.value?ta.value+'\\n':'')+'📎 Ekli Kasa Notu: [['+this.value+']]';this.value='';}">
+                <option value="">📎 AgyDesk Kasasından Not / PDF Ekle…</option>
+                ${Object.entries(window.pages||{}).filter(([id])=>id.startsWith('note:')).slice(0,25).map(([id,p])=>`<option value="${id.slice(5)}">${p.folder?p.folder+' · ':''}${p.t}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Takvim Sahibi / Kasa & Bildirim Satırı -->
+      <div class="gm-r align-top" onclick="gcalExpandKasaRow()">
+        <div class="gm-ic">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        </div>
+        <div class="gm-rbody">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span id="gmOwnerName" style="font-weight:500">Cavit ÖZGEN${kasaVal?' · '+gcalKasaTitle(kasaVal):''}</span>
+            <span class="gm-dot" id="gmColorDot" style="background:${curKindObj.color}" onclick="event.stopPropagation();gcalCycleModalKind()" title="Renk / Kategori değiştir"></span>
+          </div>
+          <div class="gm-sub" id="gmNotifySub">Uygun · Varsayılan görünürlük · ${notifyVal}</div>
+          <div id="gmKasaExpand" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
+            <select class="gmodal-in" id="gmKasa" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmOwnerName').textContent='Cavit ÖZGEN'+(this.value?' · '+gcalKasaTitle(this.value):'')">
+              <option value="">Genel Akademik Takvim</option>
+              ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${kasaVal===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+            </select>
+            <select class="gmodal-in" id="gmNotify" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmNotifySub').textContent='Uygun · Varsayılan görünürlük · '+this.value">
+              <option value="Bir gün önce şu saatte: 5pm bildir" ${notifyVal.includes('5pm')?'selected':''}>Bir gün önce: 5pm bildir</option>
+              <option value="30 dakika önce bildir" ${notifyVal.includes('30')?'selected':''}>30 dakika önce bildir</option>
+              <option value="1 saat önce bildir" ${notifyVal.includes('1 saat')?'selected':''}>1 saat önce bildir</option>
+              <option value="Sınav sabahı 08:00 bildir" ${notifyVal.includes('08:00')?'selected':''}>Sınav sabahı 08:00 bildir</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alt Çubuk: Diğer seçenekler & Mavi Kaydet Butonu -->
+    <div class="gm-foot">
+      ${isEdit && ev.kasa?`<button type="button" class="gm-more-btn" onclick="closeCalModal();enterKasa('${ev.kasa}','write')">❖ Ders Kasası</button>`:'<span></span>'}
+      <div style="display:flex;align-items:center;gap:6px;margin-left:auto">
+        <button type="button" class="gm-more-btn" onclick="gcalShowAllModalOptions()">Diğer seçenekler</button>
+        <button type="button" class="gm-save-btn" onclick="saveCalFromModal()">Kaydet</button>
+      </div>
+    </div>`;
+  bg.classList.add('show');
+  setTimeout(()=>$('#gmTitle')?.focus(),40);
+}
+
+function gcalSetModalKind(kid){
+  $$('.gm-kbtn').forEach(b=>b.classList.toggle('on',b.dataset.k===kid));
+  const dot=$('#gmColorDot');
+  if(dot && GCAL_KINDS[kid]) dot.style.background=GCAL_KINDS[kid].color;
+}
+function gcalCycleModalKind(){
+  const order=['exam','task','lab','study'];
+  const cur=$('.gm-kbtn.on')?.dataset.k||'exam';
+  const next=order[(order.indexOf(cur)+1)%order.length];
+  gcalSetModalKind(next);
+}
+function gcalExpandTimeRow(focusTime=false){
+  const ex=$('#gmTimeExpand'), btn=$('#gmAddTimeBtn');
+  if(ex) ex.style.display='flex';
+  if(btn) btn.style.display='none';
+  if(focusTime) $('#gmStart')?.focus();
+}
+function gcalExpandDescRow(){
+  const s=$('#gmDescShort'), w=$('#gmDescWrap');
+  if(s) s.style.display='none';
+  if(w){ w.style.display='flex'; $('#gmDesc')?.focus(); }
+}
+function gcalExpandKasaRow(){
+  const ex=$('#gmKasaExpand');
+  if(ex) ex.style.display=ex.style.display==='none'?'flex':'none';
+}
+function gcalToggleMeetRow(){
+  const inp=$('#gmMeet'), txt=$('#gmMeetTxt');
+  if(!inp||!txt) return;
+  if(inp.value){
+    inp.value='';
+    txt.textContent='Google Meet video konferans görüşmesi ekle';
+    txt.style.color='var(--mut)';
+    txt.style.fontWeight='400';
+  }else{
+    const code='agy-'+Math.random().toString(36).slice(2,5)+'-'+Math.random().toString(36).slice(2,6);
+    inp.value=`meet.google.com/${code}`;
+    txt.textContent=`🎥 ${inp.value} (Canlı Çalışma Odası Eklendi)`;
+    txt.style.color='var(--gblue)';
+    txt.style.fontWeight='500';
+  }
+}
+function gcalShowAllModalOptions(){
+  gcalExpandTimeRow();
+  gcalExpandDescRow();
+  const ex=$('#gmKasaExpand');
+  if(ex) ex.style.display='flex';
+}
+function gcalStartModalDrag(ev){
+  if(ev.target.closest('button')) return;
+  const box=$('#gcalModal'); if(!box) return;
+  const rect=box.getBoundingClientRect();
+  const startX=ev.clientX, startY=ev.clientY;
+  const curTx=parseFloat(box.dataset.tx||'0'), curTy=parseFloat(box.dataset.ty||'0');
+  const onMove=e=>{
+    const nx=curTx+(e.clientX-startX), ny=curTy+(e.clientY-startY);
+    box.dataset.tx=nx; box.dataset.ty=ny;
+    box.style.transform=`translate(${nx}px, ${ny}px)`;
+  };
+  const onUp=()=>{
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+  };
+  window.addEventListener('mousemove',onMove);
+  window.addEventListener('mouseup',onUp);
+}
+
+function closeCalModal(){
+  const box=$('#gcalModal');
+  if(box){ box.style.transform=''; box.dataset.tx='0'; box.dataset.ty='0'; }
+  $('#gcalModalBg')?.classList.remove('show');
+  GCAL.editingId=null;
+}
+
+async function saveCalFromModal(){
+  const title=($('#gmTitle')?.value||'').trim()||'(Başlıksız etkinlik)';
+  const kindBtn=$('.gm-kbtn.on');
+  const kind=kindBtn?kindBtn.dataset.k:'exam';
+  const date=$('#gmDate')?.value||GCAL.cursor||gcalTodayISO();
+  const start=$('#gmStart')?.value||'10:00';
+  const end=$('#gmEnd')?.value||'11:00';
+  const kasa=$('#gmKasa')?.value||'';
+  const loc=($('#gmLoc')?.value||'').trim();
+  const desc=(($('#gmDesc')?.value||$('#gmDescShort')?.value)||'').trim();
+  const guests=($('#gmGuests')?.value||'').trim();
+  const meet=($('#gmMeet')?.value||'').trim();
+  const repeat=$('#gmRepeat')?.value||'Yinelenmez';
+  const notify=$('#gmNotify')?.value||'Bir gün önce şu saatte: 5pm bildir';
+  const day=gcalFromISO(date).getDate();
+
+  let item=GCAL.editingId?calEvents.find(x=>x.id===GCAL.editingId):null;
+  if(item){
+    Object.assign(item,{title,kind,date,day,start,end,kasa,loc,desc,guests,meet,repeat,notify});
+    await persistCalEventUpdate(item);
+    toast(`✓ "${title}" güncellendi`);
+  }else{
+    const newEv={id:Date.now(),day,date,title,kind,kasa,start,end,allDay:false,loc,desc,guests,meet,repeat,notify,done:false};
+    try{
+      const saved=await api('/api/calendar',{day,title,kind,kasa:packCalMeta(newEv)});
+      if(saved&&saved.id) newEv.id=saved.id;
+    }catch(e){}
+    calEvents.push(newEv);
+    GCAL.cursor=date;
+    renderCal($('#main'),false);
+    toast(`▦ Takvime eklendi: ${title}`);
+  }
+  closeCalModal();
+}
+
+async function deleteCalFromModal(id){
+  const ev=calEvents.find(x=>x.id===id);
+  if(!ev) return;
+  try{ await api('/api/calendar/'+id,null,'DELETE'); }catch(e){}
+  calEvents=calEvents.filter(x=>x.id!==id);
+  closeCalModal();
+  renderCal($('#main'),false);
+  toast(`🗑 "${ev.title}" silindi`);
+}
+
+async function gcalToggleDone(id){
+  const ev=calEvents.find(x=>x.id===id);
+  if(!ev) return;
+  ev.done=!ev.done;
+  await persistCalEventUpdate(ev);
+  toast(ev.done?`✓ "${ev.title}" tamamlandı!`:`↺ "${ev.title}" tekrar aktif edildi`);
+}
+
+/* --- Pomodoro, Doğal Dil Motoru (.ics) & AI Entegrasyonu --- */
+function gcalDetectConflicts(){
+  const out=[];
+  const byDate={};
+  calEvents.filter(e=>!e.done).forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
+  Object.entries(byDate).forEach(([dt,list])=>{
+    if(list.length<2) return;
+    const sorted=[...list].sort((a,b)=>(a.start||'09:00').localeCompare(b.start||'09:00'));
+    for(let i=0;i<sorted.length-1;i++){
+      const a=sorted[i], b=sorted[i+1];
+      if((a.end||'10:00')>(b.start||'09:00')){
+        out.push({date:dt,label:`${dt}: "${a.title}" (${a.start}-${a.end}) ile "${b.title}" (${b.start}-${b.end}) çakışıyor`});
+      }
+    }
+  });
+  return out;
+}
+
+function gcalParseNaturalLanguage(raw){
+  let txt=String(raw||'').trim();
+  if(!txt) return null;
+  let date=GCAL.cursor||gcalTodayISO();
+  let start='10:00', end='11:00', kind='task', loc='', kasa='';
+  const now=gcalFromISO(gcalTodayISO());
+
+  // 1) Konum (@D-204 veya @Amfi-2)
+  const locM=txt.match(/@([^\s#]+)/);
+  if(locM){ loc=locM[1].replace(/_/g,' '); txt=txt.replace(locM[0],'').trim(); }
+
+  // 2) Etiket (#sınav, #lab, #görev, #çalışma)
+  const tagM=txt.match(/#(sınav|sinav|vize|quiz|lab|deney|görev|gorev|ödev|odev|çalışma|calisma)/i);
+  if(tagM){
+    const tg=tagM[1].toLowerCase();
+    if(/sınav|sinav|vize|quiz/.test(tg)) kind='exam';
+    else if(/lab|deney/.test(tg)) kind='lab';
+    else if(/çalışma|calisma/.test(tg)) kind='study';
+    else kind='task';
+    txt=txt.replace(tagM[0],'').trim();
+  }
+
+  // 3) Saat aralığı (14:00-16:00 veya 14:00)
+  const timeM=txt.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3])[:.]([0-5]\d))?\b/);
+  if(timeM){
+    const h1=gcalPad(Number(timeM[1])), m1=timeM[2];
+    start=`${h1}:${m1}`;
+    if(timeM[3]!==undefined){
+      end=`${gcalPad(Number(timeM[3]))}:${timeM[4]}`;
+    }else{
+      end=`${gcalPad(Math.min(23,Number(timeM[1])+1))}:${m1}`;
+    }
+    txt=txt.replace(timeM[0],'').trim();
+  }
+
+  // 4) Tarih ("bugün", "yarın", haftanın günleri, veya "19 Kasım")
+  const low=txt.toLowerCase();
+  const monthNames=['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
+  const dmMatch=txt.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames.join('|')})\\b`,'i'));
+  if(dmMatch){
+    const dNum=Number(dmMatch[1]);
+    const mIdx=monthNames.indexOf(dmMatch[2].toLowerCase());
+    if(mIdx!==-1) date=`${now.getFullYear()}-${gcalPad(mIdx+1)}-${gcalPad(dNum)}`;
+    txt=txt.replace(dmMatch[0],'').trim();
+  }else if(/\bbugün\b/i.test(txt)){
+    date=gcalTodayISO();
+    txt=txt.replace(/\bbugün\b/i,'').trim();
+  }else if(/\byarın\b/i.test(txt)){
+    const d=new Date(now); d.setDate(d.getDate()+1); date=gcalToISO(d);
+    txt=txt.replace(/\byarın\b/i,'').trim();
+  }else{
+    const dayMap=[['pazartesi|pzt',0],['salı|sali|sal',1],['çarşamba|carsamba|çar',2],['perşembe|persembe|per',3],['cuma|cum',4],['cumartesi|cmt',5],['pazar|paz',6]];
+    for(const [pat,targetMonIdx] of dayMap){
+      const rx=new RegExp(`\\b(${pat})\\b`,'i');
+      const m=txt.match(rx);
+      if(m){
+        const curMonIdx=gcalDowMon(now);
+        let delta=(targetMonIdx-curMonIdx+7)%7;
+        if(delta===0) delta=7;
+        const d=new Date(now); d.setDate(d.getDate()+delta);
+        date=gcalToISO(d);
+        txt=txt.replace(m[0],'').trim();
+        break;
+      }
+    }
+  }
+
+  // 5) Otomatik Kategori & Ders Kasası Çıkarımı
+  const fullLow=(txt+' '+raw).toLowerCase();
+  if(!tagM){
+    if(/vize|final|quiz|sınav|sözlü/.test(fullLow)) kind='exam';
+    else if(/lab|deney|föy/.test(fullLow)) kind='lab';
+    else if(/tekrar|pomodoro|çalışma/.test(fullLow)) kind='study';
+  }
+  if(/makina|trafo|senkron|asenkron/.test(fullLow)) kasa='elektrik-makinalari';
+  else if(/kontrol|pid|bode|nyquist|kök/.test(fullLow)) kasa='kontrol-sistemleri';
+  else if(/yüksek gerilim|yg|manevra|izolatör|delinme/.test(fullLow)) kasa='yuksek-gerilim';
+  else if(/iha|tasarım|seçmeli|otonom/.test(fullLow)) kasa='secmeli-tasarim';
+  else if(/güç|bara|yük akışı/.test(fullLow)) kasa='guc-sistemleri';
+
+  const title=txt.replace(/\s+/g,' ').trim()||'(Başlıksız etkinlik)';
+  return {title,date,start,end,kind,loc,kasa};
+}
+
+function gcalSmartPreview(val){
+  const box=$('#gcalSmartPrev');
+  if(!box) return;
+  const p=gcalParseNaturalLanguage(val);
+  if(!p){
+    box.innerHTML=`<span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>`;
+    return;
+  }
+  const kObj=GCAL_KINDS[p.kind]||GCAL_KINDS.task;
+  const kInk=gcalInk(kObj);
+  box.innerHTML=`
+    <span class="gcal-smart-chip" style="border-color:${kInk}66;color:${kInk}">${kObj.icon} ${kObj.label}</span>
+    <span class="gcal-smart-chip">📅 ${p.date}</span>
+    <span class="gcal-smart-chip">🕒 ${p.start}–${p.end}</span>
+    ${p.loc?`<span class="gcal-smart-chip">📍 ${p.loc}</span>`:''}
+    ${p.kasa?`<span class="gcal-smart-chip" style="color:var(--cu)">📘 ${gcalKasaTitle(p.kasa)}</span>`:''}
+  `;
+}
+
+async function gcalSmartSubmit(){
+  const inp=$('#gcalSmartInput');
+  if(!inp||!inp.value.trim()) return;
+  const p=gcalParseNaturalLanguage(inp.value);
+  if(!p) return;
+  const day=gcalFromISO(p.date).getDate();
+  const newEv={id:Date.now(),day,date:p.date,title:p.title,kind:p.kind,kasa:p.kasa,start:p.start,end:p.end,allDay:false,loc:p.loc,desc:'',guests:'',meet:'',repeat:'Yinelenmez',notify:'Bir gün önce şu saatte: 5pm bildir',done:false};
+  try{
+    const saved=await api('/api/calendar',{day,title:p.title,kind:p.kind,kasa:packCalMeta(newEv)});
+    if(saved&&saved.id) newEv.id=saved.id;
+  }catch(e){}
+  calEvents.push(newEv);
+  GCAL.cursor=p.date;
+  inp.value='';
+  renderCal($('#main'),false);
+  toast(`⚡ AgyCal Sihirli Ekle: "${p.title}" (${p.date} ${p.start})`);
+}
+
+function gcalExportICS(){
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//AgyDesk//AgyCal PRO//TR','CALSCALE:GREGORIAN','X-WR-CALNAME:AgyCal Akademik Takvim'];
+  const fmtDt=(iso,hm)=>iso.replace(/-/g,'')+'T'+(hm||'09:00').replace(':','')+'00';
+  calEvents.forEach(ev=>{
+    lines.push(
+      'BEGIN:VEVENT',
+      `UID:agycal-${ev.id}@agydesk.local`,
+      `DTSTAMP:${fmtDt(gcalTodayISO(),'09:00')}`,
+      `DTSTART:${fmtDt(ev.date,ev.start||'09:00')}`,
+      `DTEND:${fmtDt(ev.date,ev.end||'10:00')}`,
+      `SUMMARY:${(ev.title||'').replace(/[,;\\]/g,' ')}`,
+      ev.loc?`LOCATION:${ev.loc.replace(/[,;\\]/g,' ')}`:'',
+      ev.desc?`DESCRIPTION:${ev.desc.replace(/\n/g,'\\n')}`:'',
+      'BEGIN:VALARM','TRIGGER:-PT60M','ACTION:DISPLAY','DESCRIPTION:AgyCal Hatırlatıcı','END:VALARM',
+      'END:VEVENT'
+    );
+  });
+  lines.push('END:VCALENDAR');
+  const blob=new Blob([lines.filter(Boolean).join('\r\n')],{type:'text/calendar;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`AgyCal-${gcalTodayISO()}.ics`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('📲 AgyCal .ics takvim dosyası indirildi (Google/Apple Takvim ile uyumlu)');
+}
+
+function gcalUpdatePomoDom(){
+  const p=GCAL.pomo;
+  const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+  const pct=Math.round((p.sec/Math.max(1,p.total))*100);
+  const topEl=$('#gcalTopPomo'); if(topEl) topEl.textContent=`${mm}:${ss}`;
+  const tabEl=$('#acalTabPomo'); if(tabEl) tabEl.textContent=`⏱ ${mm}:${ss}`;
+  const tEl=$('#gpomoTime'); if(tEl) tEl.textContent=`${mm}:${ss}`;
+  const rEl=$('#gpomoRing'); if(rEl) rEl.style.setProperty('--pp',pct);
+}
+function gcalPomoToggle(){
+  const p=GCAL.pomo;
+  if(p.running){
+    clearInterval(p.timer); p.timer=null; p.running=false;
+  }else{
+    p.running=true;
+    p.timer=setInterval(()=>{
+      if(p.sec>0){ p.sec--; gcalUpdatePomoDom(); }
+      else{
+        clearInterval(p.timer); p.timer=null; p.running=false;
+        toast(`🔔 Pomodoro tamamlandı: ${p.taskTitle}! Harika iş çıkardın.`);
+        renderCal($('#main'),false);
+      }
+    },1000);
+  }
+  renderCal($('#main'),false);
+}
+function gcalPomoReset(mins,modeName){
+  const p=GCAL.pomo;
+  if(p.timer) clearInterval(p.timer);
+  p.running=false; p.timer=null;
+  p.total=mins*60; p.sec=mins*60; p.mode=modeName;
+  renderCal($('#main'),false);
+}
+function gcalStartPomoFor(title){
+  GCAL.pomo.taskTitle=title;
+  GCAL.view='day';
+  gcalPomoReset(25,'25 dk Odak');
+  gcalPomoToggle();
+  toast(`⏱ "${title}" için 25 dk Pomodoro başlatıldı`);
+}
+
+function gcalPrepWithAi(evId){
+  const ev=calEvents.find(x=>x.id===evId);
+  if(!ev) return;
+  if(ev.kasa && ev.kasa!=='all'){
+    currentKasa=ev.kasa;
+    rebuildTreeAndSources();
+  }
+  rtab('ai');
+  aiSend('side_ai',`Takvimimdeki şu sınav/görev için (${ev.date} ${ev.start}, ${ev.title}${ev.desc?' — Konular: '+ev.desc:''}) adım adım çalışma planı, kritik formüller ve çıkabilecek 3 klasik sınav sorusu hazırla.`);
+}
+
+function gcalAskAiForDay(iso){
+  const evs=getAllEventsForDate(iso);
+  const summary=evs.map(e=>`- ${e.start}–${e.end}: ${e.title} (${gcalKasaTitle(e.kasa)})`).join('\n')||'Boş gün';
+  rtab('ai');
+  aiSend('side_ai',`${iso} tarihli günlük programım şöyle:\n${summary}\n\nBu günü en verimli şekilde geçirmem için saatlik Pomodoro çalışma blokları ve tekrar stratejisi öner.`);
+}
+
+function gcalAskAiStudyPlan(){
+  const upcoming=calEvents.filter(e=>!e.done).sort((a,b)=>a.date.localeCompare(b.date)).map(e=>`- ${e.date} (${e.start}): [${(GCAL_KINDS[e.kind]||GCAL_KINDS.task).label}] ${e.title} (${gcalKasaTitle(e.kasa)})`).join('\n');
+  rtab('ai');
+  aiSend('side_ai',`Akademik takvimimdeki yaklaşan sınav, lab ve teslimlerim:\n${upcoming}\n\nBana bugünden başlayarak vize ve teslimlere eksiksiz yetişmemi sağlayacak, hangi gün hangi dersin hangi konusuna kaç saat çalışmam gerektiğini gösteren akıllı bir haftalık çalışma tablosu çıkar.`);
+}
+
+function getThemeCanvasPal(){
+  const cs=getComputedStyle(document.body);
+  const g=(v,f)=>cs.getPropertyValue(v).trim()||f;
+  return {
+    line:g('--line','#272c28'),
+    mut:g('--mut','#8c958c'),
+    cu:g('--cu','#e0a458'),
+    ok:g('--ok','#7bc47f'),
+    blue:g('--blue','#79c0ff'),
+    txt:g('--txt','#e6e9e4')
+  };
+}
+
+/* ---------- Filtre simülasyonu ---------- */
+function renderSim(m){
+  m.innerHTML=`<div class="sim"><h1>Düşük Geçiren Filtre</h1>
+  <div style="color:var(--mut)">RC filtre · Bode genlik eğrisi, canlı</div>
+  <canvas id="cv" width="860" height="320"></canvas>
+  <div class="sl"><span>R</span><input type="range" id="rR" min="100" max="10000" value="1000" step="100"><b id="vR"></b></div>
+  <div class="sl"><span>C</span><input type="range" id="rC" min="10" max="1000" value="100" step="10"><b id="vC"></b></div>
+  <div class="sl"><span>fc</span><b id="vF" style="margin-left:auto;font-size:15px"></b></div></div>`;
+  const draw=()=>{
+    const pal=getThemeCanvasPal();
+    const R=+$('#rR').value,C=+$('#rC').value*1e-9,fc=1/(2*Math.PI*R*C);
+    $('#vR').textContent=R>=1000?(R/1000)+' kΩ':R+' Ω'; $('#vC').textContent=$('#rC').value+' nF'; $('#vF').textContent=(fc>=1000?(fc/1000).toFixed(2)+' kHz':fc.toFixed(0)+' Hz');
+    const cv=$('#cv'),g=cv.getContext('2d'),W=cv.width,H=cv.height;
+    g.clearRect(0,0,W,H);
+    g.strokeStyle=pal.line;g.fillStyle=pal.mut;g.font='11px JetBrains Mono, monospace';
+    for(let i=0;i<=6;i++){const x=60+i*(W-80)/6;g.beginPath();g.moveTo(x,10);g.lineTo(x,H-30);g.stroke();g.fillText(['10','100','1k','10k','100k','1M','10M'][i],x-10,H-12);}
+    for(let db=0;db>=-60;db-=20){const y=10+(-db)/60*(H-40);g.beginPath();g.moveTo(60,y);g.lineTo(W-20,y);g.stroke();g.fillText(db+' dB',8,y+4);}
+    g.strokeStyle=pal.cu;g.lineWidth=2.2;g.beginPath();
+    for(let x=0;x<=W-80;x++){const f=Math.pow(10,1+x/(W-80)*6),mag=-10*Math.log10(1+Math.pow(f/fc,2));const y=10+Math.min(60,-mag)/60*(H-40);x?g.lineTo(60+x,y):g.moveTo(60+x,y);}
+    g.stroke();
+    const fx=60+(Math.log10(fc)-1)/6*(W-80);
+    if(fx>60&&fx<W-20){g.setLineDash([4,4]);g.strokeStyle=pal.ok;g.beginPath();g.moveTo(fx,10);g.lineTo(fx,H-30);g.stroke();g.setLineDash([]);g.fillStyle=pal.ok;g.fillText('−3 dB',fx+6,24);}
+  };
+  ['rR','rC'].forEach(i=>$('#'+i).oninput=draw); draw();
+}
+
+/* ---------- Trafo Lab Analizörü (Defter Verileri & Canlı Fazör/Eşdeğer Devre) ---------- */
+const TRAFO_STATE={
+  Rp:5.6, Rs:1.4, Np:552, Ns:213, ocIdx:4, scIdx:2,
+  oc:[
+    {V:100, I_mA:17.8, P:1.5},
+    {V:132, I_mA:21.15, P:2.0},
+    {V:150, I_mA:23.0, P:3.0},
+    {V:160, I_mA:24.17, P:3.5},
+    {V:190, I_mA:28.0, P:4.0}
+  ],
+  sc:[
+    {V:10.45, I:0.418, P:5.0},
+    {V:22.33, I:0.794, P:17.0},
+    {V:29.45, I:1.02, P:30.0}
+  ]
+};
+function calcOC(r){
+  const I=r.I_mA/1000, S=r.V*I;
+  const rawCos=S>0?r.P/S:0, cos=Math.min(1,Math.max(0,rawCos));
+  const phi=Math.acos(cos)*180/Math.PI, sin=Math.sqrt(Math.max(0,1-cos*cos));
+  const Q=S*sin, Ife=I*cos, Im=I*sin;
+  const Rfe=Ife>1e-6?r.V/Ife:0, Xm=Im>1e-6?r.V/Im:0;
+  return {I,S,rawCos,cos,phi,sin,Q,Ife_mA:Ife*1000,Im_mA:Im*1000,Rfe,Xm};
+}
+function calcSC(r){
+  const S=r.V*r.I, rawCos=S>0?r.P/S:0, over=rawCos>1;
+  const cos=Math.min(1,Math.max(0,rawCos));
+  const phi=Math.acos(cos)*180/Math.PI, sin=Math.sqrt(Math.max(0,1-cos*cos));
+  const Z=r.I>1e-6?r.V/r.I:0, Res=r.I>1e-6?r.P/(r.I*r.I):0;
+  const Xes=Z>Res?Math.sqrt(Z*Z-Res*Res):Z*sin;
+  return {S,rawCos,over,cos,phi,sin,Z,Res,Xes};
+}
+function liveTrafoSvg(st,ocC,scC){
+  const a=st.Np/st.Ns, a2=a*a, RsP=a2*st.Rs;
+  const Xp=scC.Xes/2, XsP=scC.Xes/2;
+  const Y1=78, Y2=202;
+  return `<svg viewBox="0 0 740 245" font-family="JetBrains Mono,monospace" style="width:100%;height:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px">`+
+    `<rect x="232" y="92" width="126" height="98" rx="6" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>`+
+    svLine(42,Y1,90,Y1)+svCurArrow(42,Y1,90,Y1,`I₀=${st.oc[st.ocIdx].I_mA}mA`,SV.grn,0,-12)+
+    svResH(90,Y1,60,`Rₚ=${st.Rp.toFixed(1)}Ω`)+svLine(150,Y1,168,Y1)+
+    svIndH(168,Y1,60,`jXₚ≈j${Xp.toFixed(2)}Ω`)+svLine(228,Y1,376,Y1)+
+    svDot(260,Y1)+svLine(260,Y1,260,110)+svCurArrow(260,84,260,110,`${ocC.Ife_mA.toFixed(1)}mA`,SV.ln,-22,2)+
+    svResV(260,110,62,`R_fe=${Math.round(ocC.Rfe)}Ω`,-12)+svLine(260,172,260,Y2)+svDot(260,Y2)+
+    svDot(326,Y1)+svLine(326,Y1,326,110)+svCurArrow(326,84,326,110,`${ocC.Im_mA.toFixed(1)}mA`,SV.acc,22,2)+
+    svIndV(326,110,62,`jX_m=j${Math.round(ocC.Xm)}Ω`,12)+svLine(326,172,326,Y2)+svDot(326,Y2)+
+    svCurArrow(335,Y1,376,Y1,`I_kd=${st.sc[st.scIdx].I}A`,SV.grn,0,-12)+
+    svResH(376,Y1,64,`Rₛ′=${RsP.toFixed(2)}Ω`,`(R_eş,AC=${scC.Res.toFixed(2)}Ω)`)+svLine(440,Y1,462,Y1)+
+    svIndH(462,Y1,64,`jXₛ′≈j${XsP.toFixed(2)}Ω`,`(Z_kd=${scC.Z.toFixed(2)}Ω)`)+svLine(526,Y1,655,Y1)+
+    svLine(42,Y2,655,Y2)+
+    svTerm(38,Y1,'+',-10)+svTerm(38,Y2,'−',18)+svTxt(22,144,`${st.oc[st.ocIdx].V}V`,SV.ln,'middle',12)+
+    svTerm(660,Y1,'+',-10)+svTerm(660,Y2,'−',18)+svTxt(695,144,`a=${a.toFixed(2)}`,SV.ln,'middle',11.5)+
+    svTxt(295,228,`Seçili Kademe → Boşta #${st.ocIdx+1} (${st.oc[st.ocIdx].V}V, cosφ₀=${ocC.cos.toFixed(3)}) · Kısa Devre #${st.scIdx+1} (${st.sc[st.scIdx].V}V, cosφ_kd=${scC.cos.toFixed(3)})`,SV.dim,'middle',10.8)+
+  `</svg>`;
+}
+async function exportTrafoToNote(){
+  const st=TRAFO_STATE, a=st.Np/st.Ns, a2=a*a;
+  const ocRows=st.oc.map((r,i)=>{
+    const c=calcOC(r);
+    return `| **${i+1}** | ${r.V} | ${r.I_mA} | ${r.P} | ${c.S.toFixed(2)} | **${c.cos.toFixed(4)}** | ${c.phi.toFixed(2)}° | ${c.Ife_mA.toFixed(2)} | ${c.Im_mA.toFixed(2)} | ${Math.round(c.Rfe)} | ${Math.round(c.Xm)} |`;
+  }).join('\n');
+  const scRows=st.sc.map((r,i)=>{
+    const c=calcSC(r);
+    const cosStr=c.over?`1.000 *(ham: ${c.rawCos.toFixed(2)} ⚠️)*`:`**${c.cos.toFixed(4)}**`;
+    return `| **${i+1}** | ${r.V} | ${r.I} | ${r.P} | ${c.S.toFixed(2)} | ${cosStr} | ${c.phi.toFixed(2)}° | ${c.Z.toFixed(2)} | ${c.Res.toFixed(2)} | ${c.Xes.toFixed(2)} |`;
+  }).join('\n');
+  const mdBlock=`\n\n---\n\n## 📊 Laboratuvar Defteri Ölçüm Sonuçları ve Çözümleri (Otomatik Hesaplandı)\n\n- **DC Sargı Dirençleri ve Sarım Sayıları:** $R_p = ${st.Rp}\\,\\Omega$, $R_s = ${st.Rs}\\,\\Omega$, $N_p = ${st.Np}\\text{ sarım}$, $N_s = ${st.Ns}\\text{ sarım}$\n- **Dönüştürme Oranı:** $$a = \\frac{N_p}{N_s} = \\frac{${st.Np}}{${st.Ns}} = ${a.toFixed(4)}, \\quad a^2 = ${a2.toFixed(4)}, \\quad R_s' = a^2 R_s = ${(a2*st.Rs).toFixed(2)}\\,\\Omega$$\n\n### 1. Boşta Çalışma Deneyi Sonuçları ve $\\cos(\\varphi_0)$ Hesapları\n\n$$\\cos(\\varphi_0) = \\frac{P_0}{V_0 \\cdot I_0}, \\quad I_{fe} = I_0 \\cos(\\varphi_0), \\quad I_m = I_0 \\sin(\\varphi_0), \\quad R_{fe} = \\frac{V_0}{I_{fe}}, \\quad X_m = \\frac{V_0}{I_m}$$\n\n| Kademe | $V_{BÇ}$ (V) | $I_{BÇ}$ (mA) | $P_{BÇ}$ (W) | $S_0$ (VA) | $\\cos(\\varphi_0)$ | $\\varphi_0$ (°) | $I_{fe}$ (mA) | $I_m$ (mA) | $R_{fe}$ ($\\Omega$) | $X_m$ ($\\Omega$) |\n|---|---|---|---|---|---|---|---|---|---|---|\n${ocRows}\n\n### 2. Kısa Devre Deneyi Sonuçları ve $\\cos(\\varphi_{kd})$ Hesapları\n\n$$\\cos(\\varphi_{kd}) = \\frac{P_{kd}}{V_{kd} \\cdot I_{kd}}, \\quad Z_{kd} = \\frac{V_{kd}}{I_{kd}}, \\quad R_{eş} = \\frac{P_{kd}}{I_{kd}^2}, \\quad X_{eş} = \\sqrt{Z_{kd}^2 - R_{eş}^2}$$\n\n| Kademe | $V_{kd}$ (V) | $I_{kd}$ (A) | $P_{kd}$ (W) | $S_{kd}$ (VA) | $\\cos(\\varphi_{kd})$ | $\\varphi_{kd}$ (°) | $Z_{kd}$ ($\\Omega$) | $R_{eş}$ ($\\Omega$) | $X_{eş}$ ($\\Omega$) |\n|---|---|---|---|---|---|---|---|---|---|\n${scRows}\n\n> [!WARNING] 1. Kademe Wattmetre Duyarlılık Yorumu\n> 1. kademede $S_{kd} = 10.45 \\times 0.418 = 4.37\\text{ VA}$ iken analog wattmetrede $P_{kd} = 5\\text{ W}$ okunmuştur (alt skala yuvarlama hatası nedeniyle $P_{kd}/S_{kd} = 1.145 > 1$). Nominal akıma yakın **2. ve 3. kademeler** ($I_{kd} = 0.794\\text{ A}$ ve $1.02\\text{ A}$) baz alındığında $Z_{kd} \\approx 28.87\\,\\Omega$, $R_{eş,AC} \\approx 28.83\\,\\Omega$ ve $\\cos(\\varphi_{kd}) \\approx 0.9987$ elde edilir.\n`;
+  const rel='Elektrik_Makineleri_Lab/Deney_2_Tek_Fazli_Transformator.md';
+  const id='note:'+rel;
+  try{
+    const cur=await api('/api/note?rel='+encodeURIComponent(rel));
+    const marker='## 📊 Laboratuvar Defteri Ölçüm Sonuçları ve Çözümleri';
+    const baseContent=cur.content.includes(marker)?cur.content.slice(0,cur.content.indexOf(marker)).replace(/\n---\s*$/,''):cur.content;
+    noteCache[id]=await api('/api/note',{rel,content:baseContent.replace(/\s*$/,'')+mdBlock});
+    toast('✅ Defter hesapları Deney 2 notuna aktarıldı!',id);
+    openPage(id);
+  }catch(e){ alert('Nota aktarma hatası: '+e.message); }
+}
+function renderTrafoLab(m){
+  const st=TRAFO_STATE;
+  const a=st.Np/st.Ns, a2=a*a, RsP=a2*st.Rs, Rdc=st.Rp+RsP;
+  const ocCalcs=st.oc.map(calcOC), scCalcs=st.sc.map(calcSC);
+  const curOC=ocCalcs[st.ocIdx]||ocCalcs[0], curSC=scCalcs[st.scIdx]||scCalcs[0];
+  m.innerHTML=`<div class="sim" style="max-width:1020px;padding:24px 28px 90px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div>
+        <h1 style="font-size:24px">⚡ Trafo Lab Analizörü — El Yazısı Defter Verilerin</h1>
+        <div style="color:var(--mut);font-size:13px">Sayfa 4–6'daki Boşta Çalışma & Kısa Devre ölçümlerin otomatik çözüldü. Satırlara tıklayarak fazör ve şemayı canlı incele.</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="hb" onclick="openRightViewer('Elektrik_Makineleri_Lab/_gorseller/IMG20261102121140_120042.jpg','Defter Sayfası')" title="Defter fotoğrafını sağda aç">📷 Defter Fotoğrafı</button>
+        <button class="btn" style="padding:7px 14px;font-size:12.5px" onclick="exportTrafoToNote()">📄 Hesapları Deney 2 Notuna Aktar</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:8px;background:var(--bg);border:1px solid var(--line);padding:12px;border-radius:10px;font:12px var(--mono)">
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--mut)">Rₚ (Primer DC Ω)<input type="number" step="0.1" value="${st.Rp}" onchange="TRAFO_STATE.Rp=+this.value||0.1;renderTrafoLab($('#main'))" style="background:var(--bg2);border:1px solid var(--line);color:var(--txt);padding:5px 8px;border-radius:6px;font:inherit"></label>
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--mut)">Rₛ (Sekonder DC Ω)<input type="number" step="0.1" value="${st.Rs}" onchange="TRAFO_STATE.Rs=+this.value||0.1;renderTrafoLab($('#main'))" style="background:var(--bg2);border:1px solid var(--line);color:var(--txt);padding:5px 8px;border-radius:6px;font:inherit"></label>
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--mut)">Nₚ (Primer Sarım)<input type="number" step="1" value="${st.Np}" onchange="TRAFO_STATE.Np=+this.value||1;renderTrafoLab($('#main'))" style="background:var(--bg2);border:1px solid var(--line);color:var(--txt);padding:5px 8px;border-radius:6px;font:inherit"></label>
+      <label style="display:flex;flex-direction:column;gap:3px;color:var(--mut)">Nₛ (Sekonder Sarım)<input type="number" step="1" value="${st.Ns}" onchange="TRAFO_STATE.Ns=+this.value||1;renderTrafoLab($('#main'))" style="background:var(--bg2);border:1px solid var(--line);color:var(--txt);padding:5px 8px;border-radius:6px;font:inherit"></label>
+      <div style="display:flex;flex-direction:column;justify-content:center;padding:4px 8px;border-left:2px solid var(--cu)">
+        <span style="color:var(--mut)">Dönüştürme Oranı</span>
+        <b style="color:var(--cu);font-size:14px">a = ${a.toFixed(4)}</b>
+        <small style="color:var(--mut)">a² = ${a2.toFixed(3)} (Düşürücü)</small>
+      </div>
+      <div style="display:flex;flex-direction:column;justify-content:center;padding:4px 8px;border-left:2px solid var(--ok)">
+        <span style="color:var(--mut)">İndirgenmiş DC Direnç</span>
+        <b style="color:var(--ok);font-size:14px">R_eş,DC = ${Rdc.toFixed(2)} Ω</b>
+        <small style="color:var(--mut)">Rₛ′ = a²Rₛ = ${RsP.toFixed(2)} Ω</small>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.35fr 1fr;gap:12px;align-items:stretch">
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="ph" style="padding:0">Canlı Primere İndirgenmiş Eşdeğer Devre (Kademe #${st.ocIdx+1} & #${st.scIdx+1})</div>
+        ${liveTrafoSvg(st,curOC,curSC)}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div class="ph" style="padding:0">Canlı Fazör Diyagramı (I₀ = I_fe + jI_m) & Karakteristik Eğri</div>
+        <canvas id="trafoCv" width="440" height="245" style="height:100%"></canvas>
+      </div>
+    </div>
+
+    <div>
+      <div class="ph" style="padding:0 0 6px"><span>1. Boşta Çalışma Deneyi Sonuçları (Defterde "cos φ₀ hesaplanacak" Sütunu Çözüldü)</span><span style="color:var(--cu)">Satıra tıkla → şemaya yansıt</span></div>
+      <table style="width:100%;border-collapse:collapse;font:12.5px var(--mono);border:1px solid var(--line)">
+        <thead><tr style="background:var(--bg);color:var(--cu)">
+          <th style="padding:7px">#</th><th>V_BÇ (V)</th><th>I_BÇ (mA)</th><th>P_BÇ (W)</th><th>S₀ (VA)</th>
+          <th style="background:var(--cu-d)">cos(φ₀) ★</th><th>φ₀ (°)</th><th>I_fe (mA)</th><th>I_m (mA)</th><th>R_fe (Ω)</th><th>X_m (Ω)</th>
+        </tr></thead>
+        <tbody>
+          ${st.oc.map((r,i)=>{
+            const c=ocCalcs[i], sel=i===st.ocIdx;
+            return `<tr onclick="TRAFO_STATE.ocIdx=${i};renderTrafoLab($('#main'))" style="cursor:pointer;background:${sel?'var(--cu-d)':(i%2?'var(--bg3)':'transparent')};border-bottom:1px solid var(--line)">
+              <td style="padding:6px 8px;color:${sel?'var(--cu)':'var(--mut)'}"><b>${i+1})</b></td>
+              <td><input type="number" step="1" value="${r.V}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.oc[${i}].V=+this.value;renderTrafoLab($('#main'))" style="width:62px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td><input type="number" step="0.01" value="${r.I_mA}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.oc[${i}].I_mA=+this.value;renderTrafoLab($('#main'))" style="width:68px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td><input type="number" step="0.1" value="${r.P}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.oc[${i}].P=+this.value;renderTrafoLab($('#main'))" style="width:58px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td style="padding:6px 8px">${c.S.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--cu);font-weight:600;background:var(--cu-d)">${c.cos.toFixed(4)}</td>
+              <td style="padding:6px 8px">${c.phi.toFixed(1)}°</td>
+              <td style="padding:6px 8px;color:var(--cu)">${c.Ife_mA.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--blue)">${c.Im_mA.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--ok)">${Math.round(c.Rfe)}</td>
+              <td style="padding:6px 8px;color:var(--blue)">${Math.round(c.Xm)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div>
+      <div class="ph" style="padding:0 0 6px"><span>2. Kısa Devre Deneyi Sonuçları (Defterde "cos φ_kd hesaplanacak" Sütunu Çözüldü)</span><span style="color:var(--cu)">Satıra tıkla → şemaya yansıt</span></div>
+      <table style="width:100%;border-collapse:collapse;font:12.5px var(--mono);border:1px solid var(--line)">
+        <thead><tr style="background:var(--bg);color:var(--cu)">
+          <th style="padding:7px">#</th><th>V_kd (V)</th><th>I_kd (A)</th><th>P_kd (W)</th><th>S_kd (VA)</th>
+          <th style="background:var(--cu-d)">cos(φ_kd) ★</th><th>φ_kd (°)</th><th>Z_kd (Ω)</th><th>R_eş (Ω)</th><th>X_eş (Ω)</th><th>Xₚ ≈ Xₛ′ (Ω)</th>
+        </tr></thead>
+        <tbody>
+          ${st.sc.map((r,i)=>{
+            const c=scCalcs[i], sel=i===st.scIdx;
+            return `<tr onclick="TRAFO_STATE.scIdx=${i};renderTrafoLab($('#main'))" style="cursor:pointer;background:${sel?'var(--cu-d)':(i%2?'var(--bg3)':'transparent')};border-bottom:1px solid var(--line)">
+              <td style="padding:6px 8px;color:${sel?'var(--cu)':'var(--mut)'}"><b>${i+1})</b></td>
+              <td><input type="number" step="0.01" value="${r.V}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.sc[${i}].V=+this.value;renderTrafoLab($('#main'))" style="width:68px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td><input type="number" step="0.001" value="${r.I}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.sc[${i}].I=+this.value;renderTrafoLab($('#main'))" style="width:68px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td><input type="number" step="0.5" value="${r.P}" onclick="event.stopPropagation()" onchange="TRAFO_STATE.sc[${i}].P=+this.value;renderTrafoLab($('#main'))" style="width:58px;background:transparent;border:1px solid var(--line);color:var(--txt);padding:2px 5px;border-radius:4px;font:inherit"></td>
+              <td style="padding:6px 8px">${c.S.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:${c.over?'var(--err)':'var(--cu)'};font-weight:600;background:var(--cu-d)" title="${c.over?'P_kd > V_kd·I_kd (Wattmetre alt skala yuvarlama sapması)':''}">${c.over?`1.000 (ham:${c.rawCos.toFixed(2)}⚠)`:c.cos.toFixed(4)}</td>
+              <td style="padding:6px 8px">${c.phi.toFixed(1)}°</td>
+              <td style="padding:6px 8px">${c.Z.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--ok)">${c.Res.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--blue)">${c.Xes.toFixed(2)}</td>
+              <td style="padding:6px 8px;color:var(--blue)">${(c.Xes/2).toFixed(2)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+      <div style="margin-top:8px;padding:10px 12px;background:var(--bg);border-left:3px solid var(--cu);border-radius:0 8px 8px 0;font-size:12.5px;color:var(--txt)">
+        <b style="color:var(--cu)">💡 Raporda Hoca Puanı Kazandıran Bulgu (Kısa Devre 1. Kademe):</b> Defterindeki 1. kademede <code>V_kd·I_kd = 10.45 × 0.418 = 4.37 VA</code> iken wattmetreden <code>P_kd = 5 W</code> okunmuş (analog wattmetrenin alt skalada ~0.6 W yuvarlama sapması nedeniyle <code>P_kd / S_kd = 1.145 &gt; 1</code> çıkıyor). 2. ve 3. kademelerde (<code>0.794 A</code> ve <code>1.02 A</code>) bu hata kaybolur ve <code>Z_kd ≈ 28.87 Ω</code>, <code>R_eş,AC ≈ 28.83 Ω</code>, <code>cos(φ_kd) = 0.9987</code> bulunur. Ayrıca <code>R_eş,AC (28.8 Ω) &gt; R_eş,DC (15.0 Ω)</code> farkı AC deri etkisi (skin effect) ve kaçak akı ek kayıplarından kaynaklanır.
+      </div>
+    </div>
+  </div>`;
+
+  const cv=$('#trafoCv'); if(!cv)return;
+  const pal=getThemeCanvasPal();
+  const g=cv.getContext('2d'), W=cv.width, H=cv.height;
+  g.clearRect(0,0,W,H);
+  g.font='11px JetBrains Mono, monospace';
+  // Sol yarı: Fazör Diyagramı (V1, I0, Ife, Im)
+  const ox=34, oy=36, len=150;
+  g.strokeStyle=pal.line; g.lineWidth=1;
+  g.beginPath(); g.moveTo(ox,oy); g.lineTo(ox+len+18,oy); g.moveTo(ox,oy); g.lineTo(ox,oy+len+18); g.stroke();
+  g.fillStyle=pal.mut; g.fillText('Fazör (Boşta #'+ (st.ocIdx+1) +')', ox, 20);
+  // V1 vektörü (yatay referans)
+  g.strokeStyle=pal.cu; g.lineWidth=2.2;
+  g.beginPath(); g.moveTo(ox,oy); g.lineTo(ox+len,oy); g.stroke();
+  g.fillStyle=pal.cu; g.fillText(`V₁=${st.oc[st.ocIdx].V}V (0°)`, ox+len-52, oy-7);
+  // Ife (yatay) ve Im (dikey aşağı - endüktif geri)
+  const rad=curOC.phi*Math.PI/180;
+  const rI=len*0.88, ix=ox+rI*Math.cos(rad), iy=oy+rI*Math.sin(rad);
+  g.setLineDash([4,3]); g.strokeStyle=pal.mut; g.lineWidth=1.1;
+  g.beginPath(); g.moveTo(ix,oy); g.lineTo(ix,iy); g.moveTo(ox,iy); g.lineTo(ix,iy); g.stroke();
+  g.setLineDash([]);
+  // Ife
+  g.strokeStyle=pal.ok; g.lineWidth=2;
+  g.beginPath(); g.moveTo(ox,oy); g.lineTo(ix,oy); g.stroke();
+  g.fillStyle=pal.ok; g.fillText(`I_fe=${curOC.Ife_mA.toFixed(1)}mA`, ox+12, oy+14);
+  // Im
+  g.strokeStyle=pal.blue; g.lineWidth=2;
+  g.beginPath(); g.moveTo(ox,oy); g.lineTo(ox,iy); g.stroke();
+  g.fillStyle=pal.blue; g.fillText(`I_m=${curOC.Im_mA.toFixed(1)}mA`, ox+5, Math.min(H-10,iy+14));
+  // I0
+  g.strokeStyle=pal.txt; g.lineWidth=2.3;
+  g.beginPath(); g.moveTo(ox,oy); g.lineTo(ix,iy); g.stroke();
+  g.beginPath(); g.arc(ox,oy,34,0,rad); g.strokeStyle=pal.cu; g.lineWidth=1.4; g.stroke();
+  g.fillStyle=pal.cu; g.fillText(`φ₀=${curOC.phi.toFixed(1)}°`, ox+38, oy+22);
+  g.fillStyle=pal.txt; g.fillText(`I₀=${st.oc[st.ocIdx].I_mA}mA`, ix-28, iy+15);
+
+  // Sağ yarı: Boşta Çalışma Mıknatıslanma Eğrisi (V0 - I0)
+  const gx=245, gy=32, gw=175, gh=175;
+  g.strokeStyle=pal.line; g.lineWidth=1;
+  g.strokeRect(gx,gy,gw,gh);
+  g.fillStyle=pal.mut; g.fillText('Mıknatıslanma (V₀–I₀)', gx, 20);
+  g.fillText('I₀(mA) →', gx+gw-55, gy+gh+16);
+  g.strokeStyle=pal.cu; g.lineWidth=2; g.beginPath();
+  st.oc.forEach((p,idx)=>{
+    const px=gx+12+(p.I_mA-15)/16*(gw-24);
+    const py=gy+gh-12-(p.V-80)/125*(gh-24);
+    if(idx===0) g.moveTo(px,py); else g.lineTo(px,py);
+  });
+  g.stroke();
+  st.oc.forEach((p,idx)=>{
+    const px=gx+12+(p.I_mA-15)/16*(gw-24);
+    const py=gy+gh-12-(p.V-80)/125*(gh-24);
+    g.fillStyle=idx===st.ocIdx?pal.ok:pal.cu;
+    g.beginPath(); g.arc(px,py,idx===st.ocIdx?5.5:3.5,0,Math.PI*2); g.fill();
+    g.fillStyle=idx===st.ocIdx?pal.txt:pal.mut;
+    g.fillText(`${p.V}V`, px-12, py-8);
+  });
+}
+
+/* ---------- NotebookLM tarzı: ortada sohbet, sağda Studio ---------- */
+const STUDIO_KEY='agydesk_studio_notes';
+let studioNotes=[]; try{ studioNotes=JSON.parse(localStorage.getItem(STUDIO_KEY)||'[]'); }catch(e){}
+let studioPendingTitle=null, studioOpenId=null;
+const STUDIO_TILES=[['ozet','☰'],['fisle','▤'],['whisper','✎'],['teardown','◈'],['spice','∿'],['pcb','▦']];
+function saveStudio(){ try{ localStorage.setItem(STUDIO_KEY,JSON.stringify(studioNotes.slice(0,100))); }catch(e){} }
+function studioAdd(title,md,html){
+  studioNotes.unshift({id:'sn'+Date.now(),t:title,md:md||'',h:html||mdToHtml(md||''),ts:Date.now()});
+  saveStudio(); renderStudio();
+}
+function studioSaveMsg(i){
+  const m=ai.side_ai.msgs[i]; if(!m) return;
+  const d=document.createElement('div'); d.innerHTML=m.h; d.querySelectorAll('.route').forEach(x=>x.remove());
+  const txt=d.textContent.trim();
+  studioAdd(txt.slice(0,48)||'Not',txt,d.innerHTML);
+  toast('📌 Studio notlarına kaydedildi');
+}
+function studioDel(id){ studioNotes=studioNotes.filter(n=>n.id!==id); saveStudio(); renderStudio(); }
+function studioCopy(id){ const n=studioNotes.find(x=>x.id===id); if(n&&navigator.clipboard) navigator.clipboard.writeText(n.md||n.t); }
+function studioToggle(id){ studioOpenId=(studioOpenId===id)?null:id; renderStudio(); }
+function renderStudio(){
+  const b=$('#rb-studio'); if(!b) return;
+  b.innerHTML=`<div class="rview-head"><span>✦</span><b>Studio</b></div><div class="st-wrap">
+    <div class="st-h"><span>Oluştur</span></div>
+    <div class="st-grid">${STUDIO_TILES.map(([k,ic])=>`<button class="st-tile" onclick="runSkill('${k}')"><span class="ic">${ic}</span>${SK[k].h}</button>`).join('')}</div>
+    <div class="st-h"><span>Notlar</span><span>${studioNotes.length}</span></div>
+    ${studioNotes.length?studioNotes.map(n=>`<div class="st-card"><div class="t" onclick="studioToggle('${n.id}')">${studioOpenId===n.id?'▾':'▸'} ${n.t.replace(/</g,'&lt;')}</div>${studioOpenId===n.id?`<div class="full">${n.h}</div>`:`<div class="pv">${(n.md||'').replace(/[<#*]/g,'').slice(0,220)}</div>`}<div class="ft"><span>${new Date(n.ts).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span><span style="flex:1"></span><button onclick="studioCopy('${n.id}')" title="Kopyala">⧉</button><button onclick="studioDel('${n.id}')" title="Sil">🗑</button></div></div>`).join(''):`<div class="st-empty">Oluşturulan çıktılar ve 📌 ile kaydettiğin yanıtlar burada birikir.</div>`}
+  </div>`;
+}
+function studioSend(q){
+  q=(q||'').trim(); if(!q) return;
+  studioPendingTitle=null; aiSend('side_ai',q);
+}
+function renderStudyChat(m){
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
+    <div class="sc-body" id="scChat"></div>
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-box"><textarea id="scIn" rows="1" placeholder="Kaynaklarına bir şey sor…"></textarea><span class="sc-n" id="scN"></span><button class="sc-go" id="scGo" title="Gönder">➤</button></div></div></div>`;
+  const i=$('#scIn'), go=()=>{ const v=i.value; i.value=''; autoGrow(i); studioSend(v); };
+  $('#scGo').onclick=go;
+  i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
+  i.oninput=()=>autoGrow(i);
+  updateSideAiCtx(); renderStudyChatBody(); i.focus();
+}
+function renderStudyChatBody(){
+  const c=$('#scChat'); if(!c||active!=='studychat') return;
+  const s=ai.side_ai; if(!s) return;
+  const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
+  const n=getCheckedSources().length;
+  let h='';
+  if(!msgs.length&&!s.running){
+    h=`<div class="sc-hero"><div class="big">Kaynaklarınla sohbet</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
+  }else{
+    h=msgs.map(({x,i})=>x.w==='me'?`<div class="sc-msg me">${x.h}</div>`:`<div class="sc-msg a">${x.h}<div class="sc-act"><button onclick="studioSaveMsg(${i})">📌 Nota kaydet</button></div></div>`).join('');
+    if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
+  }
+  c.innerHTML=`<div class="sc-col">${h}</div>`;
+  c.scrollTop=c.scrollHeight;
+  const st=$('#scStop'); if(st) st.style.display=(s.running||s.pending)?'inline-flex':'none';
+  const ch=$('#scChips');
+  if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
+  runMermaid('#scChat .mermaid');
+}
+/* ---------- Sohbet / yönlendirici (Sağ Panel Gerçek AI) ---------- */
+function chat(who,html){
+  ai.side_ai.msgs.push({w:who==='me'?'me':'a',h:html});
+  renderSideAi();
+}
+function autoGrow(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight+2,Math.round(innerHeight*0.5))+'px'}
+function send(){
+  const i=$('#chatIn'),q=i.value.trim(); if(!q)return; i.value='';autoGrow(i);
+  aiSend('side_ai',q);
+}
+$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>autoGrow(e.target);
+
+/* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
+function syncPaneBtns(){
+  const l=$('#leftTog'), r=$('#rightTog');
+  if(l) l.classList.toggle('on', !app.classList.contains('no-left'));
+  if(r) r.classList.toggle('on', !app.classList.contains('no-right'));
+}
+function togglePane(side){
+  if(app.classList.contains('zen')){
+    app.classList.remove('zen');
+    const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
+    applyPaneWidths();
+  }
+  if(side==='right'&&viewerPrev&&!app.classList.contains('no-right')){
+    closeRightViewer();
+    return;
+  }
+  app.classList.toggle(side==='left'?'no-left':'no-right');
+  syncPaneBtns();
+}
+function leftHeaderAct(){
+  if(curMode==='ai'){ newSession(); return; }
+  const allOpen=tree.every(g=>g.open);
+  tree.forEach(g=>{g.open=!allOpen;TREE_OPEN[(g.id||'')+'|'+g.n]=g.open;});
+  renderTree();
+}
+$$('.rt').forEach(t=>t.onclick=()=>{
+  $('#rtabsBar').style.display='';
+  viewerPrev=null;
+  $$('.rt').forEach(x=>x.classList.toggle('on',x===t));
+  $$('.rbody').forEach(b=>b.classList.toggle('on',b.id==='rb-'+t.dataset.rt));
+  if(t.dataset.rt==='props') updateRightProps();
+});
+function rtab(n){
+  if(n==='ai'&&curMode==='study') n='studio';
+  $('#rtabsBar').style.display='';
+  viewerPrev=null;
+  const el=$(`.rt[data-rt=${n}]`);
+  if(el) el.click();
+  app.classList.remove('no-right');
+  syncPaneBtns();
+}
+function initResizers(){
+  const rl=$('#resLeft'), rr=$('#resRight');
+  const bind=(el,side)=>{
+    if(!el)return;
+    el.addEventListener('mousedown',ev=>{
+      if(ev.button!==0)return;
+      ev.preventDefault();
+      el.classList.add('on');
+      app.classList.add('resizing');
+      const onMove=e=>{
+        if(side==='left'){
+          const raw=e.clientX-52;
+          leftW=clampLeft(raw);
+        }else{
+          const raw=window.innerWidth-e.clientX;
+          rightW=clampRight(raw);
+        }
+        applyPaneWidths();
+      };
+      const onUp=()=>{
+        el.classList.remove('on');
+        app.classList.remove('resizing');
+        window.removeEventListener('mousemove',onMove);
+        window.removeEventListener('mouseup',onUp);
+      };
+      window.addEventListener('mousemove',onMove);
+      window.addEventListener('mouseup',onUp);
+    });
+    el.addEventListener('dblclick',()=>{
+      if(side==='left') leftW=248;
+      else rightW=viewerPrev?500:340;
+      applyPaneWidths();
+    });
+  };
+  bind(rl,'left');
+  bind(rr,'right');
+  window.addEventListener('resize',()=>{
+    leftW=clampLeft(leftW);
+    rightW=clampRight(rightW);
+    applyPaneWidths();
+  });
+}
+initResizers();
+
+/* ---------- Modlar ---------- */
+let curMode='kasalar';
+function layoutMode(m){
+  curMode=m;
+  $$('.rbtn[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
+  const show=(treeVis,src,sess,title)=>{
+    $('#tree').style.display=treeVis?'':'none';
+    $('#sources').style.display=src?'block':'none';
+    $('#sessWrap').style.display=sess?'flex':'none';
+    $('#leftTitle').textContent=title;
+    const act=$('#leftActBtn');
+    if(act){ act.textContent=sess?'＋':'↕'; act.title=sess?'Yeni AI oturumu':'Klasörleri daralt/genişlet'; }
+  };
+  $('.rt[data-rt=ai]').style.display=(m==='ai'||m==='study')?'none':'';
+  $('.rt[data-rt=studio]').style.display=(m==='study')?'':'none';
+  if(m!=='study'&&$('.rt[data-rt=studio].on')){ const a=$('.rt[data-rt=ai]'); if(a)a.click(); }
+  if(m==='kasalar'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='write'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');renderStudio();rtab('studio');}
+  if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
+  syncPaneBtns();
+}
+function setMode(m){
+  if(app.classList.contains('zen')){
+    app.classList.remove('zen');
+    const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
+  }
+  layoutMode(m);
+  if(m==='kasalar')openPage('kasalar');
+  if(m==='plan')openPage('cal');
+  if(m==='ai'){const cur=isAI(active)?active:(openTabs.find(isAI)||'ai1'); openPage(cur);}
+  if(m==='study') openPage('studychat');
+  else if(m==='write'&&(isAI(active)||active==='kasalar')){
+    const o=openTabs.find(x=>!isAI(x)&&x!=='kasalar')||firstVaultTab();
+    openPage(o);
+  }
+}
+function toggleZen(){
+  const isZen=app.classList.toggle('zen');
+  const btn=$('#zenBtn');
+  if(btn) btn.classList.toggle('on',isZen);
+  syncPaneBtns();
+  if(!isZen) applyPaneWidths();
+}
+$$('.rbtn[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+$('#zenBtn').onclick=toggleZen;
+
+/* ---------- Komut paleti & Kısayollar ---------- */
+const cmds=[
+ ['🎨 Tema Seçiciyi Aç (Temaları Değiştir)','',()=>openThemePop()],
+ ['❖ Kasalar Ana Ekranına Git (NotebookLM)','',()=>openKasalarHome()],
+ ['＋ Yeni Kasa Oluştur','',()=>openNewKasaModal()],
+ ['📝 Kasaya Yeni Not Ekle','Alt+N',()=>openNewNoteModal()],
+ ['📎 Kasaya Dosya / Kaynak Yükle','',()=>triggerAssetUpload()],
+ ['🖨 Aktif Notu A4 İki Sütun Yazdır (Canon G3080)','Ctrl+P',()=>window.print()],
+ ['Sol paneli aç/kapat','Ctrl+B',()=>togglePane('left')],
+ ['Sağ paneli aç/kapat','Ctrl+J',()=>togglePane('right')],
+ ['Sonraki sekmeye geç','Ctrl+Tab',()=>cycleTab(1)],
+ ['Önceki sekmeye geç','Ctrl+Shift+Tab',()=>cycleTab(-1)],
+ ['Sekmeyi sola taşı','Ctrl+Shift+PageUp',()=>moveActiveTab(-1)],
+ ['Sekmeyi sağa taşı','Ctrl+Shift+PageDown',()=>moveActiveTab(1)],
+ ['Aktif sekmeyi kapat','Ctrl+W',()=>closeTab(active)],
+ ['Yeni AI oturumu aç','',()=>newSession()],
+ ['Odak modu (Tam Ekran)','Ctrl+.',()=>toggleZen()],
+ ['Yaz moduna geç','',()=>setMode('write')],
+ ['Çalış (NotebookLM) moduna geç','',()=>setMode('study')],
+ ['AgyCal Akıllı Takvimi aç','',()=>setMode('plan')],
+ ['Trafo Lab Analizörünü aç','',()=>openPage('trafo')],
+ ['RC Filtre Simülatörünü aç','',()=>openPage('sim')],
+ ['Skill menüsünü aç','',()=>rtab('skills')],
+ ['Yönlendirici & kotalar','',()=>rtab('router')]
+];
+function cycleTab(dir){
+  if(openTabs.length<2)return;
+  const i=openTabs.indexOf(active);
+  const next=(i+dir+openTabs.length)%openTabs.length;
+  openPage(openTabs[next]);
+}
+function palRender(q=''){
+  const l=$('#palList'); l.innerHTML='';
+  const ql=q.toLowerCase().trim();
+  const noteItems=Object.entries(pages).filter(([id,p])=>id.startsWith('note:')&&(p.t.toLowerCase().includes(ql)||(p.folder||'').toLowerCase().includes(ql))).slice(0,8).map(([id,p])=>[`${p.i||'📝'} ${p.folder?p.folder+' · ':''}${p.t}`,p.ext==='.pdf'?'PDF Sekmesi':'Not',()=>openPage(id,true,{replace:true})]);
+  const allCmds=ql?[...noteItems,...cmds.filter(c=>c[0].toLowerCase().includes(ql))]:cmds;
+  allCmds.forEach((c,i)=>{
+    const d=document.createElement('div'); d.className='pi'+(i==0?' sel':''); d.innerHTML=`<span>${c[0]}</span><kbd>${c[1]}</kbd>`;
+    d.onclick=()=>{closePal();c[2]()}; l.appendChild(d);
+  });
+}
+function openPal(){$('#pal').classList.add('show');$('#palIn').value='';palRender();$('#palIn').focus();}
+function closePal(){$('#pal').classList.remove('show');}
+$('#palBtn').onclick=openPal; $('#pal').onclick=e=>{if(e.target.id==='pal')closePal()};
+$('#palIn').oninput=e=>palRender(e.target.value);
+$('#palIn').onkeydown=e=>{if(e.key==='Enter'){const f=$('#palList .pi');if(f)f.click()}};
+document.addEventListener('keydown',e=>{
+  if(e.key==='Tab'&&e.ctrlKey){
+    e.preventDefault();
+    cycleTab(e.shiftKey?-1:1);
+    return;
+  }
+  if(e.key==='Tab'&&e.shiftKey&&!e.ctrlKey&&isAI(active)){e.preventDefault();cycleMode(active);return;}
+  if(e.key==='Escape'){
+    if($('#gcalModalBg')?.classList.contains('show')){ closeCalModal(); return; }
+    if(app.classList.contains('zen')){ toggleZen(); return; }
+    closePal(); closeKasaModal();
+  }
+  if(active==='cal'&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&!['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)&&!e.target.isContentEditable&&!$('#gcalModalBg')?.classList.contains('show')){
+    const k=e.key.toLowerCase();
+    if(k==='d'){e.preventDefault();gcalSetView('day');return;}
+    if(k==='w'){e.preventDefault();gcalSetView('week');return;}
+    if(k==='m'){e.preventDefault();gcalSetView('month');return;}
+    if(k==='a'){e.preventDefault();gcalSetView('agenda');return;}
+    if(k==='y'){e.preventDefault();gcalSetView('semester');return;}
+    if(k==='t'){e.preventDefault();gcalGoToday();return;}
+    if(k==='c'){e.preventDefault();openCalModal(null,GCAL.cursor);return;}
+    if(k==='q'){e.preventDefault();$('#gcalSmartInput')?.focus();return;}
+  }
+  if(e.altKey&&!e.ctrlKey&&!e.shiftKey&&(e.key==='n'||e.key==='N')){e.preventDefault();openNewNoteModal();return;}
+  if((e.ctrlKey||e.altKey)&&!e.shiftKey&&/^[1-9]$/.test(e.key)){
+    e.preventDefault();
+    const n=+e.key;
+    const target=(n===9&&openTabs.length>9)?openTabs[openTabs.length-1]:openTabs[n-1];
+    if(target)openPage(target);
+    return;
+  }
+  if(!e.ctrlKey)return;
+  if(e.shiftKey&&(e.key==='PageUp'||(!['INPUT','TEXTAREA'].includes(e.target.tagName)&&!e.target.isContentEditable&&e.key==='ArrowLeft'))){e.preventDefault();moveActiveTab(-1);return;}
+  if(e.shiftKey&&(e.key==='PageDown'||(!['INPUT','TEXTAREA'].includes(e.target.tagName)&&!e.target.isContentEditable&&e.key==='ArrowRight'))){e.preventDefault();moveActiveTab(1);return;}
+  if(e.key==='PageDown'){e.preventDefault();cycleTab(1);return;}
+  if(e.key==='PageUp'){e.preventDefault();cycleTab(-1);return;}
+  if(e.key==='w'||e.key==='W'){e.preventDefault();closeTab(active);return;}
+  if((e.key==='t'||e.key==='T')&&!e.shiftKey){e.preventDefault();newBlankTab();return;}
+  if(e.key==='k'||e.key==='K'){e.preventDefault();openPal();}
+  if(e.key==='b'||e.key==='B'){e.preventDefault();togglePane('left');}
+  if(e.key==='j'||e.key==='J'){e.preventDefault();togglePane('right');}
+  if(e.key==='.'){e.preventDefault();toggleZen();}
+});
+
+/* ---------- Skill kütüphanesi (komut / mod / yetenek / araç) ---------- */
+const mk=(h,prompt,r,kind)=>({h,prompt,r,kind});
+Object.assign(SK,{
+ compact:mk('/compact','Bağlamı sıkıştır.',['komut','token tasarrufu','anında'],'cmd'),
+ clear:mk('/clear','Oturumu temizle.',['komut','—','anında'],'cmd'),
+ caveman:mk('Caveman','mod',['mod','−%65 token','anında'],'mode'),
+ 'caveman-commit':mk('Caveman Commit','Son değişiklikler için kısa ve net bir Conventional Commits mesajı yaz.',['yerel','commit']),
+ 'caveman-review':mk('Caveman Review','Açık olan notu veya kodu incele, hataları ve eksikleri tek satırlık maddelerle listele.',['yerel','inceleme']),
+ plan:mk('/plan','Bu konu veya proje için adım adım çalışma/uygulama planı, kritik formüller ve risk analizi çıkar.',['Sonnet','planlama']),
+ goal:mk('/goal','Bu görevi eksiksiz tamamlayana kadar tüm alt adımları yürüterek çöz.',['Sonnet','uzun görev']),
+ boost:mk('/boost','Derinlemesine matematiksel ve fiziksel analiz yap, tüm ara adımları doğrula.',['Opus','ağır görev']),
+ graphify:mk('Graphify','Seçili kasa kaynakları arasındaki kavram ilişkilerini ve konu bağlantısını Mermaid diyagramı ile çıkar.',['graf','bağlantı']),
+ 'investigate-first':mk('Investigate First','Olası kök nedenleri kanıta göre sırala ve teşhis koy.',['Sonnet','analiz']),
+ 'surgical-patch':mk('Surgical Patch','En dar katmanda hedefe yönelik çözüm/yama üret.',['Sonnet','kod']),
+ 'safe-refactor':mk('Safe Refactor','Davranışı koruyarak yapıyı temizle ve düzenle.',['Sonnet','kod']),
+ 'lean-build':mk('Lean Build','Gereksiz karmaşıklıktan kaçınarak doğrudan çalışan sade çözüm üret.',['Sonnet','kod']),
+ 'verify-and-stop':mk('Verify & Stop','Çözümün kabul koşullarını ve sınır değerlerini doğrula.',['yerel','doğrulama']),
+ 'llm-council':mk('LLM Council','Problemi 4 farklı mühendislik perspektifinden değerlendirip sentez karara var.',['Opus','karar']),
+ taste:mk('Taste (UI)','Görsel ve yapısal düzeni yüksek tasarım standartlarına göre iyileştir.',['Sonnet','tasarım']),
+ 'replica-skill':mk('Replica','Hedef sistemi alt bileşenlerine ayırarak yeniden kurgula.',['Sonnet','mimari'])
+});
+const GROUPS=[
+ ['Mühendislik & Ders Araçları',[['ozet','≡','Aktif notu & kaynakları özetle',''],['fisle','▤','A4 iki sütun sınav föyü hazırla',''],['spice','∿','Devre analizi & SPICE netlist',''],['teardown','⬡','Sistem & kayıp mekanizması analizi',''],['whisper','◉','Ham metni ders notuna yapılandır',''],['pcb','▣','Donanım & şema blok taslağı','']]],
+ ['Komutlar',[['compact','⇲','Bağlamı sıkıştır','cmd'],['clear','⌫','Oturumu temizle','cmd'],['plan','☰','Adım adım çalışma planı',''],['goal','◎','Uzun hedef modu',''],['boost','⚡','Derin matematiksel analiz','']]],
+ ['Modlar',[['caveman','🪨','Kısa, token tasarruflu yanıt','mode'],['caveman-commit','↳','Commit mesajı',''],['caveman-review','✓','Kısa inceleme','']]],
+ ['Yetenekler',[['graphify','⌘','Kavram grafı çıkar',''],['investigate-first','?','Önce teşhis',''],['surgical-patch','✂','Dar yama',''],['safe-refactor','⟳','Güvenli refactor',''],['lean-build','▢','Sade geliştirme',''],['verify-and-stop','■','Doğrula ve dur',''],['llm-council','☷','Çok perspektifli karar','']]]
+];
+function buildSkills(q=''){
+  const r=$('#skList'); if(!r)return; r.innerHTML='';
+  GROUPS.forEach(([g,items])=>{
+    const its=items.filter(i=>(i[0]+i[2]).toLowerCase().includes(q.toLowerCase())); if(!its.length)return;
+    r.insertAdjacentHTML('beforeend',`<div class="grp">${g}</div>`);
+    its.forEach(([k,ic,desc,kind])=>{
+      const d=document.createElement('div'); d.className='skill s'; d.draggable=true; d.dataset.skill=k;
+      d.innerHTML=`<div class="ic">${ic}</div><div>${k.startsWith('caveman')||kind==='cmd'||['plan','goal','boost'].includes(k)?'/':''}${k}<small>${desc}</small></div><span class="tg">${kind==='cmd'?'KOMUT':kind==='mode'?'MOD':'ÇALIŞTIR'}</span>`;
+      d.onclick=()=>{
+        const targetSess=isAI(active)?active:'side_ai';
+        if(kind==='cmd'||kind==='mode'){
+          if(!isAI(active)) rtab('ai');
+          aiSend(targetSess,'/'+k,k);
+        }else{
+          if(isAI(active)) aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);
+          else runSkill(k);
+        }
+      };
+      r.appendChild(d);
+    });
+  });
+}
+$('#rb-skills').innerHTML='<input class="sk-search" id="skQ" placeholder="Skill ara… (ozet, fisle, spice, plan, caveman)"><div id="skList" style="display:flex;flex-direction:column;gap:8px"></div><div style="color:var(--mut);font-size:12px">Bir karta tıkladığında açık not ve seçili kasa kaynakları üzerinde <b>gerçek AI</b> ile çalışır; ya da kartı doğrudan nota sürükleyip bırakabilirsin.</div>';
+$('#skQ').oninput=e=>buildSkills(e.target.value);
+document.addEventListener('dragstart',e=>{const s=e.target.closest&&e.target.closest('.skill[data-skill]'); if(s)e.dataTransfer.setData('text/plain',s.dataset.skill);});
+buildSkills();
+
+function aiInstant(id,k){
+  const s=ai[id];
+  if(k==='clear'){ api('/api/clear',{session:id}).catch(()=>{}); s.msgs=[{w:'a',h:'🧹 Oturum temizlendi. agy konuşma bağlamı sıfırlandı.'}]; }
+  else if(k==='compact'){
+    const mine=s.msgs.filter(m=>m.w==='me').map(m=>m.h).slice(-3).join(' · ');
+    s.msgs=[{w:'a',h:`🗜 Bağlam sıkıştırıldı. Özet: ${mine||'(henüz içerik yok)'} <div class="route"><span class="chip l">yerel özetleyici</span><span>~%70 token tasarruf</span></div>`}];
+  } else if(k==='caveman'){
+    s.caveman=!s.caveman;
+    s.msgs.push({w:'a',h:s.caveman?'🪨 Caveman açık. Yanıt kısa. Teknik içerik aynı.':'Caveman kapalı. Normal yanıt.'});
+  }
+  aiRefresh(id);
+}
+
+/* ---------- Kullanım & kalan haklar ---------- */
+let quota=[{n:'Yükleniyor…',u:0,reset:''}];
+const fmtReset=q=>q.cloud?(q.used_pct>=100?`Tükendi · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:(q.count?`${q.count}/${q.limit} istek · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:`0/${q.limit} istek`)):`sınırsız · ${q.count} istek`;
+function applyQuota(rows){ quota=rows.map(q=>({n:q.label,u:q.used_pct,reset:fmtReset(q)})); renderUsage(); }
+async function loadQuota(){ try{ applyQuota(await api('/api/quota')); return true; }catch(e){ return false; } }
+async function refreshQuota(ev){ ev&&ev.stopPropagation(); const b=$('#urefresh'); if(b){b.disabled=true;b.textContent='⟳ …';} const ok=await loadQuota(); const b2=$('#urefresh'); if(b2){b2.disabled=false;b2.textContent=ok?'✓ Güncellendi':'⚠ Hata';setTimeout(()=>{const b3=$('#urefresh');if(b3)b3.textContent='⟳ Yenile';},1500);} }
+function useQuota(){}
+function quotaRows(){
+  return quota.map(q=>q.u===null
+   ?`<div class="qrow"><div class="l"><span>${q.n}</span><b style="color:var(--ok)">∞</b></div><div class="bar g"><i style="width:100%"></i></div><small>${q.reset}</small></div>`
+   :`<div class="qrow"><div class="l"><span>${q.n}</span><b style="${q.u>=100?'color:var(--cu)':''}">${q.u>=100?'Tükendi':'%'+(100-q.u)+' kaldı'}</b></div><div class="bar ${q.u>85?'w':''}"><i style="width:${q.u}%"></i></div><small>${q.reset}</small></div>`).join('');
+}
+function renderUsage(){
+  const cloud=quota.filter(q=>q.u!==null);
+  const left=cloud.length?Math.round(cloud.reduce((a,q)=>a+(100-q.u),0)/cloud.length):100;
+  $('#uring').style.setProperty('--p',left); $('#uringTxt').textContent=left+'%';
+  $('#upop').innerHTML=`<h4><span>AI kullanımı</span><button class="urefresh" id="urefresh" title="Kotaları yenile" onclick="refreshQuota(event)">⟳ Yenile</button></h4>${quotaRows()}
+   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele (Flash / Argon / Yerel) devredilir.</div>`;
+  const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
+}
+(()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
+$('#uring').onclick=e=>{e.stopPropagation();$('#upop').classList.toggle('show');};
+document.addEventListener('click',e=>{if(!e.target.closest('#upop'))$('#upop').classList.remove('show');});
+loadQuota(); loadHealth(); setInterval(loadQuota,30000); loadLog(); startEvents();
+
+/* ---------- Tema Yönetimi & Hızlı Seçici ---------- */
+const THEMES = [
+  { id: 'obsidian', name: 'Obsidian Kehribar', desc: 'Varsayılan karanlık odak', dot: '#e0a458', cat: 'dark' },
+  { id: 'forest', name: 'Zümrüt & Adaçayı', desc: 'Göz dinlendirici gece yeşili', dot: '#52b788', cat: 'dark' },
+  { id: 'nord', name: 'Nord Buzul Mavisi', desc: 'Soğuk & sakin gece', dot: '#88c0d0', cat: 'dark' },
+  { id: 'solarized', name: 'Solarized Gece', desc: 'Okyanus derinliği ve turkuaz', dot: '#2aa198', cat: 'dark' },
+  { id: 'tokyo', name: 'Tokyo Night', desc: 'Modern mavi-mor siber tonlar', dot: '#7aa2f7', cat: 'dark' },
+  { id: 'gruvbox', name: 'Gruvbox Retro', desc: 'Sıcak sepyamsı koyu mod', dot: '#d79921', cat: 'dark' },
+  { id: 'cyberpunk', name: 'Cyberpunk Neon', desc: 'Canlı pembe & mor kontrast', dot: '#f72585', cat: 'dark' },
+  { id: 'mono-dark', name: 'Saf Siyah-Beyaz', desc: 'Sade, Obsidian & NotebookLM tarzı', dot: '#ffffff', cat: 'dark' },
+  { id: 'mono-light', name: 'Saf Beyaz-Siyah (Açık)', desc: 'Sade kâğıt beyazı, siyah vurgu', dot: '#000000', cat: 'light' },
+  { id: 'eink', name: 'E-Ink Kağıt (Açık)', desc: 'Sıfır parlama, kitap okuma', dot: '#1b4a2c', cat: 'light' },
+  { id: 'sepia', name: 'Papirüs Sepya (Açık)', desc: 'Yumuşak sıcak gündüz modu', dot: '#874218', cat: 'light' }
+];
+
+let curTheme = localStorage.getItem('agydesk_theme') || 'obsidian';
+
+function applyTheme(themeId) {
+  const t = THEMES.find(x => x.id === themeId) || THEMES[0];
+  curTheme = t.id;
+  document.body.setAttribute('data-theme', curTheme);
+  document.documentElement.style.colorScheme = t.cat === 'light' ? 'light' : 'dark';
+  localStorage.setItem('agydesk_theme', curTheme);
+  renderThemePop();
+  if (active === 'sim' || active === 'trafo') renderMain();
+  else if (active === 'cal') renderCal($('#main'), false);
+  if (window.mermaid) {
+    runMermaid('#mdView .mermaid, #chat .mermaid, #scChat .mermaid, #aichat .mermaid, #outs .mermaid', true);
+  }
+}
+
+function renderThemePop() {
+  const pop = $('#tpop');
+  if (!pop) return;
+  const darks = THEMES.filter(t => t.cat === 'dark');
+  const lights = THEMES.filter(t => t.cat === 'light');
+  const btn = t => `
+    <button class="tbtn ${t.id === curTheme ? 'active' : ''}" onclick="applyTheme('${t.id}')" title="${t.desc}">
+      <span class="tdot" style="background:${t.dot}"></span>
+      <div style="min-width:0;overflow:hidden">
+        <div class="tbtn-name">${t.name}</div>
+        <div class="tbtn-desc">${t.desc}</div>
+      </div>
+    </button>`;
+  pop.innerHTML = `
+    <div class="tpop-head">
+      <span>🎨 AgyDesk Temaları</span>
+      <span style="font-size:10.5px;color:var(--cu);font-weight:600">${THEMES.length} Tema</span>
+    </div>
+    <div class="tpop-sec">🌙 Karanlık Odak (${darks.length})</div>
+    <div class="tgrid">
+      ${darks.map(btn).join('')}
+    </div>
+    <div class="tpop-sec" style="margin-top:6px">☀️ Açık & Kağıt Odak (${lights.length})</div>
+    <div class="tgrid">
+      ${lights.map(btn).join('')}
+    </div>
+  `;
+}
+
+function openThemePop() {
+  const pop = $('#tpop');
+  if (!pop) return;
+  $('#fpop')?.classList.remove('show');
+  renderThemePop();
+  pop.classList.toggle('show');
+}
+
+function initThemes() {
+  applyTheme(curTheme);
+  const btn = $('#themeBtn');
+  if (btn) btn.onclick = (e) => { e.stopPropagation(); openThemePop(); };
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('#tpop') && !e.target.closest('#themeBtn')) {
+      $('#tpop')?.classList.remove('show');
+    }
+  });
+}
+
+/* ---------- Metin ayarları (Notion tarzı) ---------- */
+const FONTS=[
+  {id:'sans',n:'Varsayılan',v:"'Instrument Sans',system-ui,sans-serif",s:'Ag'},
+  {id:'serif',n:'Serif',v:"'Lora',Georgia,Cambria,'Times New Roman',serif",s:'Ag'},
+  {id:'mono',n:'Mono',v:"'JetBrains Mono',ui-monospace,Consolas,monospace",s:'Ag'}
+];
+const TZ_MIN=0.8, TZ_MAX=1.8;
+let curFont=localStorage.getItem('agydesk_font')||'sans';
+let curTz=parseFloat(localStorage.getItem('agydesk_tz'))||1;
+let fullW=localStorage.getItem('agydesk_fullw')==='1';
+function applyTextPrefs(){
+  curTz=Math.min(TZ_MAX,Math.max(TZ_MIN,Math.round(curTz*20)/20));
+  const f=FONTS.find(x=>x.id===curFont)||FONTS[0];
+  document.documentElement.style.setProperty('--cfont',f.v);
+  document.documentElement.style.setProperty('--tz',curTz);document.documentElement.classList.toggle('tz-on',+curTz!==1);
+  document.body.classList.toggle('fw-full',fullW);
+  localStorage.setItem('agydesk_font',f.id);
+  localStorage.setItem('agydesk_tz',curTz);
+  localStorage.setItem('agydesk_fullw',fullW?'1':'0');
+  renderFontPop();
+}
+function setFont(id){curFont=id;applyTextPrefs();}
+function setTz(v){curTz=+v;applyTextPrefs();}
+function stepTz(d){curTz+=d*0.1;applyTextPrefs();}
+function toggleFullW(){fullW=!fullW;applyTextPrefs();}
+function renderFontPop(){
+  const pop=$('#fpop'); if(!pop)return;
+  pop.innerHTML=`
+    <div class="tpop-head"><span>Aa Yazı ayarları</span><span style="font-size:10.5px;color:var(--cu)">%${Math.round(curTz*100)}</span></div>
+    <div class="tpop-sec">Yazı tipi</div>
+    <div class="fgrid">${FONTS.map(f=>`<button class="fbtn ${f.id===curFont?'active':''}" style="font-family:${f.v}" onclick="setFont('${f.id}')">${f.s}<small>${f.n}</small></button>`).join('')}</div>
+    <div class="tpop-sec" style="margin-top:6px">Yazı boyutu</div>
+    <div class="fsize"><button onclick="stepTz(-1)" title="Küçült (Ctrl −)">A−</button>
+      <input type="range" min="${TZ_MIN}" max="${TZ_MAX}" step="0.05" value="${curTz}" oninput="setTz(this.value)">
+      <button onclick="stepTz(1)" title="Büyüt (Ctrl +)">A+</button>
+      <button onclick="setTz(1)" title="Sıfırla (Ctrl 0)">⟲</button></div>
+    <div class="frow" style="margin-top:6px"><span>Tam genişlik</span><button class="fsw ${fullW?'on':''}" onclick="toggleFullW()" title="Not sayfasını tüm genişliğe yay"></button></div>
+    <div style="font:11px var(--mono);color:var(--mut)">Kısayol: Ctrl + / Ctrl − / Ctrl 0</div>`;
+}
+function initTextPrefs(){
+  applyTextPrefs();
+  const b=$('#fontBtn');
+  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
+  const fp=$('#fpop'); if(fp) fp.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{ if(!e.target.closest('#fontBtn')) $('#fpop')?.classList.remove('show'); });
+  document.addEventListener('keydown',e=>{
+    if(!(e.ctrlKey||e.metaKey)||e.altKey) return;
+    if(e.key==='+'||e.key==='='){e.preventDefault();stepTz(1);}
+    else if(e.key==='-'||e.key==='_'){e.preventDefault();stepTz(-1);}
+    else if(e.key==='0'){e.preventDefault();setTz(1);}
+  });
+  document.addEventListener('wheel',e=>{ if(e.ctrlKey){e.preventDefault();stepTz(e.deltaY<0?1:-1);} },{passive:false});
+}
+
+/* ---------- Sol ray: sürükle-bırak ile sıralama ---------- */
+function initRailDrag(){
+  const rail=document.querySelector('.rail'); if(!rail) return;
+  const btns=[...rail.querySelectorAll('.rbtn')];
+  const keyOf=(b,i)=>b.dataset.k||(b.dataset.k=b.dataset.mode||b.id||(i===0?'attach':'newnote'));
+  btns.forEach((b,i)=>keyOf(b,i));
+  const sp=rail.querySelector('.sp'), uring=rail.querySelector('.uring');
+  // kayıtlı sıra: yalnızca ray içindeki bilinen butonlar
+  try{
+    const saved=JSON.parse(localStorage.getItem('agydesk_rail')||'null');
+    if(Array.isArray(saved)){
+      const map={sp:sp}; btns.forEach(b=>map[b.dataset.k]=b);
+      saved.forEach(k=>{ if(map[k]) rail.insertBefore(map[k],uring); });
+      rail.insertBefore(uring,null);
+    }
+  }catch(e){}
+  const save=()=>{
+    const order=[...rail.querySelectorAll('.rbtn,.sp')].map(b=>b.classList.contains('sp')?'sp':b.dataset.k);
+    localStorage.setItem('agydesk_rail',JSON.stringify(order));
+  };
+  let drag=null;
+  btns.forEach(b=>{
+    b.draggable=true;
+    b.addEventListener('dragstart',e=>{ drag=b; b.classList.add('rdrag'); e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/rail',b.dataset.k); });
+    b.addEventListener('dragend',()=>{ b.classList.remove('rdrag'); rail.querySelectorAll('.rover-t,.rover-b').forEach(x=>x.classList.remove('rover-t','rover-b')); drag=null; });
+    b.addEventListener('dragover',e=>{
+      if(!drag||drag===b) return;
+      e.preventDefault(); e.dataTransfer.dropEffect='move';
+      const r=b.getBoundingClientRect(), top=e.clientY<r.top+r.height/2;
+      b.classList.toggle('rover-t',top); b.classList.toggle('rover-b',!top);
+    });
+    b.addEventListener('dragleave',()=>b.classList.remove('rover-t','rover-b'));
+    b.addEventListener('drop',e=>{
+      if(!drag||drag===b) return;
+      e.preventDefault();
+      const r=b.getBoundingClientRect(), top=e.clientY<r.top+r.height/2;
+      rail.insertBefore(drag, top?b:b.nextSibling);
+      b.classList.remove('rover-t','rover-b');
+      save();
+    });
+  });
+}
+
+/* ---------- Üst köşe saati ---------- */
+const CLOCK_FMTS=['hm','hmd','hms'];
+let clockFmt=localStorage.getItem('agydesk_clock_fmt')||'hm';
+let _lastClockHtml='';
+function updateAppClock(){
+  const el=$('#appClock'); if(!el) return;
+  const now=new Date();
+  const hm=`${gcalPad(now.getHours())}:${gcalPad(now.getMinutes())}`;
+  const sec=gcalPad(now.getSeconds());
+  const shortD=`${now.getDate()} ${GCAL_MONTHS_SHORT[now.getMonth()]}`;
+  const fullD=`${now.getDate()} ${GCAL_MONTHS[now.getMonth()]} ${now.getFullYear()} ${GCAL_DAYS_FULL[now.getDay()]}`;
+  const html=clockFmt==='hms'?`${hm}:${sec}`:clockFmt==='hmd'?`<span class="clk-d">${shortD}</span><span>${hm}</span>`:hm;
+  if(html!==_lastClockHtml){ el.innerHTML=html; _lastClockHtml=html; }
+  const tip=`${fullD} · Görünümü değiştir (saat / tarih / saniye)`;
+  if(el.title!==tip) el.title=tip;
+}
+function cycleClockFmt(){
+  const i=CLOCK_FMTS.indexOf(clockFmt);
+  clockFmt=CLOCK_FMTS[(i+1)%CLOCK_FMTS.length];
+  localStorage.setItem('agydesk_clock_fmt',clockFmt);
+  _lastClockHtml='';
+  updateAppClock();
+}
+function initAppClock(){
+  if(!CLOCK_FMTS.includes(clockFmt)) clockFmt='hm';
+  updateAppClock();
+  setInterval(updateAppClock,1000);
+}
+
+/* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock();
+setMode('kasalar'); loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
