@@ -590,7 +590,7 @@ async function loadVault(){
     }
     rebuildTreeAndSources();
     renderTree(); renderTabs(); renderMain(); updateRightProps(); updateSideAiCtx(); saveSessionTabs();
-  }catch(e){}
+  }catch(e){ console.error('loadVault error:',e); }
 }
 
 async function loadHealth(){
@@ -718,7 +718,7 @@ function renderTree(){
     d.className='ti'+(x.k?' folder':'')+(isRootKasa?' root-kasa':'')+(x.open?' open':'')+(x.id===active?' on':'');
     d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:x.n;
     d.innerHTML=`<span class="car">${x.k?CHEV_SVG:''}</span><span class="tic">${svgIcon(x.i)}</span><span class="tn">${escHtml(x.n)}</span><span class="ti-act"></span>`;
-    const act=$('.ti-act',d);
+    const act=d.querySelector('.ti-act');
     if(x.k&&(x.rel||x.kasa)){
       const more=document.createElement('button');
       more.type='button';
