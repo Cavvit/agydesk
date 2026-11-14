@@ -415,6 +415,95 @@ def test_spaces_hierarchy_and_crud(tmp_path, monkeypatch):
     assert bitirme["icon"] == "🚀"
 
 
+def test_ui_state_persistence(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main as bmain, store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "ui.db")
+    store.init()
+    client = TestClient(bmain.app)
+
+    assert client.get("/api/ui_state").json() == {}
+    r = client.post("/api/ui_state", json={
+        "agydesk_theme": "nord",
+        "agydesk_tabs_v1": '{"openTabs":["kasalar","note:a.md"],"active":"note:a.md"}',
+    })
+    assert r.status_code == 200
+    state = client.get("/api/ui_state").json()
+    assert state["agydesk_theme"] == "nord"
+    assert "note:a.md" in state["agydesk_tabs_v1"]
+
+    # Deleting a key with None removes it without touching others
+    client.post("/api/ui_state", json={"agydesk_tabs_v1": None})
+    state2 = client.get("/api/ui_state").json()
+    assert state2 == {"agydesk_theme": "nord"}
+
+
+def test_vault_move_and_reorder(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main, vault
+
+    vault_dir = tmp_path / "notes"
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(vault, "ROOT", tmp_path)
+    monkeypatch.setattr(vault, "VAULT_DIR", vault_dir)
+    monkeypatch.setattr(main, "VAULT_DIR", vault_dir)
+
+    (vault_dir / "Katihal_Elektronigi").mkdir()
+    (vault_dir / "Difransiyel_Denklemler").mkdir()
+    client = TestClient(main.app)
+
+    # Create subfolders and notes/pdfs
+    f1 = client.post("/api/folder", json={"parent": "Katihal_Elektronigi", "name": "Kaynaklar"}).json()["rel"]
+    f2 = client.post("/api/folder", json={"parent": "Katihal_Elektronigi", "name": "Sorular"}).json()["rel"]
+    n1 = client.post("/api/note/create", json={"kasa": "Katihal_Elektronigi", "title": "Not A", "content": "# Not A"}).json()["rel"]
+    n2 = client.post("/api/note/create", json={"kasa": "Katihal_Elektronigi", "title": "Not B", "content": "# Not B"}).json()["rel"]
+    (vault_dir / "Katihal_Elektronigi" / "slayt.pdf").write_bytes(b"%PDF-1.4")
+
+    # 1. Move file into folder
+    rm = client.post("/api/vault/move", json={"src": "Katihal_Elektronigi/slayt.pdf", "target": f1, "position": "into"})
+    assert rm.status_code == 200
+    assert rm.json()["moved"] is True
+    assert rm.json()["new_rel"] == f"{f1}/slayt.pdf"
+    assert (vault_dir / f"{f1}/slayt.pdf").exists()
+    assert not (vault_dir / "Katihal_Elektronigi/slayt.pdf").exists()
+
+    # 2. Reorder folder before file in same kasa
+    ro = client.post("/api/vault/move", json={"src": f2, "target": n1, "position": "before"})
+    assert ro.status_code == 200
+    assert ro.json()["reordered"] is True
+    v1 = client.get("/api/vault").json()
+    kat_kids = next(k["k"] for k in v1["tree"] if k["kasa"] == "Katihal_Elektronigi")
+    rels = [c["rel"] for c in kat_kids]
+    assert rels.index(f2) < rels.index(n1)
+
+    # 3. Cross-folder move + position after sibling inside f1
+    rm2 = client.post("/api/vault/move", json={"src": n2, "target": f"{f1}/slayt.pdf", "position": "after"})
+    assert rm2.status_code == 200
+    assert rm2.json()["moved"] is True
+    assert rm2.json()["new_rel"] == f"{f1}/Not_B.md"
+    v2 = client.get("/api/vault").json()
+    kat_kids2 = next(k["k"] for k in v2["tree"] if k["kasa"] == "Katihal_Elektronigi")
+    f1_node = next(c for c in kat_kids2 if c["rel"] == f1)
+    assert [c["rel"] for c in f1_node["k"]] == [f"{f1}/slayt.pdf", f"{f1}/Not_B.md"]
+
+    # 4. Move folder into another folder and verify self/descendant guard
+    rm_dir = client.post("/api/vault/move", json={"src": f2, "target": f1, "position": "into"})
+    assert rm_dir.status_code == 200
+    new_f2 = rm_dir.json()["new_rel"]
+    assert new_f2 == f"{f1}/Sorular"
+    bad_self = client.post("/api/vault/move", json={"src": f1, "target": new_f2, "position": "into"})
+    assert bad_self.status_code == 400
+
+    # 5. Reorder root kasas
+    rk = client.post("/api/vault/move", json={"src": "Katihal_Elektronigi", "target": "Difransiyel_Denklemler", "position": "before"})
+    assert rk.status_code == 200
+    v3 = client.get("/api/vault").json()
+    kasa_order = [k["kasa"] for k in v3["tree"]]
+    assert kasa_order.index("Katihal_Elektronigi") < kasa_order.index("Difransiyel_Denklemler")
+
+
+
 
 
 

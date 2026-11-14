@@ -12,15 +12,14 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=spaces3">
+<link rel="stylesheet" href="/styles.css?v=spaces6">
 </head>
 <body>
 <div class="app" id="app">
 
   <!-- RAY -->
   <nav class="rail">
-    <div class="logo" onclick="openKasalarHome()" title="AgyDesk — Atölye Kasaları (Ana Ekran)" style="cursor:pointer"><img src="/agydesk_logo.png" alt="AgyDesk"></div>
-    <button class="rbtn on" data-mode="kasalar" data-tip="Kasalar (NotebookLM)">❖</button>
+    <div class="logo on" onclick="openKasalarHome(true)" title="AgyDesk — Çalışma Alanları (Ana Ekran)" style="cursor:pointer"><img src="/agydesk_logo.png" alt="AgyDesk"></div>
     <button class="rbtn" data-mode="write" data-tip="Not Defteri & Yaz">✎</button>
     <button class="rbtn" data-mode="study" data-tip="Kaynaklarla Çalış (NotebookLM)">◈</button>
     <button class="rbtn" data-mode="plan" data-tip="AgyCal · Akıllı Takvim">▦</button>
@@ -60,28 +59,36 @@
     <div id="sources" style="display:none"></div>
   </div></aside>
 
+  <!-- ÜST ÇUBUK (OBSIDIAN TARZI ÇERÇEVESİZ BAŞLIK & SEKMELER) -->
+  <div class="topbar" id="topbar">
+    <button class="pbtn on" id="leftTog" onclick="togglePane('left')" title="Sol paneli aç/kapat (Ctrl+B)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+    </button>
+    <div class="nav-grp">
+      <button class="pbtn dis" id="navBackBtn" onclick="navBack()" title="Geri Git (Fare Yan Tuşu veya Alt+←)" aria-label="Geri Git">‹</button>
+      <button class="pbtn dis" id="navFwdBtn" onclick="navForward()" title="İleri Git (Fare Yan Tuşu veya Alt+→)" aria-label="İleri Git">›</button>
+    </div>
+    <button class="zen-exit-btn" onclick="toggleZen()" title="Odak modundan çık (Ctrl+. veya Esc)">◐ Odaktan Çık</button>
+    <div class="tabs" id="tabs"></div>
+    <button class="top-clock" id="appClock" onclick="cycleClockFmt()" title="Yerel saat · Tarih veya saniye görünümü için tıkla"></button>
+    <button class="pbtn" id="rightTog" onclick="togglePane('right')" title="Sağ paneli aç/kapat (Ctrl+J)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+    </button>
+    <div class="win-ctrls">
+      <button class="win-btn" onclick="winAct('min')" title="Simge durumuna küçült" aria-label="Simge durumuna küçült"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn" onclick="winAct('max')" title="Ekranı kapla / Geri yükle" aria-label="Ekranı kapla"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="1.5" y="1.5" width="7" height="7" rx=".8" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn close" onclick="winAct('close')" title="Kapat" aria-label="Kapat"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.2"/></svg></button>
+    </div>
+  </div>
+
   <!-- ORTA -->
   <section class="center">
     <button class="pdf-zen-fab" id="pdfZenFab" onclick="toggleZen()" title="Odak modundan çık (Esc veya Ctrl+.)">◐ Odak</button>
     <div class="resizer resizer-l" id="resLeft" title="Sürükle: Sol paneli boyutlandır (200–480 px) · Çift tıkla: Sıfırla"></div>
-    <div class="topbar">
-      <button class="pbtn on" id="leftTog" onclick="togglePane('left')" title="Sol paneli aç/kapat (Ctrl+B)">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
-      </button>
-      <div class="nav-grp">
-        <button class="pbtn dis" id="navBackBtn" onclick="navBack()" title="Geri Git (Fare Yan Tuşu veya Alt+←)" aria-label="Geri Git">‹</button>
-        <button class="pbtn dis" id="navFwdBtn" onclick="navForward()" title="İleri Git (Fare Yan Tuşu veya Alt+→)" aria-label="İleri Git">›</button>
-      </div>
-      <button class="zen-exit-btn" onclick="toggleZen()" title="Odak modundan çık (Ctrl+. veya Esc)">◐ Odaktan Çık</button>
-      <div class="tabs" id="tabs"></div>
-      <button class="top-clock" id="appClock" onclick="cycleClockFmt()" title="Yerel saat · Tarih veya saniye görünümü için tıkla"></button>
-      <button class="pbtn" id="rightTog" onclick="togglePane('right')" title="Sağ paneli aç/kapat (Ctrl+J)">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-      </button>
-    </div>
     <div class="center-stage">
       <div class="main" id="main"></div>
       <div class="pdf-cache-stage" id="pdfCacheStage"></div>
+      <div class="notion-minimap" id="notionMinimap" style="display:none"></div>
     </div>
     <div class="status"><span id="bgStat"><i class="dot"></i>Yönlendirici hazır</span><span id="stKasa">Kasa: Tüm Kasalar</span><span id="stHealth">Sağlayıcı kontrol ediliyor…</span><span style="margin-left:auto">Ctrl+B sol · Ctrl+J sağ</span></div>
   </section>
@@ -157,6 +164,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=spaces3"></script>
+<script src="/app.js?v=spaces6"></script>
 </body>
 </html>

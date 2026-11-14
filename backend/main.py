@@ -114,6 +114,12 @@ class FolderCreateReq(BaseModel):
     name: str
 
 
+class VaultMoveReq(BaseModel):
+    src: str
+    target: str = ""
+    position: str = "into"
+
+
 class CalEventReq(BaseModel):
     day: int
     title: str
@@ -138,6 +144,25 @@ async def health():
 
 @app.get("/api/ping")
 async def ping():
+    return {"ok": True}
+
+
+@app.get("/api/ui_state")
+async def get_ui_state_ep():
+    return store.get_ui_state()
+
+
+@app.post("/api/ui_state")
+async def set_ui_state_ep(req: Request):
+    try:
+        raw = await req.body()
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Geçersiz JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(400, "Nesne bekleniyordu")
+    clean = {str(k): (None if v is None else str(v)) for k, v in data.items() if k}
+    store.set_ui_state(clean)
     return {"ok": True}
 
 
@@ -203,6 +228,23 @@ async def create_folder_ep(r: FolderCreateReq):
         return res
     except FileNotFoundError as e:
         raise HTTPException(404, f"Üst klasör bulunamadı: {e}")
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/vault/move")
+async def move_vault_item_ep(r: VaultMoveReq):
+    try:
+        res = vault.move_item(r.src, r.target, r.position)
+        if res.get("moved"):
+            store.add_log("vault", f"📦 Taşındı: {res['old_rel']} → {res['new_rel']}", "ok")
+            emit("log")
+        elif res.get("reordered"):
+            store.add_log("vault", f"↕ Sıralama güncellendi: {res['new_rel']}", "ok")
+            emit("log")
+        return res
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Öğe bulunamadı: {e}")
     except Exception as e:
         raise HTTPException(400, str(e))
 

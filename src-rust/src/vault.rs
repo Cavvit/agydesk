@@ -18,7 +18,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const MAX_ASSET: usize = 50 * 1024 * 1024;
 
 const IMG_EXT: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"];
-const DOC_EXT: &[&str] = &[".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"];
+const DOC_EXT: &[&str] = &[".pdf", ".docx", ".doc", ".pptx", ".ppsx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"];
 
 fn is_img_ext(ext: &str) -> bool {
     IMG_EXT.contains(&ext)
@@ -209,6 +209,8 @@ pub struct SpacesCfg {
     pub assignments: HashMap<String, String>,
     #[serde(default)]
     pub kasa_meta: HashMap<String, KasaOverride>,
+    #[serde(default)]
+    pub tree_order: HashMap<String, Vec<String>>,
 }
 
 fn def_version() -> u32 {
@@ -253,6 +255,7 @@ fn load_spaces_cfg() -> SpacesCfg {
             .map(|k| ((*k).to_string(), "donem_7".to_string()))
             .collect(),
         kasa_meta: HashMap::new(),
+        tree_order: HashMap::new(),
     };
     let p = VAULT_DIR.join(SPACES_FILENAME);
     if let Ok(raw) = fs::read_to_string(&p) {
@@ -271,9 +274,42 @@ fn load_spaces_cfg() -> SpacesCfg {
                 }
             }
             cfg.kasa_meta = parsed.kasa_meta;
+            for (k, v) in parsed.tree_order {
+                let clean_v: Vec<String> = v.into_iter().filter(|s| !s.is_empty()).collect();
+                if !clean_v.is_empty() {
+                    cfg.tree_order.insert(k, clean_v);
+                }
+            }
         }
     }
     cfg
+}
+
+fn sort_entries_with_order(entries: &mut [PathBuf], order_names: Option<&Vec<String>>, dirs_last: bool) {
+    let rank: HashMap<&str, usize> = match order_names {
+        Some(list) if !list.is_empty() => list
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.as_str(), i))
+            .collect(),
+        _ => HashMap::new(),
+    };
+    entries.sort_by(|a, b| {
+        let an = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let bn = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let ra = rank.get(an).copied();
+        let rb = rank.get(bn).copied();
+        match (ra, rb) {
+            (Some(ia), Some(ib)) => ia.cmp(&ib),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => {
+                let da = if dirs_last { a.is_dir() } else { false };
+                let db = if dirs_last { b.is_dir() } else { false };
+                da.cmp(&db).then_with(|| an.to_lowercase().cmp(&bn.to_lowercase()))
+            }
+        }
+    });
 }
 
 fn save_spaces_cfg(cfg: &SpacesCfg) -> Result<(), String> {
@@ -435,15 +471,8 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
         .flatten()
         .map(|e| e.path())
         .collect();
-    entries.sort_by_key(|x| {
-        (
-            x.is_dir(),
-            x.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_lowercase(),
-        )
-    });
+    let cur_rel = rel_posix(cur_dir);
+    sort_entries_with_order(&mut entries, ctx.cfg.tree_order.get(&cur_rel), true);
 
     for f in entries {
         let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
@@ -488,10 +517,7 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
         }
 
         let ext = ext_lower(&f);
-        if is_asset_bucket && !is_asset_ext(&ext) {
-            continue;
-        }
-        if !is_asset_bucket && ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
+        if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
             continue;
         }
 
@@ -660,7 +686,7 @@ pub fn scan_vault() -> Value {
                     .starts_with('.')
         })
         .collect();
-    folders.sort();
+    sort_entries_with_order(&mut folders, cfg.tree_order.get("__kasas__"), false);
 
     for (idx, d) in folders.iter().enumerate() {
         let f_key = d
@@ -747,7 +773,7 @@ pub fn scan_vault() -> Value {
                     .starts_with('.')
         })
         .collect();
-    root_files.sort();
+    sort_entries_with_order(&mut root_files, cfg.tree_order.get("__root_docs__"), false);
     for f in root_files {
         let ext = ext_lower(&f);
         if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
@@ -1424,6 +1450,374 @@ pub fn delete_note(rel: &str) -> Result<Value, String> {
     Ok(json!({ "deleted": rel }))
 }
 
+fn clean_rel_str(raw: &str) -> String {
+    let s = raw.trim();
+    let s = s.strip_prefix("note:").unwrap_or(s);
+    s.replace('\\', "/").trim_matches('/').to_string()
+}
+
+fn mirror_move_path(old_rel: &str, new_rel: &str) {
+    let mirror_root = ROOT.join("notes");
+    if mirror_root != *VAULT_DIR {
+        let m_src = mirror_root.join(old_rel);
+        let m_dst = mirror_root.join(new_rel);
+        if m_src.exists() && !m_dst.exists() {
+            if let Some(parent) = m_dst.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::rename(&m_src, &m_dst);
+        }
+    }
+}
+
+fn migrate_tree_order_keys(tree_order: &mut HashMap<String, Vec<String>>, old_rel: &str, new_rel: &str) {
+    let prefix = format!("{}/", old_rel);
+    let mut updated: HashMap<String, Vec<String>> = HashMap::with_capacity(tree_order.len());
+    for (k, v) in tree_order.drain() {
+        if k == old_rel {
+            updated.insert(new_rel.to_string(), v);
+        } else if let Some(rest) = k.strip_prefix(&prefix) {
+            updated.insert(format!("{}/{}", new_rel, rest), v);
+        } else {
+            updated.insert(k, v);
+        }
+    }
+    *tree_order = updated;
+}
+
+fn sorted_dir_names(dir: &Path, order_names: Option<&Vec<String>>, dirs_last: bool, only_dirs: bool, only_files: bool) -> Vec<String> {
+    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let nm = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if nm.starts_with('.') {
+                return false;
+            }
+            if only_dirs && !p.is_dir() {
+                return false;
+            }
+            if only_files && !p.is_file() {
+                return false;
+            }
+            true
+        })
+        .collect();
+    sort_entries_with_order(&mut entries, order_names, dirs_last);
+    entries
+        .into_iter()
+        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+        .collect()
+}
+
+pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Value, String> {
+    let clean_src = clean_rel_str(src_rel);
+    let clean_target = clean_rel_str(target_rel);
+    let pos = if position.trim().is_empty() {
+        "into".to_string()
+    } else {
+        position.trim().to_lowercase()
+    };
+    if pos != "into" && pos != "before" && pos != "after" {
+        return Err("Geçersiz konum (into, before, after bekleniyor)".to_string());
+    }
+    if clean_src.is_empty() {
+        return Err("Taşınacak öğe belirtilmedi".to_string());
+    }
+    let src = safe_path(&clean_src)?;
+    if !src.exists() {
+        return Err(format!("Öğe bulunamadı: {}", clean_src));
+    }
+    let src_is_dir = src.is_dir();
+    let src_is_root_kasa = src_is_dir && !clean_src.contains('/');
+    let src_name = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Geçersiz dosya adı".to_string())?
+        .to_string();
+    let old_parent_rel = clean_src
+        .rsplit_once('/')
+        .map(|(p, _)| p.to_string())
+        .unwrap_or_default();
+
+    let mut cfg = load_spaces_cfg();
+
+    if pos == "into" {
+        if src_is_root_kasa {
+            return Err("Çalışma kasası başka bir klasörün içine taşınamaz".to_string());
+        }
+        let is_root_target = clean_target.is_empty() || clean_target == "_root_docs";
+        let dst_dir = if is_root_target {
+            VAULT_DIR.clone()
+        } else {
+            safe_path(&clean_target)?
+        };
+        if !dst_dir.exists() || !dst_dir.is_dir() {
+            return Err(format!("Hedef klasör bulunamadı: {}", clean_target));
+        }
+        let new_parent_rel = if is_root_target {
+            String::new()
+        } else {
+            clean_target.clone()
+        };
+        if src_is_dir && (new_parent_rel == clean_src || new_parent_rel.starts_with(&format!("{}/", clean_src))) {
+            return Err("Klasör kendi içine veya alt klasörüne taşınamaz".to_string());
+        }
+        if old_parent_rel == new_parent_rel {
+            let kasa = clean_src
+                .split_once('/')
+                .map(|(k, _)| k.to_string())
+                .unwrap_or_default();
+            return Ok(json!({
+                "old_rel": clean_src,
+                "new_rel": clean_src,
+                "is_dir": src_is_dir,
+                "kasa": kasa,
+                "moved": false,
+                "reordered": false,
+                "already_here": true
+            }));
+        }
+        let dst = dst_dir.join(&src_name);
+        if dst.exists() {
+            return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
+        }
+        fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
+        let new_rel = if new_parent_rel.is_empty() {
+            src_name.clone()
+        } else {
+            format!("{}/{}", new_parent_rel, src_name)
+        };
+        mirror_move_path(&clean_src, &new_rel);
+
+        let old_key = if old_parent_rel.is_empty() {
+            "__root_docs__".to_string()
+        } else {
+            old_parent_rel
+        };
+        if let Some(list) = cfg.tree_order.get_mut(&old_key) {
+            list.retain(|n| n != &src_name);
+        }
+        let new_key = if new_parent_rel.is_empty() {
+            "__root_docs__".to_string()
+        } else {
+            new_parent_rel
+        };
+        if let Some(list) = cfg.tree_order.get_mut(&new_key) {
+            if !list.contains(&src_name) {
+                list.push(src_name.clone());
+            }
+        }
+        if src_is_dir {
+            migrate_tree_order_keys(&mut cfg.tree_order, &clean_src, &new_rel);
+        }
+        save_spaces_cfg(&cfg)?;
+        let kasa = new_rel
+            .split_once('/')
+            .map(|(k, _)| k.to_string())
+            .unwrap_or_default();
+        return Ok(json!({
+            "old_rel": clean_src,
+            "new_rel": new_rel,
+            "is_dir": src_is_dir,
+            "kasa": kasa,
+            "moved": true,
+            "reordered": false
+        }));
+    }
+
+    // pos == "before" || pos == "after"
+    if clean_target.is_empty() {
+        return Err("Hedef öğe belirtilmedi".to_string());
+    }
+    if clean_src == clean_target {
+        let kasa = clean_src
+            .split_once('/')
+            .map(|(k, _)| k.to_string())
+            .unwrap_or_default();
+        return Ok(json!({
+            "old_rel": clean_src,
+            "new_rel": clean_src,
+            "is_dir": src_is_dir,
+            "kasa": kasa,
+            "moved": false,
+            "reordered": false
+        }));
+    }
+    let ref_path = safe_path(&clean_target)?;
+    if !ref_path.exists() {
+        return Err(format!("Hedef öğe bulunamadı: {}", clean_target));
+    }
+    let ref_name = ref_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Geçersiz hedef adı".to_string())?
+        .to_string();
+
+    if src_is_root_kasa {
+        if clean_target.contains('/') || !ref_path.is_dir() {
+            return Err("Çalışma kasası yalnızca başka bir kasa ile sıralanabilir".to_string());
+        }
+        let src_sp = resolve_kasa_space(&clean_src, &cfg);
+        let ref_sp = resolve_kasa_space(&clean_target, &cfg);
+        if src_sp != ref_sp {
+            cfg.assignments.insert(clean_src.clone(), ref_sp);
+        }
+        let mut names = sorted_dir_names(
+            &VAULT_DIR,
+            cfg.tree_order.get("__kasas__"),
+            false,
+            true,
+            false,
+        );
+        names.retain(|n| n != &clean_src);
+        let ref_idx = names
+            .iter()
+            .position(|n| n == &ref_name)
+            .unwrap_or(names.len());
+        let ins_idx = if pos == "before" {
+            ref_idx
+        } else {
+            (ref_idx + 1).min(names.len())
+        };
+        names.insert(ins_idx, clean_src.clone());
+        cfg.tree_order.insert("__kasas__".to_string(), names);
+        save_spaces_cfg(&cfg)?;
+        return Ok(json!({
+            "old_rel": clean_src,
+            "new_rel": clean_src,
+            "is_dir": true,
+            "kasa": clean_src,
+            "moved": false,
+            "reordered": true
+        }));
+    }
+
+    if !clean_target.contains('/') {
+        if !ref_path.is_file() {
+            return Err("Dosya veya klasör bir kasanın yerine konulamaz; kasanın içine bırakın".to_string());
+        }
+        let mut moved = false;
+        let mut new_rel = clean_src.clone();
+        if !old_parent_rel.is_empty() {
+            if src_is_dir {
+                return Err("Klasör kök belge alanına taşınamaz".to_string());
+            }
+            let dst = VAULT_DIR.join(&src_name);
+            if dst.exists() {
+                return Err(format!("Ortak belgelerde '{}' zaten mevcut", src_name));
+            }
+            fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
+            new_rel = src_name.clone();
+            mirror_move_path(&clean_src, &new_rel);
+            if let Some(list) = cfg.tree_order.get_mut(&old_parent_rel) {
+                list.retain(|n| n != &src_name);
+            }
+            moved = true;
+        }
+        let mut names = sorted_dir_names(
+            &VAULT_DIR,
+            cfg.tree_order.get("__root_docs__"),
+            false,
+            false,
+            true,
+        );
+        names.retain(|n| n != &src_name);
+        let ref_idx = names
+            .iter()
+            .position(|n| n == &ref_name)
+            .unwrap_or(names.len());
+        let ins_idx = if pos == "before" {
+            ref_idx
+        } else {
+            (ref_idx + 1).min(names.len())
+        };
+        names.insert(ins_idx, src_name);
+        cfg.tree_order.insert("__root_docs__".to_string(), names);
+        save_spaces_cfg(&cfg)?;
+        return Ok(json!({
+            "old_rel": clean_src,
+            "new_rel": new_rel,
+            "is_dir": false,
+            "kasa": "",
+            "moved": moved,
+            "reordered": true
+        }));
+    }
+
+    let target_parent_rel = clean_target
+        .rsplit_once('/')
+        .map(|(p, _)| p.to_string())
+        .unwrap_or_default();
+    let dst_dir = safe_path(&target_parent_rel)?;
+    let mut moved = false;
+    let mut new_rel = clean_src.clone();
+
+    if old_parent_rel != target_parent_rel {
+        if src_is_dir
+            && (target_parent_rel == clean_src
+                || target_parent_rel.starts_with(&format!("{}/", clean_src)))
+        {
+            return Err("Klasör kendi içine veya alt klasörüne taşınamaz".to_string());
+        }
+        let dst = dst_dir.join(&src_name);
+        if dst.exists() {
+            return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
+        }
+        fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
+        new_rel = format!("{}/{}", target_parent_rel, src_name);
+        mirror_move_path(&clean_src, &new_rel);
+        let old_key = if old_parent_rel.is_empty() {
+            "__root_docs__".to_string()
+        } else {
+            old_parent_rel
+        };
+        if let Some(list) = cfg.tree_order.get_mut(&old_key) {
+            list.retain(|n| n != &src_name);
+        }
+        if src_is_dir {
+            migrate_tree_order_keys(&mut cfg.tree_order, &clean_src, &new_rel);
+        }
+        moved = true;
+    }
+
+    let mut names = sorted_dir_names(
+        &dst_dir,
+        cfg.tree_order.get(&target_parent_rel),
+        true,
+        false,
+        false,
+    );
+    names.retain(|n| n != &src_name);
+    let ref_idx = names
+        .iter()
+        .position(|n| n == &ref_name)
+        .unwrap_or(names.len());
+    let ins_idx = if pos == "before" {
+        ref_idx
+    } else {
+        (ref_idx + 1).min(names.len())
+    };
+    names.insert(ins_idx, src_name);
+    cfg.tree_order.insert(target_parent_rel, names);
+    save_spaces_cfg(&cfg)?;
+    let kasa = new_rel
+        .split_once('/')
+        .map(|(k, _)| k.to_string())
+        .unwrap_or_default();
+    Ok(json!({
+        "old_rel": clean_src,
+        "new_rel": new_rel,
+        "is_dir": src_is_dir,
+        "kasa": kasa,
+        "moved": moved,
+        "reordered": true
+    }))
+}
+
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -2001,7 +2395,13 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
             VAULT_DIR.clone()
         };
 
-        if (ext == ".md" || ext == ".html" || is_doc_ext(&ext)) && is_dir_target {
+        let base_name = base
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let is_bucket_dir = is_dir_target
+            && (base_name == "_gorseller" || base_name == "_ekler" || base_name == "assets");
+        if ((ext == ".md" || ext == ".html" || is_doc_ext(&ext)) && is_dir_target) || is_bucket_dir {
             let mut t = base.join(format!("{}{}", stem, ext));
             let mut n = 1;
             while t.exists() {
@@ -2057,6 +2457,7 @@ mod tests {
                 .map(|k| ((*k).to_string(), "donem_7".to_string()))
                 .collect(),
             kasa_meta: HashMap::new(),
+            tree_order: HashMap::new(),
         };
         assert_eq!(resolve_kasa_space("Mikrodalga", &cfg), "donem_7");
         assert_eq!(resolve_kasa_space("CV_ve_Belgeler", &cfg), "belgeler");
@@ -2075,6 +2476,7 @@ mod tests {
             spaces: default_spaces_list(),
             assignments: HashMap::new(),
             kasa_meta: HashMap::new(),
+            tree_order: HashMap::new(),
         };
         cfg.kasa_meta.insert(
             "Mikrodalga".to_string(),

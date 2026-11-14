@@ -2,6 +2,7 @@
 import html
 import json
 import re
+import shutil
 import time
 import xml.etree.ElementTree as ET
 import zipfile
@@ -10,7 +11,7 @@ from pathlib import Path
 from .config import ROOT, VAULT_DIR
 
 IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"}
-DOC_EXT = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"}
+DOC_EXT = {".pdf", ".docx", ".doc", ".pptx", ".ppsx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"}
 ASSET_EXT = IMG_EXT | DOC_EXT
 MAX_ASSET = 50 * 1024 * 1024
 SPACES_FILENAME = ".agydesk_spaces.json"
@@ -159,6 +160,7 @@ def _load_spaces_cfg() -> dict:
     spaces = [dict(s) for s in DEFAULT_SPACES]
     assignments = dict(DEFAULT_SPACE_ASSIGNMENTS)
     kasa_meta: dict[str, dict] = {}
+    tree_order: dict[str, list[str]] = {}
     cfg_path = VAULT_DIR / SPACES_FILENAME
     if cfg_path.exists():
         try:
@@ -189,9 +191,14 @@ def _load_spaces_cfg() -> dict:
                     for k, v in raw_meta.items():
                         if isinstance(k, str) and isinstance(v, dict):
                             kasa_meta[k] = dict(v)
+                raw_order = raw.get("tree_order")
+                if isinstance(raw_order, dict):
+                    for k, v in raw_order.items():
+                        if isinstance(k, str) and isinstance(v, list):
+                            tree_order[k] = [str(item) for item in v if isinstance(item, str) and item]
         except Exception:
             pass
-    return {"spaces": spaces, "assignments": assignments, "kasa_meta": kasa_meta}
+    return {"spaces": spaces, "assignments": assignments, "kasa_meta": kasa_meta, "tree_order": tree_order}
 
 
 def _save_spaces_cfg(cfg: dict) -> None:
@@ -202,8 +209,19 @@ def _save_spaces_cfg(cfg: dict) -> None:
         "spaces": cfg.get("spaces", DEFAULT_SPACES),
         "assignments": cfg.get("assignments", {}),
         "kasa_meta": cfg.get("kasa_meta", {}),
+        "tree_order": cfg.get("tree_order", {}),
     }
     cfg_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _sort_with_order(entries: list[Path], order_names: list[str] | None, default_key) -> list[Path]:
+    if not order_names:
+        return sorted(entries, key=default_key)
+    rank = {name: i for i, name in enumerate(order_names)}
+    ordered = [p for p in entries if p.name in rank]
+    ordered.sort(key=lambda p: rank[p.name])
+    rest = sorted([p for p in entries if p.name not in rank], key=default_key)
+    return ordered + rest
 
 
 def _resolve_kasa_space(key: str, cfg: dict) -> str:
@@ -278,7 +296,12 @@ def scan_vault() -> dict:
     sources: list[dict] = []
     md_links_raw: dict[str, list[str]] = {}
 
-    folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")])
+    tree_order: dict[str, list[str]] = cfg.get("tree_order", {})
+    folders = _sort_with_order(
+        [d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")],
+        tree_order.get("__kasas__"),
+        lambda x: x.name.lower(),
+    )
     for idx, d in enumerate(folders):
         f_key = d.name
         meta = _meta_for_folder(f_key, cfg)
@@ -295,9 +318,13 @@ def scan_vault() -> dict:
         def _scan_dir(cur_dir: Path, is_asset_bucket: bool = False) -> list[dict]:
             nonlocal n_notes, n_docs, n_imgs, latest_mtime, index_id
             items: list[dict] = []
-            for f in sorted(cur_dir.iterdir(), key=lambda x: (x.is_dir(), x.name.lower())):
-                if f.name.startswith("."):
-                    continue
+            cur_rel = cur_dir.relative_to(VAULT_DIR).as_posix()
+            entries = _sort_with_order(
+                [p for p in cur_dir.iterdir() if not p.name.startswith(".")],
+                tree_order.get(cur_rel),
+                lambda x: (x.is_dir(), x.name.lower()),
+            )
+            for f in entries:
                 if f.is_dir():
                     special_bucket = f.name in ("_gorseller", "_ekler", "assets")
                     sub_kids = _scan_dir(f, is_asset_bucket=(is_asset_bucket or special_bucket))
@@ -326,9 +353,7 @@ def scan_vault() -> dict:
                     continue
 
                 ext = f.suffix.lower()
-                if is_asset_bucket and ext not in ASSET_EXT:
-                    continue
-                if not is_asset_bucket and ext not in (".md", ".html") and ext not in ASSET_EXT:
+                if ext not in (".md", ".html") and ext not in ASSET_EXT:
                     continue
 
                 rel = f.relative_to(VAULT_DIR).as_posix()
@@ -403,9 +428,12 @@ def scan_vault() -> dict:
         })
 
     # Kök dizindeki tekil belgeler (örn. 00_LAB_ORTAK_TAKVIM.md)
-    for f in sorted(VAULT_DIR.iterdir(), key=lambda x: x.name.lower()):
-        if not f.is_file() or f.name.startswith("."):
-            continue
+    root_files = _sort_with_order(
+        [f for f in VAULT_DIR.iterdir() if f.is_file() and not f.name.startswith(".")],
+        tree_order.get("__root_docs__"),
+        lambda x: x.name.lower(),
+    )
+    for f in root_files:
         ext = f.suffix.lower()
         if ext not in (".md", ".html") and ext not in ASSET_EXT:
             continue
@@ -760,6 +788,230 @@ def delete_note(rel: str) -> dict:
     return {"deleted": rel}
 
 
+def _clean_rel(raw: str) -> str:
+    s = str(raw or "").strip()
+    if s.startswith("note:"):
+        s = s[5:]
+    return s.replace("\\", "/").strip("/")
+
+
+def _mirror_move(old_rel: str, new_rel: str) -> None:
+    mirror_root = ROOT / "notes"
+    if mirror_root.resolve() != VAULT_DIR.resolve():
+        m_src = mirror_root / old_rel
+        m_dst = mirror_root / new_rel
+        if m_src.exists() and not m_dst.exists():
+            try:
+                m_dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(m_src), str(m_dst))
+            except Exception:
+                pass
+
+
+def _migrate_tree_order_keys(tree_order: dict[str, list[str]], old_rel: str, new_rel: str) -> None:
+    updated: dict[str, list[str]] = {}
+    prefix = old_rel + "/"
+    for k, v in tree_order.items():
+        if k == old_rel:
+            updated[new_rel] = v
+        elif k.startswith(prefix):
+            updated[new_rel + k[len(old_rel):]] = v
+        else:
+            updated[k] = v
+    tree_order.clear()
+    tree_order.update(updated)
+
+
+def move_item(src_rel: str, target_rel: str, position: str = "into") -> dict:
+    """Belge veya klasörü başka bir klasöre taşır ya da ağaç içindeki sırasını günceller."""
+    clean_src = _clean_rel(src_rel)
+    clean_target = _clean_rel(target_rel)
+    pos = (position or "into").strip().lower()
+    if pos not in ("into", "before", "after"):
+        raise ValueError("Geçersiz konum (into, before, after bekleniyor)")
+    if not clean_src:
+        raise ValueError("Taşınacak öğe belirtilmedi")
+
+    src = _safe_path(clean_src)
+    if not src.exists():
+        raise FileNotFoundError(clean_src)
+    src_is_dir = src.is_dir()
+    src_is_root_kasa = src_is_dir and "/" not in clean_src
+
+    cfg = _load_spaces_cfg()
+    tree_order: dict[str, list[str]] = cfg.setdefault("tree_order", {})
+
+    if pos == "into":
+        if src_is_root_kasa:
+            raise ValueError("Çalışma kasası başka bir klasörün içine taşınamaz")
+        is_root_target = clean_target in ("", "_root_docs")
+        dst_dir = VAULT_DIR if is_root_target else _safe_path(clean_target)
+        if not dst_dir.exists() or not dst_dir.is_dir():
+            raise FileNotFoundError(clean_target)
+        if src_is_dir and (dst_dir.resolve() == src.resolve() or src.resolve() in dst_dir.resolve().parents):
+            raise ValueError("Klasör kendi içine veya alt klasörüne taşınamaz")
+        if src.parent.resolve() == dst_dir.resolve():
+            return {
+                "old_rel": clean_src,
+                "new_rel": clean_src,
+                "is_dir": src_is_dir,
+                "kasa": clean_src.split("/")[0] if "/" in clean_src else "",
+                "moved": False,
+                "reordered": False,
+                "already_here": True,
+            }
+        dst = dst_dir / src.name
+        if dst.exists():
+            raise ValueError(f"Hedef klasörde '{src.name}' zaten mevcut")
+
+        old_parent_key = "__root_docs__" if src.parent.resolve() == VAULT_DIR.resolve() else src.parent.relative_to(VAULT_DIR).as_posix()
+        shutil.move(str(src), str(dst))
+        new_rel = dst.relative_to(VAULT_DIR).as_posix()
+        _mirror_move(clean_src, new_rel)
+
+        if old_parent_key in tree_order:
+            tree_order[old_parent_key] = [n for n in tree_order[old_parent_key] if n != src.name]
+        new_parent_key = "__root_docs__" if dst_dir.resolve() == VAULT_DIR.resolve() else dst_dir.relative_to(VAULT_DIR).as_posix()
+        if new_parent_key in tree_order and dst.name not in tree_order[new_parent_key]:
+            tree_order[new_parent_key].append(dst.name)
+        if src_is_dir:
+            _migrate_tree_order_keys(tree_order, clean_src, new_rel)
+        _save_spaces_cfg(cfg)
+        return {
+            "old_rel": clean_src,
+            "new_rel": new_rel,
+            "is_dir": src_is_dir,
+            "kasa": new_rel.split("/")[0] if "/" in new_rel else "",
+            "moved": True,
+            "reordered": False,
+        }
+
+    # pos in ("before", "after")
+    if not clean_target:
+        raise ValueError("Hedef öğe belirtilmedi")
+    if clean_src == clean_target:
+        return {
+            "old_rel": clean_src,
+            "new_rel": clean_src,
+            "is_dir": src_is_dir,
+            "kasa": clean_src.split("/")[0] if "/" in clean_src else "",
+            "moved": False,
+            "reordered": False,
+        }
+    ref = _safe_path(clean_target)
+    if not ref.exists():
+        raise FileNotFoundError(clean_target)
+
+    # Kök kasalar arası sıralama
+    if src_is_root_kasa:
+        if not (ref.is_dir() and "/" not in clean_target):
+            raise ValueError("Çalışma kasası yalnızca başka bir kasa ile sıralanabilir")
+        src_sp = _resolve_kasa_space(clean_src, cfg)
+        ref_sp = _resolve_kasa_space(clean_target, cfg)
+        if src_sp != ref_sp:
+            cfg["assignments"][clean_src] = ref_sp
+        dirs = _sort_with_order(
+            [d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")],
+            tree_order.get("__kasas__"),
+            lambda x: x.name.lower(),
+        )
+        names = [d.name for d in dirs if d.name != clean_src]
+        ref_idx = names.index(ref.name)
+        ins_idx = ref_idx if pos == "before" else ref_idx + 1
+        names.insert(ins_idx, clean_src)
+        tree_order["__kasas__"] = names
+        _save_spaces_cfg(cfg)
+        return {
+            "old_rel": clean_src,
+            "new_rel": clean_src,
+            "is_dir": True,
+            "kasa": clean_src,
+            "moved": False,
+            "reordered": True,
+        }
+
+    # Kök belgeler arası sıralama
+    if "/" not in clean_target:
+        if not ref.is_file():
+            raise ValueError("Dosya veya klasör bir kasanın yerine konulamaz; kasanın içine bırakın")
+        dst_dir = VAULT_DIR
+        moved = False
+        new_rel = clean_src
+        if src.parent.resolve() != dst_dir.resolve():
+            if src_is_dir:
+                raise ValueError("Klasör kök belge alanına taşınamaz")
+            dst = dst_dir / src.name
+            if dst.exists():
+                raise ValueError(f"Ortak belgelerde '{src.name}' zaten mevcut")
+            old_parent_key = src.parent.relative_to(VAULT_DIR).as_posix()
+            shutil.move(str(src), str(dst))
+            new_rel = dst.relative_to(VAULT_DIR).as_posix()
+            _mirror_move(clean_src, new_rel)
+            if old_parent_key in tree_order:
+                tree_order[old_parent_key] = [n for n in tree_order[old_parent_key] if n != src.name]
+            moved = True
+        root_files = _sort_with_order(
+            [f for f in VAULT_DIR.iterdir() if f.is_file() and not f.name.startswith(".")],
+            tree_order.get("__root_docs__"),
+            lambda x: x.name.lower(),
+        )
+        item_name = Path(new_rel).name
+        names = [f.name for f in root_files if f.name != item_name]
+        ref_idx = names.index(ref.name)
+        names.insert(ref_idx if pos == "before" else ref_idx + 1, item_name)
+        tree_order["__root_docs__"] = names
+        _save_spaces_cfg(cfg)
+        return {
+            "old_rel": clean_src,
+            "new_rel": new_rel,
+            "is_dir": False,
+            "kasa": "",
+            "moved": moved,
+            "reordered": True,
+        }
+
+    # Kasa / alt klasör içi taşıma + konumlandırma
+    dst_dir = ref.parent
+    target_parent_key = dst_dir.relative_to(VAULT_DIR).as_posix()
+    moved = False
+    new_rel = clean_src
+    if src.parent.resolve() != dst_dir.resolve():
+        if src_is_dir and (dst_dir.resolve() == src.resolve() or src.resolve() in dst_dir.resolve().parents):
+            raise ValueError("Klasör kendi içine veya alt klasörüne taşınamaz")
+        dst = dst_dir / src.name
+        if dst.exists():
+            raise ValueError(f"Hedef klasörde '{src.name}' zaten mevcut")
+        old_parent_key = "__root_docs__" if src.parent.resolve() == VAULT_DIR.resolve() else src.parent.relative_to(VAULT_DIR).as_posix()
+        shutil.move(str(src), str(dst))
+        new_rel = dst.relative_to(VAULT_DIR).as_posix()
+        _mirror_move(clean_src, new_rel)
+        if old_parent_key in tree_order:
+            tree_order[old_parent_key] = [n for n in tree_order[old_parent_key] if n != src.name]
+        if src_is_dir:
+            _migrate_tree_order_keys(tree_order, clean_src, new_rel)
+        moved = True
+
+    entries = _sort_with_order(
+        [p for p in dst_dir.iterdir() if not p.name.startswith(".")],
+        tree_order.get(target_parent_key),
+        lambda x: (x.is_dir(), x.name.lower()),
+    )
+    item_name = Path(new_rel).name
+    names = [p.name for p in entries if p.name != item_name]
+    ref_idx = names.index(ref.name)
+    names.insert(ref_idx if pos == "before" else ref_idx + 1, item_name)
+    tree_order[target_parent_key] = names
+    _save_spaces_cfg(cfg)
+    return {
+        "old_rel": clean_src,
+        "new_rel": new_rel,
+        "is_dir": src_is_dir,
+        "kasa": new_rel.split("/")[0] if "/" in new_rel else "",
+        "moved": moved,
+        "reordered": True,
+    }
+
+
 def _pdf_to_text(p: Path, max_pages: int = 15) -> str:
     """PDF dosyasından pypdf ile metin çıkarır (varsa)."""
     try:
@@ -933,7 +1185,14 @@ def save_asset(note_rel: str, name: str, data: bytes) -> dict:
             if folders:
                 base = folders[0]
         is_dir_target = bool(note_rel and _safe_path(note_rel[5:] if note_rel.startswith("note:") else note_rel).is_dir())
-        if ext in (".md", ".html", ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt") and is_dir_target:
+        if ext in (".md", ".html", ".pdf", ".docx", ".doc", ".pptx", ".ppsx", ".ppt", ".xlsx", ".xls", ".csv", ".txt") and is_dir_target:
+            d = base
+            target = d / f"{stem}{ext}"
+            n = 1
+            while target.exists():
+                n += 1
+                target = d / f"{stem}_{n}{ext}"
+        elif is_dir_target and base.name in ("_gorseller", "_ekler", "assets"):
             d = base
             target = d / f"{stem}{ext}"
             n = 1

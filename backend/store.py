@@ -35,6 +35,8 @@ def init():
               id INTEGER PRIMARY KEY, session TEXT, w TEXT, h TEXT, ts REAL);
             CREATE TABLE IF NOT EXISTS cal_events(
               id INTEGER PRIMARY KEY, day INTEGER, title TEXT, kind TEXT, kasa TEXT);
+            CREATE TABLE IF NOT EXISTS ui_state(
+              key TEXT PRIMARY KEY, val TEXT, updated_ts REAL);
             """
         )
         # Migrate legacy gemini-flash quota counters to the shared gemini-hydrogen slot.
@@ -182,4 +184,26 @@ def add_cal_event(day: int, title: str, kind: str = "task", kasa: str = "") -> d
 def del_cal_event(ev_id: int):
     with conn() as c:
         c.execute("DELETE FROM cal_events WHERE id=?", (int(ev_id),))
+
+
+def get_ui_state() -> dict[str, str]:
+    with conn() as c:
+        rows = c.execute("SELECT key, val FROM ui_state").fetchall()
+    return {r["key"]: r["val"] for r in rows}
+
+
+def set_ui_state(items: dict[str, str | None]):
+    now = time.time()
+    with conn() as c:
+        for k, v in items.items():
+            if not k:
+                continue
+            if v is None:
+                c.execute("DELETE FROM ui_state WHERE key=?", (k,))
+            else:
+                c.execute(
+                    "INSERT INTO ui_state(key,val,updated_ts) VALUES(?,?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET val=excluded.val, updated_ts=excluded.updated_ts",
+                    (str(k), str(v), now),
+                )
 

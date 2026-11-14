@@ -216,6 +216,18 @@ struct FolderCreateReq {
 }
 
 #[derive(Deserialize)]
+struct VaultMoveReq {
+    src: String,
+    #[serde(default)]
+    target: String,
+    #[serde(default = "default_move_pos")]
+    position: String,
+}
+fn default_move_pos() -> String {
+    "into".to_string()
+}
+
+#[derive(Deserialize)]
 struct CalEventReq {
     day: i64,
     title: String,
@@ -276,6 +288,18 @@ async fn health_ep(State(st): State<AppState>) -> Json<Value> {
 
 async fn ping_ep() -> Json<Value> {
     Json(json!({ "ok": true, "engine": "rust" }))
+}
+
+async fn get_ui_state_ep() -> Json<Value> {
+    Json(Value::Object(store::get_ui_state()))
+}
+
+async fn set_ui_state_ep(body: Bytes) -> Response {
+    let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(&body) else {
+        return err_resp(StatusCode::BAD_REQUEST, "Geçersiz JSON nesnesi".to_string());
+    };
+    store::set_ui_state(&map);
+    Json(json!({ "ok": true })).into_response()
 }
 
 async fn get_vault_ep() -> Json<Value> {
@@ -376,6 +400,37 @@ async fn create_folder_ep(
             let rel = res.get("rel").and_then(|v| v.as_str()).unwrap_or("");
             store::add_log("vault", &format!("📁 Yeni klasör oluşturuldu: {}", rel), "ok");
             st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) => {
+            let code = if e.contains("bulunamadı") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            err_resp(code, e)
+        }
+    }
+}
+
+async fn move_vault_item_ep(
+    State(st): State<AppState>,
+    Json(r): Json<VaultMoveReq>,
+) -> Response {
+    match vault::move_item(&r.src, &r.target, &r.position) {
+        Ok(res) => {
+            let moved = res.get("moved").and_then(|v| v.as_bool()).unwrap_or(false);
+            let reordered = res.get("reordered").and_then(|v| v.as_bool()).unwrap_or(false);
+            if moved {
+                let old_rel = res.get("old_rel").and_then(|v| v.as_str()).unwrap_or("");
+                let new_rel = res.get("new_rel").and_then(|v| v.as_str()).unwrap_or("");
+                store::add_log("vault", &format!("📦 Taşındı: {} → {}", old_rel, new_rel), "ok");
+                st.emit("log", json!({}));
+            } else if reordered {
+                let new_rel = res.get("new_rel").and_then(|v| v.as_str()).unwrap_or("");
+                store::add_log("vault", &format!("↕ Sıralama güncellendi: {}", new_rel), "ok");
+                st.emit("log", json!({}));
+            }
             Json(res).into_response()
         }
         Err(e) => {
@@ -906,11 +961,20 @@ fn load_window_icon() -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
+#[derive(Debug, Clone, Copy)]
+enum WinCmd {
+    Drag,
+    Minimize,
+    ToggleMaximize,
+    Close,
+}
+
 fn run_native_window() {
     use tao::{
         dpi::LogicalSize,
         event::{Event as TaoEvent, WindowEvent},
-        event_loop::{ControlFlow, EventLoop},
+        event_loop::{ControlFlow, EventLoopBuilder},
+        platform::windows::WindowBuilderExtWindows,
         window::WindowBuilder,
     };
     use wry::{WebContext, WebViewBuilder};
@@ -921,23 +985,45 @@ fn run_native_window() {
         .unwrap_or(1);
     let url = format!("http://127.0.0.1:8780/?v={}", ts);
 
-    let event_loop = EventLoop::new();
+    let event_loop = EventLoopBuilder::<WinCmd>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
         .with_title("AgyDesk — EEM Çalışma İstasyonu")
+        .with_decorations(false)
+        .with_undecorated_shadow(true)
         .with_inner_size(LogicalSize::new(1520.0, 930.0))
         .with_window_icon(load_window_icon())
         .build(&event_loop)
         .expect("Win32 penceresi oluşturulamadı");
 
-    let primary_dir = std::env::temp_dir().join("agydesk_webview2_data");
+    let make_ipc = |p: tao::event_loop::EventLoopProxy<WinCmd>| {
+        move |req: wry::http::Request<String>| {
+            let cmd = match req.body().as_str() {
+                "drag" => Some(WinCmd::Drag),
+                "min" => Some(WinCmd::Minimize),
+                "max" => Some(WinCmd::ToggleMaximize),
+                "close" => Some(WinCmd::Close),
+                _ => None,
+            };
+            if let Some(c) = cmd {
+                let _ = p.send_event(c);
+            }
+        }
+    };
+
+    let primary_dir = std::env::var_os("LOCALAPPDATA")
+        .map(|d| std::path::PathBuf::from(d).join("AgyDesk").join("webview2_data"))
+        .unwrap_or_else(|| std::env::temp_dir().join("agydesk_webview2_data"));
+    let _ = std::fs::create_dir_all(&primary_dir);
     let mut web_context = WebContext::new(Some(primary_dir));
     let build_primary = WebViewBuilder::new(&window)
         .with_web_context(&mut web_context)
         .with_url(&url)
         .with_devtools(true)
+        .with_ipc_handler(make_ipc(proxy.clone()))
         .build();
 
-    let (_webview, _fallback_ctx) = match build_primary {
+    let (webview, _fallback_ctx) = match build_primary {
         Ok(wv) => (wv, None),
         Err(_) => {
             let fallback_dir =
@@ -947,21 +1033,55 @@ fn run_native_window() {
                 .with_web_context(&mut fb_ctx)
                 .with_url(&url)
                 .with_devtools(true)
+                .with_ipc_handler(make_ipc(proxy.clone()))
                 .build()
                 .expect("WebView2 bileşeni başlatılamadı");
             (wv, Some(fb_ctx))
         }
     };
+    let mut webview_opt = Some(webview);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
-        if let TaoEvent::WindowEvent {
-            event: WindowEvent::CloseRequested,
-            ..
-        } = event
-        {
-            media::shutdown();
-            *control_flow = ControlFlow::Exit;
+        match event {
+            TaoEvent::UserEvent(cmd) => match cmd {
+                WinCmd::Drag => {
+                    let _ = window.drag_window();
+                }
+                WinCmd::Minimize => {
+                    window.set_minimized(true);
+                }
+                WinCmd::ToggleMaximize => {
+                    window.set_maximized(!window.is_maximized());
+                }
+                WinCmd::Close => {
+                    drop(webview_opt.take());
+                    media::shutdown();
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(300));
+                        std::process::exit(0);
+                    });
+                    *control_flow = ControlFlow::Exit;
+                }
+            },
+            TaoEvent::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                drop(webview_opt.take());
+                media::shutdown();
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_millis(300));
+                    std::process::exit(0);
+                });
+                *control_flow = ControlFlow::Exit;
+            }
+            TaoEvent::LoopDestroyed => {
+                drop(webview_opt.take());
+                media::shutdown();
+                std::process::exit(0);
+            }
+            _ => {}
         }
     });
 }
@@ -988,7 +1108,9 @@ fn build_router() -> Router {
     Router::new()
         .route("/api/health", get(health_ep))
         .route("/api/ping", get(ping_ep))
+        .route("/api/ui_state", get(get_ui_state_ep).post(set_ui_state_ep))
         .route("/api/vault", get(get_vault_ep))
+        .route("/api/vault/move", post(move_vault_item_ep))
         .route("/api/kasa", post(create_kasa_ep))
         .route("/api/kasa/update", post(update_kasa_ep))
         .route("/api/space", post(save_space_ep).delete(delete_space_ep))

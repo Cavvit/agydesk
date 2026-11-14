@@ -34,7 +34,9 @@ pub fn init() {
         CREATE TABLE IF NOT EXISTS chat_msgs(
           id INTEGER PRIMARY KEY, session TEXT, w TEXT, h TEXT, ts REAL);
         CREATE TABLE IF NOT EXISTS cal_events(
-          id INTEGER PRIMARY KEY, day INTEGER, title TEXT, kind TEXT, kasa TEXT);",
+          id INTEGER PRIMARY KEY, day INTEGER, title TEXT, kind TEXT, kasa TEXT);
+        CREATE TABLE IF NOT EXISTS ui_state(
+          key TEXT PRIMARY KEY, val TEXT, updated_ts REAL);",
     );
 
     let n_ev: i64 = c
@@ -352,4 +354,45 @@ pub fn del_cal_event(ev_id: i64) {
     if let Ok(c) = open_conn() {
         let _ = c.execute("DELETE FROM cal_events WHERE id=?1", params![ev_id]);
     }
+}
+
+pub fn get_ui_state() -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    let Ok(c) = open_conn() else { return out };
+    let Ok(mut st) = c.prepare("SELECT key, val FROM ui_state") else {
+        return out;
+    };
+    if let Ok(rows) = st.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    }) {
+        for r in rows.flatten() {
+            out.insert(r.0, Value::String(r.1));
+        }
+    }
+    out
+}
+
+pub fn set_ui_state(items: &serde_json::Map<String, Value>) {
+    let Ok(mut c) = open_conn() else { return };
+    let Ok(tx) = c.transaction() else { return };
+    let ts = now_ts();
+    for (k, v) in items {
+        if k.is_empty() {
+            continue;
+        }
+        if v.is_null() {
+            let _ = tx.execute("DELETE FROM ui_state WHERE key=?1", params![k]);
+        } else {
+            let s = match v {
+                Value::String(st) => st.clone(),
+                other => other.to_string(),
+            };
+            let _ = tx.execute(
+                "INSERT INTO ui_state(key,val,updated_ts) VALUES(?1,?2,?3)
+                 ON CONFLICT(key) DO UPDATE SET val=excluded.val, updated_ts=excluded.updated_ts",
+                params![k, s, ts],
+            );
+        }
+    }
+    let _ = tx.commit();
 }

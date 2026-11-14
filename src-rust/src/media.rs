@@ -109,7 +109,7 @@ pub fn send_cmd(action: &str, app: &str, position_ms: Option<i64>) -> Value {
 }
 
 pub fn shutdown() {
-    if let Ok(mut guard) = WORKER.lock() {
+    if let Ok(mut guard) = WORKER.try_lock() {
         *guard = None;
     }
 }
