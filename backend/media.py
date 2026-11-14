@@ -82,8 +82,13 @@ def get_status(app: str | None = None) -> dict:
     return res
 
 
-def send_cmd(action: str, app: str | None = None) -> dict:
-    """playpause, next veya prev komutunu ilgili medya oturumuna gönderir."""
-    if action not in ("playpause", "next", "prev"):
+def send_cmd(action: str, app: str | None = None, position_ms: int | None = None) -> dict:
+    """playpause, next, prev veya seek komutunu ilgili medya oturumuna gönderir."""
+    if action not in ("playpause", "next", "prev", "seek"):
         return {"ok": False, "error": f"Geçersiz komut: {action}"}
-    return _rpc({"op": "cmd", "action": action, "app": app or ""})
+    payload: dict = {"op": "cmd", "action": action, "app": app or ""}
+    if action == "seek":
+        if position_ms is None:
+            return {"ok": False, "error": "position_ms gerekli"}
+        payload["position_ms"] = max(0, int(position_ms))
+    return _rpc(payload)

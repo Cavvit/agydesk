@@ -686,6 +686,8 @@ struct MediaCmdReq {
     action: String,
     #[serde(default)]
     app: String,
+    #[serde(default)]
+    position_ms: Option<i64>,
 }
 
 async fn media_status_ep(Query(q): Query<MediaStatusQuery>) -> Json<Value> {
@@ -696,7 +698,7 @@ async fn media_status_ep(Query(q): Query<MediaStatusQuery>) -> Json<Value> {
 }
 
 async fn media_cmd_ep(Json(r): Json<MediaCmdReq>) -> Response {
-    let res = tokio::task::spawn_blocking(move || media::send_cmd(&r.action, &r.app))
+    let res = tokio::task::spawn_blocking(move || media::send_cmd(&r.action, &r.app, r.position_ms))
         .await
         .unwrap_or_else(|_| json!({"ok": false, "error": "Medya görevi başarısız"}));
     if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {

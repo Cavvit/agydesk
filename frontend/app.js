@@ -6194,19 +6194,23 @@ async function pollSpotifyConnect(){
       const dr=await spApi('https://api.spotify.com/v1/me/player/devices');
       spMedia.devices=dr?((await dr.json()).devices||[]):[];
       spMedia.playing=false;
-      spMedia.title='';spMedia.artist='';spMedia.thumb='';spMedia.pct=0;spMedia.device='';
+      spMedia.title='';spMedia.artist='';spMedia.thumb='';spMedia.pct=0;spMedia.posMs=0;spMedia.durMs=0;spMedia.device='';
       return;
     }
     const d=await r.json();
     const dr=await spApi('https://api.spotify.com/v1/me/player/devices');
     const item=d.item||{};
+    const posMs=d.progress_ms||0;
+    const durMs=item.duration_ms||0;
     spMedia={
       connected:true,
       playing:!!d.is_playing,
       title:item.name||'',
       artist:(item.artists||[]).map(a=>a.name).join(', '),
       thumb:item.album?.images?.[2]?.url||item.album?.images?.[0]?.url||'',
-      pct:item.duration_ms?Math.round((d.progress_ms/item.duration_ms)*100):0,
+      pct:durMs?Math.round((posMs/durMs)*100):0,
+      posMs,
+      durMs,
       device:d.device?.name||'Spotify',
       devices:dr?((await dr.json()).devices||[]):[]
     };
@@ -6217,12 +6221,15 @@ function getUnifiedPlayers(){
   const players=[];
   for(const s of(pcMedia.sessions||[])){
     const actThumb=(pcMedia.active&&pcMedia.active.app===s.app)?pcMedia.active.thumbnail:'';
+    const posMs=Number(s.position_ms)||0;
+    const durMs=Number(s.duration_ms)||0;
     players.push({
       key:'pc:'+s.app,kind:'pc',app:s.app,deviceId:'',isActiveDevice:false,
       platform:s.platform||'media',platformLabel:s.platform_label||'PC Medya',
       title:s.title||'Bilinmiyor',artist:s.artist||'',
       thumb:actThumb||lookupMediaThumb(s.app,s.title),
-      playing:!!s.playing,device:s.platform_label||'PC',pct:0
+      playing:!!s.playing,device:s.platform_label||'PC',
+      pct:durMs?Math.round((posMs/durMs)*100):0,posMs,durMs
     });
   }
   if(spConnected()){
@@ -6241,7 +6248,9 @@ function getUnifiedPlayers(){
         artist:d.is_active?(spMedia.artist||d.name):(devIcon+d.name),
         thumb:d.is_active?spMedia.thumb:'',
         playing:!!(d.is_active&&spMedia.playing),
-        device:d.name,pct:d.is_active?spMedia.pct:0
+        device:d.name,pct:d.is_active?spMedia.pct:0,
+        posMs:d.is_active?(spMedia.posMs||0):0,
+        durMs:d.is_active?(spMedia.durMs||0):0
       });
     }
     if(!addedSp&&!hasPcSp&&spMedia.title){
@@ -6249,7 +6258,8 @@ function getUnifiedPlayers(){
         key:'sp:default',kind:'sp',app:'',deviceId:'',isActiveDevice:true,
         platform:'spotify',platformLabel:'Spotify Connect',
         title:spMedia.title,artist:spMedia.artist||spMedia.device||'Spotify',
-        thumb:spMedia.thumb,playing:spMedia.playing,device:spMedia.device||'Spotify',pct:spMedia.pct
+        thumb:spMedia.thumb,playing:spMedia.playing,device:spMedia.device||'Spotify',
+        pct:spMedia.pct,posMs:spMedia.posMs||0,durMs:spMedia.durMs||0
       });
     }
   }
@@ -6274,14 +6284,15 @@ function recomputeMediaState(){
     mediaState={
       source:sel.kind,activeKey:sel.key,platform:sel.platform,platformLabel:sel.platformLabel,
       title:sel.title,artist:sel.artist||(sel.device||''),thumb:sel.thumb,playing:sel.playing,
-      pct:sel.pct||0,device:sel.device,deviceId:sel.deviceId||'',isActiveDevice:!!sel.isActiveDevice,
+      pct:sel.pct||0,posMs:sel.posMs||0,durMs:sel.durMs||0,updatedAt:Date.now(),
+      device:sel.device,deviceId:sel.deviceId||'',isActiveDevice:!!sel.isActiveDevice,
       targetApp:sel.app||'',players
     };
     return;
   }
   mediaState={
     source:'idle',activeKey:'',platform:'idle',platformLabel:'Medya Yok',title:'Şu an çalan medya yok',
-    artist:'Spotify, YouTube veya PC medyası bekleniyor',thumb:'',playing:false,pct:0,
+    artist:'Spotify, YouTube veya PC medyası bekleniyor',thumb:'',playing:false,pct:0,posMs:0,durMs:0,updatedAt:Date.now(),
     device:'',deviceId:'',isActiveDevice:false,targetApp:'',players
   };
 }
@@ -6343,8 +6354,62 @@ function renderMediaRail(){
     :`${mediaState.playing?'▶':'❚❚'} ${mediaState.title}${mediaState.artist?' — '+mediaState.artist:''} (${mediaState.platformLabel})`;
 }
 
+let mediaSeeking=false;
+function fmtMediaTime(ms){
+  const sec=Math.max(0,Math.floor((Number(ms)||0)/1000));
+  const h=Math.floor(sec/3600);
+  const m=Math.floor((sec%3600)/60);
+  const s=sec%60;
+  return h>0?`${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${m}:${String(s).padStart(2,'0')}`;
+}
+function liveMediaPosMs(){
+  const dur=Number(mediaState.durMs)||0;
+  let pos=Number(mediaState.posMs)||0;
+  if(mediaState.playing&&mediaState.updatedAt){
+    pos+=Math.max(0,Date.now()-mediaState.updatedAt);
+  }
+  if(dur>0&&pos>dur)pos=dur;
+  return Math.max(0,Math.round(pos));
+}
+function onMediaSeekInput(val){
+  mediaSeeking=true;
+  const pos=Number(val)||0;
+  const dur=Number(mediaState.durMs)||1;
+  const pct=Math.max(0,Math.min(100,(pos/dur)*100));
+  const el=$('#mpopSeek'), cur=$('#mpopCurTime');
+  if(el) el.style.setProperty('--p',pct.toFixed(1)+'%');
+  if(cur) cur.textContent=fmtMediaTime(pos);
+}
+async function mediaSeek(val){
+  const pos=Math.max(0,Math.round(Number(val)||0));
+  mediaSeeking=false;
+  mediaState.posMs=pos;
+  mediaState.updatedAt=Date.now();
+  if(mediaState.source==='sp'){
+    const devQ=mediaState.deviceId?`&device_id=${encodeURIComponent(mediaState.deviceId)}`:'';
+    await spApi(`https://api.spotify.com/v1/me/player/seek?position_ms=${pos}${devQ}`,{method:'PUT'});
+  }else if(mediaState.source==='pc'){
+    await fetch('/api/media/cmd',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'seek',position_ms:pos,app:mediaState.targetApp||''})
+    });
+  }
+  setTimeout(refreshMediaNow,320);
+}
+setInterval(()=>{
+  if(mediaSeeking||!$('#mpop')?.classList.contains('show'))return;
+  const dur=Number(mediaState.durMs)||0;
+  if(dur<=0)return;
+  const pos=liveMediaPosMs();
+  const pct=Math.max(0,Math.min(100,(pos/dur)*100));
+  const el=$('#mpopSeek'), cur=$('#mpopCurTime');
+  if(el){ el.value=pos; el.style.setProperty('--p',pct.toFixed(1)+'%'); }
+  if(cur) cur.textContent=fmtMediaTime(pos);
+},1000);
+
 function renderMediaPop(){
   const pop=$('#mpop'); if(!pop)return;
+  if(mediaSeeking&&pop.classList.contains('show'))return;
   const activeEl=document.activeElement;
   if(activeEl&&activeEl.id==='spCidIn'&&pop.classList.contains('show'))return;
 
@@ -6358,6 +6423,15 @@ function renderMediaPop(){
     ?`Sonraki oynatıcı: ${nextPl.platformLabel} (${((curIdx+1)%players.length)+1}/${players.length})`
     :'Başka aktif medya oynatıcı yok';
   const artHtml=s.thumb?`<img src="${escAttr(s.thumb)}" alt="">`:mediaIcon(s.platform);
+
+  const dur=Number(s.durMs)||0;
+  const pos=dur>0?liveMediaPosMs():0;
+  const pct=dur>0?Math.max(0,Math.min(100,(pos/dur)*100)):(s.pct||0);
+  const seekHtml=dur>0?`
+    <div class="mpop-seek-wrap">
+      <input type="range" id="mpopSeek" class="mpop-seek" min="0" max="${dur}" step="1000" value="${pos}" style="--p:${pct.toFixed(1)}%" oninput="onMediaSeekInput(this.value)" onchange="mediaSeek(this.value)" title="İstediğin saniyeye/dakikaya sürükle">
+      <div class="mpop-times"><span id="mpopCurTime">${fmtMediaTime(pos)}</span><span>${fmtMediaTime(dur)}</span></div>
+    </div>`:(s.source==='sp'&&s.pct>0?`<div class="mpop-bar"><i style="width:${s.pct}%"></i></div>`:'');
 
   const savedCid=escAttr(localStorage.getItem('agydesk_sp_cid')||'');
   const setupHtml=mediaShowSetup?`
@@ -6389,7 +6463,7 @@ function renderMediaPop(){
       </div>
       <div class="mpop-art">${artHtml}</div>
     </div>
-    ${(s.source==='sp'&&s.pct>0)?`<div class="mpop-bar"><i style="width:${s.pct}%"></i></div>`:''}
+    ${seekHtml}
     <div class="mpop-ctrls">
       <button class="mpop-cbtn" onclick="mediaCmd('prev')" title="Önceki parça">${MEDIA_CTRL_SVG.prev}</button>
       <button class="mpop-cbtn main" onclick="mediaCmd('playpause')" title="Oynat / Duraklat">${s.playing?MEDIA_CTRL_SVG.pause:MEDIA_CTRL_SVG.play}</button>

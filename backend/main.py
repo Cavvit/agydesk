@@ -415,6 +415,7 @@ async def undo(r: SessionReq):
 class MediaCmdReq(BaseModel):
     action: str
     app: str = ""
+    position_ms: int | None = None
 
 
 @app.get("/api/media/status")
@@ -424,7 +425,7 @@ async def media_status(app: str = ""):
 
 @app.post("/api/media/cmd")
 async def media_cmd(r: MediaCmdReq):
-    res = await asyncio.to_thread(media.send_cmd, r.action, r.app)
+    res = await asyncio.to_thread(media.send_cmd, r.action, r.app, r.position_ms)
     if not res.get("ok"):
         raise HTTPException(400, res.get("error", "Medya komutu başarısız"))
     return res

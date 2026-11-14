@@ -95,9 +95,15 @@ pub fn get_status(app: &str) -> Value {
     v
 }
 
-pub fn send_cmd(action: &str, app: &str) -> Value {
-    if !matches!(action, "playpause" | "next" | "prev") {
+pub fn send_cmd(action: &str, app: &str, position_ms: Option<i64>) -> Value {
+    if !matches!(action, "playpause" | "next" | "prev" | "seek") {
         return json!({"ok": false, "error": format!("Geçersiz komut: {action}")});
+    }
+    if action == "seek" {
+        let Some(pos) = position_ms else {
+            return json!({"ok": false, "error": "position_ms gerekli"});
+        };
+        return rpc(&json!({"op": "cmd", "action": action, "app": app, "position_ms": pos.max(0)}));
     }
     rpc(&json!({"op": "cmd", "action": action, "app": app}))
 }

@@ -175,6 +175,22 @@ function Get-StatusObj($targetApp) {
                 $script:platCache[$pKey] = $plat
             }
             $thumb = Get-ThumbDataUri $props.Thumbnail $appId $title $artist
+            $posMs = 0L
+            $durMs = 0L
+            try {
+                $tl = $s.GetTimelineProperties()
+                if ($tl) {
+                    $durSec = [Math]::Max(0.0, $tl.EndTime.TotalSeconds)
+                    $posSec = [Math]::Max(0.0, $tl.Position.TotalSeconds)
+                    if ($isPlay -and $tl.LastUpdatedTime.Year -gt 1970) {
+                        $elapsed = ([DateTimeOffset]::UtcNow - $tl.LastUpdatedTime).TotalSeconds
+                        if ($elapsed -gt 0 -and $elapsed -lt 3600) { $posSec += $elapsed }
+                    }
+                    if ($durSec -gt 0 -and $posSec -gt $durSec) { $posSec = $durSec }
+                    $posMs = [long][Math]::Round($posSec * 1000.0)
+                    $durMs = [long][Math]::Round($durSec * 1000.0)
+                }
+            } catch {}
             $item = [ordered]@{
                 app = $appId
                 platform = $plat[0]
@@ -184,6 +200,8 @@ function Get-StatusObj($targetApp) {
                 album = $album
                 playing = $isPlay
                 status = $st
+                position_ms = $posMs
+                duration_ms = $durMs
             }
             $list += $item
             if ($targetApp -and $appId -eq $targetApp) {
@@ -208,7 +226,7 @@ function Get-StatusObj($targetApp) {
     return [ordered]@{ ok = $true; active = $null; sessions = @() }
 }
 
-function Invoke-MediaCmd($action, $targetApp) {
+function Invoke-MediaCmd($action, $targetApp, $positionMs) {
     $sessions = $mgr.GetSessions()
     $target = $null
     if ($targetApp) {
@@ -229,6 +247,11 @@ function Invoke-MediaCmd($action, $targetApp) {
         'playpause' { $res = Await-Op ($target.TryTogglePlayPauseAsync()) ([bool]) }
         'next'      { $res = Await-Op ($target.TrySkipNextAsync()) ([bool]) }
         'prev'      { $res = Await-Op ($target.TrySkipPreviousAsync()) ([bool]) }
+        'seek'      {
+            if ($null -eq $positionMs) { return [ordered]@{ ok = $false; error = 'position_ms gerekli' } }
+            $ticks = [long]([Math]::Max(0L, [long]$positionMs) * 10000L)
+            $res = Await-Op ($target.TryChangePlaybackPositionAsync($ticks)) ([bool])
+        }
         default     { return [ordered]@{ ok = $false; error = "Gecersiz komut: $action" } }
     }
     return [ordered]@{ ok = $true; handled = $res; app = $target.SourceAppUserModelId }
@@ -244,7 +267,7 @@ while ($true) {
         if ($req.op -eq 'status') {
             $out = Get-StatusObj $req.app
         } elseif ($req.op -eq 'cmd') {
-            $out = Invoke-MediaCmd $req.action $req.app
+            $out = Invoke-MediaCmd $req.action $req.app $req.position_ms
         } else {
             $out = [ordered]@{ ok = $false; error = 'Bilinmeyen op' }
         }
