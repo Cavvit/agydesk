@@ -289,5 +289,51 @@ def test_pptx_to_slides_endpoint(tmp_path, monkeypatch):
     assert data["slides"][0]["lines"] == ["Madde 1"]
 
 
+def test_folder_creation_and_recursive_vault_scan(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main, vault
+
+    vault_dir = tmp_path / "notes"
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(vault, "ROOT", tmp_path)
+    monkeypatch.setattr(vault, "VAULT_DIR", vault_dir)
+    monkeypatch.setattr(main, "VAULT_DIR", vault_dir)
+
+    kasa_dir = vault_dir / "Difransiyel_Denklemler"
+    kasa_dir.mkdir(parents=True, exist_ok=True)
+
+    client = TestClient(main.app)
+
+    rf = client.post("/api/folder", json={"parent": "Difransiyel_Denklemler", "name": "Çalışma Kağıtları"})
+    assert rf.status_code == 200
+    folder_rel = rf.json()["rel"]
+    assert folder_rel == "Difransiyel_Denklemler/Calisma_Kagitlari"
+    assert rf.json()["kasa"] == "Difransiyel_Denklemler"
+    assert (vault_dir / folder_rel).is_dir()
+
+    # Empty subfolder must appear in tree
+    v1 = client.get("/api/vault").json()
+    kasa_node = next(n for n in v1["tree"] if n["kasa"] == "Difransiyel_Denklemler")
+    sub_node = next((c for c in kasa_node["k"] if c.get("rel") == folder_rel), None)
+    assert sub_node is not None
+    assert sub_node["k"] == []
+
+    # Nested subfolder + note inside nested subfolder
+    rf2 = client.post("/api/folder", json={"parent": folder_rel, "name": "Vize Soruları"})
+    assert rf2.status_code == 200
+    nested_rel = rf2.json()["rel"]
+
+    rn = client.post("/api/note/create", json={"kasa": nested_rel, "title": "H1 Sorular", "content": "# H1\nSoru 1"})
+    assert rn.status_code == 200
+    note_rel = rn.json()["rel"]
+    assert note_rel.startswith(nested_rel + "/")
+    assert rn.json()["kasa"] == "Difransiyel_Denklemler"
+
+    v2 = client.get("/api/vault").json()
+    assert f"note:{note_rel}" in v2["pages"]
+    assert v2["pages"][f"note:{note_rel}"]["kasa"] == "Difransiyel_Denklemler"
+
+
+
 
 

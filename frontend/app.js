@@ -349,6 +349,66 @@ function mdToHtml(md,base){
 }
 let openTabs=['kasalar'], active='kasalar';
 let checkedSources=new Set();
+const TAB_STORE_KEY='agydesk_tabs_v1';
+let _restoringSession=false;
+
+function saveSessionTabs(){
+  if(_restoringSession) return;
+  try{
+    const payload={
+      openTabs:[...openTabs],
+      active,
+      curMode:typeof curMode!=='undefined'?curMode:'kasalar',
+      currentKasa,
+      treeOpen:{...TREE_OPEN},
+      noLeft:app?app.classList.contains('no-left'):false,
+      noRight:app?app.classList.contains('no-right'):false
+    };
+    localStorage.setItem(TAB_STORE_KEY,JSON.stringify(payload));
+  }catch(e){}
+}
+function restoreSessionTabs(){
+  try{
+    const raw=localStorage.getItem(TAB_STORE_KEY);
+    if(!raw) return false;
+    const saved=JSON.parse(raw);
+    if(!saved||!Array.isArray(saved.openTabs)||!saved.openTabs.length) return false;
+    _restoringSession=true;
+    if(saved.treeOpen&&typeof saved.treeOpen==='object'){
+      Object.assign(TREE_OPEN,saved.treeOpen);
+    }
+    if(typeof saved.currentKasa==='string'&&saved.currentKasa) currentKasa=saved.currentKasa;
+    const cleaned=[];
+    saved.openTabs.forEach(t=>{
+      if(typeof t!=='string'||!t||cleaned.includes(t)) return;
+      if(t.startsWith('blank:')){
+        const num=parseInt(t.slice(6),10);
+        if(Number.isFinite(num)&&num>blankN) blankN=num;
+      }else if(t.startsWith('ai')&&t!=='side_ai'){
+        const num=parseInt(t.slice(2),10);
+        if(Number.isFinite(num)&&num>aiN) aiN=num;
+        if(!ai[t]) ai[t]={title:'AI Oturumu '+t.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+      }
+      cleaned.push(t);
+    });
+    if(!cleaned.length){ _restoringSession=false; return false; }
+    openTabs=cleaned;
+    active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
+    const targetMode=saved.curMode||(active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write'))));
+    layoutMode(targetMode);
+    if(typeof saved.noLeft==='boolean') app.classList.toggle('no-left',saved.noLeft);
+    if(typeof saved.noRight==='boolean') app.classList.toggle('no-right',saved.noRight);
+    syncPaneBtns();
+    renderTabs();
+    renderMain();
+    syncPdfFocusMode();
+    _restoringSession=false;
+    return true;
+  }catch(e){
+    _restoringSession=false;
+    return false;
+  }
+}
 
 function getCheckedSources(){
   if(currentKasa!=='all'){
@@ -479,6 +539,7 @@ function selectKasaFilter(val){
   rebuildTreeAndSources();
   renderTree();
   updateRightProps();
+  saveSessionTabs();
 }
 function openKasalarHome(){
   layoutMode('kasalar');
@@ -496,17 +557,26 @@ function enterKasa(kasaKey,targetMode='write'){
   if(kObj&&kObj.index_id){
     openPage(kObj.index_id);
   }else{
-    renderTree(); renderTabs(); renderMain();
+    renderTree(); renderTabs(); renderMain(); saveSessionTabs();
   }
 }
 
 async function loadVault(){
   try{
     const v=await api('/api/vault');
-    Object.assign(pages,v.pages||{});
+    if(v&&v.pages){
+      Object.keys(pages).forEach(k=>{ if(k.startsWith('note:')) delete pages[k]; });
+      Object.assign(pages,v.pages);
+      const valid=openTabs.filter(t=>!String(t).startsWith('note:')||Boolean(pages[t]));
+      if(valid.length!==openTabs.length){
+        openTabs=valid.length?valid:['kasalar'];
+        if(!openTabs.includes(active)) active=openTabs[0];
+      }
+    }
     Object.assign(WIKI_MAP,v.wikimap||{});
     vaultTree=v.tree||[];
     kasalarData=v.kasalar||[];
+    if(currentKasa!=='all'&&!kasalarData.some(k=>k.key===currentKasa)) currentKasa='all';
     allSources=v.sources||[];
     backlinksMap=v.backlinks||{};
     if(!checkedSources.size){
@@ -518,7 +588,7 @@ async function loadVault(){
         kasalarData.map(k=>`<option value="${k.key}" ${currentKasa===k.key?'selected':''}>${k.icon} ${k.title} (${k.counts.total})</option>`).join('');
     }
     rebuildTreeAndSources();
-    renderTree(); renderTabs(); renderMain(); updateRightProps();
+    renderTree(); renderTabs(); renderMain(); updateRightProps(); updateSideAiCtx(); saveSessionTabs();
   }catch(e){}
 }
 
@@ -545,7 +615,9 @@ async function loadHealth(){
 const CHEV_SVG='<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>';
 function svgIcon(raw){
   if(raw==='❖') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>';
-  if(raw==='📘') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h2.9l1.4 1.6h5.3A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8Z"/></svg>';
+  if(raw==='📁') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4.2A1.2 1.2 0 0 1 3.2 3h2.9l1.4 1.6h5.3A1.2 1.2 0 0 1 14 5.8v6A1.2 1.2 0 0 1 12.8 13H3.2A1.2 1.2 0 0 1 2 11.8Z"/></svg>';
+  if(raw==='📘') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.8A1.3 1.3 0 0 1 4.3 1.5h8.2v11.3H4.3A1.3 1.3 0 0 0 3 14.1V2.8Z"/><path d="M4.3 12.8h8.2v1.7H4.3a1.3 1.3 0 0 1-1.3-1.3"/><path d="M6 4.8h4.5"/></svg>';
+  if(raw==='🖼') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.2" y="2.6" width="11.6" height="10.8" rx="1.6"/><circle cx="5.7" cy="6" r="1.1"/><path d="m3.4 11.8 3.2-3.2 2.2 2.1 1.6-1.5 2.4 2.6"/></svg>';
   if(raw==='⚡'||raw==='🌩') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.8 2 3.5 9h4.1l-.4 5 5.3-7H8.4Z"/></svg>';
   if(raw==='🌐'||raw==='🛰') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.8"/><path d="M2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8c-1.6-1.6-2.4-3.6-2.4-5.8S6.4 3.8 8 2.2Z"/></svg>';
   if(raw==='∿') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.8 8c1.5-4.5 3.1-4.5 4.6 0s3.1 4.5 4.6 0 2.2-2.2 3.2 0"/></svg>';
@@ -554,26 +626,133 @@ function svgIcon(raw){
   return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.2h5.5L12.5 5v8.8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z"/><path d="M9.2 2.2V5.2h3.2M5.5 8h5M5.5 10.6h3.5"/></svg>';
 }
 function firstVaultTab(){
-  for(const g of tree){ if(g.k&&g.k.length&&g.k[0].id) return g.k[0].id; }
-  return 'kasalar';
+  const walk=arr=>{
+    for(const item of (arr||[])){
+      if(item.id) return item.id;
+      if(item.k){ const sub=walk(item.k); if(sub) return sub; }
+    }
+    return null;
+  };
+  return walk(tree)||'kasalar';
 }
 const TREE_OPEN={};
+let activeNotionMenuBtn=null;
+function closeNotionTreeMenu(){
+  const menu=$('#notionTreeMenu');
+  if(menu){ menu.classList.remove('show'); menu.innerHTML=''; }
+  if(activeNotionMenuBtn){ activeNotionMenuBtn.classList.remove('open'); activeNotionMenuBtn=null; }
+}
+document.addEventListener('click',e=>{
+  const menu=$('#notionTreeMenu');
+  if(menu&&menu.classList.contains('show')&&!menu.contains(e.target)&&!e.target.closest('.ti-more')) closeNotionTreeMenu();
+});
+function flattenFolderTargets(nodes=vaultTree,depth=0,out=[]){
+  (nodes||[]).forEach(n=>{
+    if(!n||!n.k) return;
+    const rel=n.rel||n.kasa||'';
+    const base=rel.split('/').pop()||'';
+    if(rel&&base!=='_gorseller'){
+      const cleanName=String(n.n||'').replace(/^📎\s*|^🖼\s*|^📁\s*/,'').replace(/\s*\(\d+\)$/,'');
+      out.push({rel,label:cleanName||rel,depth,isKasa:!rel.includes('/'),kasa:n.kasa||rel.split('/')[0]});
+    }
+    if(n.k&&n.k.length) flattenFolderTargets(n.k,depth+1,out);
+  });
+  return out;
+}
+function openNotionTreeMenu(ev,target={}){
+  ev.stopPropagation();
+  const menu=$('#notionTreeMenu');
+  if(!menu) return;
+  const trigger=ev.currentTarget;
+  if(menu.classList.contains('show')&&activeNotionMenuBtn===trigger){ closeNotionTreeMenu(); return; }
+  closeNotionTreeMenu();
+  activeNotionMenuBtn=trigger;
+  if(trigger&&trigger.classList) trigger.classList.add('open');
+
+  const resolvedRel=(target.rel||(target.kasa&&target.kasa!=='all'?target.kasa:'')||(kasalarData[0]?kasalarData[0].key:''));
+  const resolvedKasa=target.kasa&&target.kasa!=='all'?target.kasa:(resolvedRel?resolvedRel.split('/')[0]:(kasalarData[0]?kasalarData[0].key:''));
+  const label=target.label||(kasalarData.find(k=>k.key===resolvedKasa)||{}).title||'Çalışma Alanı';
+  const items=[];
+  if(resolvedRel){
+    items.push({icon:'📝',text:'Yeni Sayfa / Not Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewNoteModal(resolvedRel); }});
+    items.push({icon:'📁',text:'Yeni Alt Klasör Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewFolderModal(resolvedRel,label); }});
+    items.push({icon:'📎',text:'Belge / Fotoğraf Yükle',fn:()=>{ closeNotionTreeMenu(); triggerAssetUpload(resolvedRel); }});
+    if(target.isKasa&&resolvedKasa){
+      items.push({icon:'📖',text:'Kasa Ana İndeksini Aç',fn:()=>{ closeNotionTreeMenu(); enterKasa(resolvedKasa,'write'); }});
+    }
+    items.push({sep:true});
+  }
+  items.push({icon:'❖',text:'Yeni Açılır Kasa Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewKasaModal(); }});
+
+  menu.innerHTML=`<div class="notion-tmenu-hdr"></div>`;
+  menu.firstChild.textContent=label;
+  menu.firstChild.title=label;
+  items.forEach(it=>{
+    if(it.sep){ const sep=document.createElement('div'); sep.className='notion-tmenu-sep'; menu.appendChild(sep); return; }
+    const b=document.createElement('button');
+    b.type='button';
+    b.className='notion-tmenu-item';
+    b.innerHTML=`<span class="mi">${it.icon}</span><span>${escHtml(it.text)}</span>`;
+    b.onclick=e=>{ e.stopPropagation(); it.fn(); };
+    menu.appendChild(b);
+  });
+
+  menu.classList.add('show');
+  const rect=trigger&&trigger.getBoundingClientRect?trigger.getBoundingClientRect():{left:ev.clientX,right:ev.clientX,top:ev.clientY,bottom:ev.clientY};
+  const mw=menu.offsetWidth||230, mh=menu.offsetHeight||210;
+  let left=Math.min(window.innerWidth-mw-10,Math.max(8,rect.right+6));
+  if(rect.right+6+mw>window.innerWidth-8) left=Math.max(8,rect.left-mw-4);
+  let top=Math.min(window.innerHeight-mh-10,Math.max(8,rect.top));
+  menu.style.left=left+'px';
+  menu.style.top=top+'px';
+}
 function renderTree(){
   const root=$('#tree'); root.innerHTML='';
   const build=(arr,host)=>arr.forEach(x=>{
     const d=document.createElement('div');
     const side=x.id&&isSideDoc(x.id);
-    const tk=(x.id||'')+'|'+x.n; if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
-    d.className='ti'+(x.k?' folder':'')+(x.open?' open':'')+(x.id===active?' on':'');
+    const tk=x.rel||((x.id||'')+'|'+x.n);
+    if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
+    const isRootKasa=Boolean(x.k&&x.rel&&!String(x.rel).includes('/'));
+    d.className='ti'+(x.k?' folder':'')+(isRootKasa?' root-kasa':'')+(x.open?' open':'')+(x.id===active?' on':'');
     d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:x.n;
-    const delBtn=(!x.k&&String(x.id||'').startsWith('note:'))?`<button class="ph-btn ti-del" style="width:18px;height:18px;font-size:11px;margin-left:${side?'0':'auto'}" onclick="event.stopPropagation();deleteActiveNote('${x.id}')" title="Kasadan sil">🗑</button>`:'';
-    const addBtn=(x.k&&x.kasa)?`<span style="margin-left:auto;display:inline-flex;gap:2px"><button class="ph-btn" style="width:18px;height:18px;font-size:11.5px" onclick="event.stopPropagation();triggerAssetUpload('${x.kasa}')" title="Bu kasaya dosyadan belge/fotoğraf yükle">📎</button><button class="ph-btn" style="width:18px;height:18px;font-size:12px" onclick="event.stopPropagation();openNewNoteModal('${x.kasa}')" title="Bu kasaya yeni not ekle">＋</button></span>`:(side?`<button class="ph-btn" style="margin-left:auto;width:18px;height:18px;font-size:11px;opacity:.75" onclick="event.stopPropagation();openPage('${x.id}',true)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢</button>`:'');
-    d.innerHTML=`<span class="car">${x.k?CHEV_SVG:''}</span><span class="tic">${svgIcon(x.i)}</span><span class="tn">${x.n}</span>${addBtn}${delBtn}`;
+    d.innerHTML=`<span class="car">${x.k?CHEV_SVG:''}</span><span class="tic">${svgIcon(x.i)}</span><span class="tn">${escHtml(x.n)}</span><span class="ti-act"></span>`;
+    const act=$('.ti-act',d);
+    if(x.k&&(x.rel||x.kasa)){
+      const more=document.createElement('button');
+      more.type='button';
+      more.className='ph-btn ti-more';
+      more.textContent='⋯';
+      more.title='Seçenekler: Yeni sayfa, yeni klasör, belge yükle';
+      const targetRel=x.rel||x.kasa;
+      const cleanLbl=String(x.n||'').replace(/^📎\s*|^🖼\s*|^📁\s*/,'').replace(/\s*\(\d+\)$/,'');
+      more.onclick=e=>openNotionTreeMenu(e,{rel:targetRel,kasa:x.kasa,label:cleanLbl,isKasa:isRootKasa});
+      act.appendChild(more);
+    }else{
+      if(side){
+        const maxBtn=document.createElement('button');
+        maxBtn.type='button';
+        maxBtn.className='ph-btn ti-hover-btn';
+        maxBtn.textContent='⤢';
+        maxBtn.title='AgyDesk içinde yeni sekmede tam ekran aç';
+        maxBtn.onclick=e=>{ e.stopPropagation(); openPage(x.id,true); };
+        act.appendChild(maxBtn);
+      }
+      if(!x.k&&String(x.id||'').startsWith('note:')){
+        const delBtn=document.createElement('button');
+        delBtn.type='button';
+        delBtn.className='ph-btn ti-hover-btn ti-del';
+        delBtn.textContent='🗑';
+        delBtn.title='Kasadan sil';
+        delBtn.onclick=e=>{ e.stopPropagation(); deleteActiveNote(x.id); };
+        act.appendChild(delBtn);
+      }
+    }
     host.appendChild(d);
     let kids;
     if(x.k){kids=document.createElement('div');kids.className='kids'+(x.open?' show':'');host.appendChild(kids);build(x.k,kids);}
     d.onclick=e=>{
-      if(x.k){d.classList.toggle('open');kids.classList.toggle('show');x.open=d.classList.contains('open');TREE_OPEN[tk]=x.open;}
+      if(x.k){d.classList.toggle('open');kids.classList.toggle('show');x.open=d.classList.contains('open');TREE_OPEN[tk]=x.open;saveSessionTabs();}
       if(x.id&&(e.ctrlKey||e.metaKey)){ openPage(x.id,true,{newTab:true}); return; }
       if(x.id&&!side)openPage(x.id,false,{replace:true});
       if(x.id&&side){
@@ -752,7 +931,7 @@ function openPage(id,forceTab=false,opts={}){
   if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
   else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
   else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
-  renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps();
+  renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
 }
 function closeTab(id){
   if(isAI(id)){ closeSession(id); return; }
@@ -761,7 +940,7 @@ function closeTab(id){
   if(!openTabs.length)openTabs=['kasalar'];
   if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
-  renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();
+  renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
 }
 const isAI=id=>id.startsWith('ai');
 pages.studychat={t:'Sohbet',i:'❖'};
@@ -879,6 +1058,7 @@ function renderTabs(){
   t.appendChild(a);
   const n=Object.values(ai).filter(s=>s.running).length;
   $('#bgStat').innerHTML=n?`<span class="spin"></span> ${n} AI görevi çalışıyor`:'<i class="dot"></i>Yönlendirici hazır';
+  saveSessionTabs();
 }
 
 /* ---------- AI oturumları ---------- */
@@ -1405,15 +1585,56 @@ async function submitNewKasa(){
   }catch(e){ alert('Kasa oluşturulamadı: '+e.message); }
 }
 
-function openNewNoteModal(defaultKasa){
-  const targetKasa=defaultKasa||(currentKasa!=='all'?currentKasa:(kasalarData[0]?kasalarData[0].key:'Elektrik_Makineleri_Lab'));
+function openNewFolderModal(defaultParent,parentLabel){
+  const targets=flattenFolderTargets();
+  const fallbackParent=defaultParent||(currentKasa!=='all'?currentKasa:(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab'));
   const box=$('#kasaModalBox');
   box.innerHTML=`
-    <h3>📝 Kasaya Yeni Not &amp; Belge/Fotoğraf Ekle</h3>
-    <label>Hedef Kasa
-      <select id="mnKasa">
-        ${kasalarData.map(k=>`<option value="${k.key}" ${k.key===targetKasa?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+    <h3>📁 Yeni Açılır Klasör Oluştur</h3>
+    <label>Üst Kasa / Klasör
+      <select id="mfParent">
+        ${targets.map(t=>`<option value="${t.rel}" ${t.rel===fallbackParent?'selected':''}>${'  '.repeat(t.depth)}${t.depth?'└─ ':'❖ '}${escHtml(t.label)}</option>`).join('')}
       </select>
+    </label>
+    <label>Klasör Adı
+      <input id="mfName" placeholder="ör. Çalışma Kağıtları, Vize Soruları, Ödevler…">
+    </label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+      <button class="hb" onclick="closeKasaModal()">İptal</button>
+      <button class="btn" style="padding:7px 16px" onclick="submitNewFolder()">Klasör Oluştur</button>
+    </div>`;
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>{ const inp=$('#mfName'); if(inp){ inp.focus(); inp.onkeydown=e=>{ if(e.key==='Enter') submitNewFolder(); }; } },50);
+}
+async function submitNewFolder(){
+  const parent=$('#mfParent').value;
+  const name=$('#mfName').value.trim();
+  if(!name){ $('#mfName').focus(); return; }
+  try{
+    const res=await api('/api/folder',{parent,name});
+    closeKasaModal();
+    const topKasa=res.kasa||parent.split('/')[0];
+    TREE_OPEN[topKasa]=true;
+    TREE_OPEN[parent]=true;
+    if(res.rel) TREE_OPEN[res.rel]=true;
+    if(currentKasa!=='all'&&currentKasa!==topKasa) currentKasa=topKasa;
+    await loadVault();
+    saveSessionTabs();
+    toast(`📁 "${res.name}" klasörü oluşturuldu`);
+  }catch(e){ alert('Klasör oluşturulamadı: '+e.message); }
+}
+
+function openNewNoteModal(defaultTarget){
+  const targets=flattenFolderTargets();
+  const targetRel=defaultTarget||(currentKasa!=='all'?currentKasa:(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab'));
+  const box=$('#kasaModalBox');
+  const opts=targets.length
+    ? targets.map(t=>`<option value="${t.rel}" ${t.rel===targetRel?'selected':''}>${'  '.repeat(t.depth)}${t.depth?'└─ 📁 ':'❖ '}${escHtml(t.label)}</option>`).join('')
+    : kasalarData.map(k=>`<option value="${k.key}" ${k.key===targetRel?'selected':''}>${k.icon} ${k.title}</option>`).join('');
+  box.innerHTML=`
+    <h3>📝 Kasaya / Klasöre Yeni Not &amp; Belge/Fotoğraf Ekle</h3>
+    <label>Hedef Kasa / Klasör
+      <select id="mnKasa">${opts}</select>
     </label>
     <label>📎 Bilgisayardan Belge / Fotoğraf Seç (PDF, Word, Görsel, MD, TXT)
       <input type="file" id="mnFiles" multiple accept=".md,.txt,.html,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,image/*" style="cursor:pointer" onchange="if(this.files.length&&!$('#mnTitle').value.trim()){$('#mnTitle').value=this.files[0].name.replace(/\\.[^.]+$/,'').replace(/[_-]+/g,' ');}">
@@ -1432,7 +1653,8 @@ function openNewNoteModal(defaultKasa){
   setTimeout(()=>$('#mnTitle').focus(),50);
 }
 async function submitNewNote(){
-  const kasa=$('#mnKasa').value;
+  const target=$('#mnKasa').value;
+  const topKasa=target.split('/')[0];
   const title=$('#mnTitle').value.trim();
   const content=$('#mnBody').value;
   const filesEl=$('#mnFiles');
@@ -1440,9 +1662,11 @@ async function submitNewNote(){
   if(!title&&!files.length){ $('#mnTitle').focus(); return; }
   try{
     closeKasaModal();
-    currentKasa=kasa;
+    if(currentKasa!=='all') currentKasa=topKasa;
+    TREE_OPEN[topKasa]=true;
+    TREE_OPEN[target]=true;
     if(title){
-      const res=await api('/api/note/create',{kasa,title,content});
+      const res=await api('/api/note/create',{kasa:target,title,content});
       if(files.length){
         await dropImagesToNote(res.id,files);
       }
@@ -1450,7 +1674,7 @@ async function submitNewNote(){
       openPage(res.id);
       toast(`📝 "${title}"${files.length?` (+${files.length} ek dosya)`:''} oluşturuldu`,res.id);
     }else if(files.length){
-      pendingUploadTarget=kasa;
+      pendingUploadTarget=target;
       await handleGlobalUpload(files);
     }
   }catch(e){ alert('İşlem hatası: '+e.message); }
@@ -1482,6 +1706,10 @@ async function handleGlobalUpload(fileList){
       const r=await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(targetRel)}`,{method:'POST',body:f});
       if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
       uploaded.push(await r.json());
+    }
+    if(targetRel){
+      TREE_OPEN[targetRel.split('/')[0]]=true;
+      TREE_OPEN[targetRel]=true;
     }
     await loadVault();
     if(uploaded.length===1){
@@ -1835,7 +2063,6 @@ async function renderVaultNote(m,id){
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <button class="hb" onclick="openKasalarHome()" title="Kasalar Ana Ekranına Dön">❖ Kasalar</button>
         <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}">
           <span>📄</span><b>${p.t}</b>
         </div>
@@ -1893,7 +2120,6 @@ async function renderVaultNote(m,id){
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
         <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>📊</span><b>${p.t}</b></div>
         <span class="pdf-badge" id="pptxMetaBadge">Sunum · PDF Görünümü</span>
         <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
@@ -1935,7 +2161,6 @@ async function renderVaultNote(m,id){
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
         <div class="pdf-title-wrap"><span>🖼</span><b>${p.t}</b></div>
         <span class="pdf-badge">${p.folder||''}</span>
         <div class="pdf-grp">
@@ -1970,7 +2195,6 @@ async function renderVaultNote(m,id){
   if(/\.(docx?)$/i.test(ext)){
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
         <div class="pdf-title-wrap"><span>📘</span><b>${p.t}</b></div>
         <span class="pdf-badge">Word Belgesi · ${p.folder||''}</span>
         <span style="flex:1"></span>
@@ -1995,7 +2219,6 @@ async function renderVaultNote(m,id){
   if(ext==='.html'){
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <button class="hb" onclick="openKasalarHome()">❖ Kasalar</button>
         <div class="pdf-title-wrap"><span>${p.i||'🌐'}</span><b>${p.t}</b></div>
         <span class="pdf-badge">${p.folder} · ${rel}</span>
         <span style="flex:1"></span>
@@ -3620,6 +3843,7 @@ function renderMain(){
   else if(active==='trafo') renderTrafoLab(m);
   else if(isAI(active)) renderAI(m);
   else renderSim(m);
+  syncPdfFocusMode();
 }
 
 const SK={
@@ -5507,7 +5731,7 @@ function syncPaneBtns(){
 }
 function togglePane(side){
   if(app.classList.contains('zen')){
-    app.classList.remove('zen');
+    app.classList.remove('zen','pdf-zen');
     const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
     applyPaneWidths();
   }
@@ -5517,12 +5741,15 @@ function togglePane(side){
   }
   app.classList.toggle(side==='left'?'no-left':'no-right');
   syncPaneBtns();
+  syncPdfFocusMode();
+  saveSessionTabs();
 }
 function leftHeaderAct(){
   if(curMode==='ai'){ newSession(); return; }
   const allOpen=tree.every(g=>g.open);
-  tree.forEach(g=>{g.open=!allOpen;TREE_OPEN[(g.id||'')+'|'+g.n]=g.open;});
+  tree.forEach(g=>{g.open=!allOpen;TREE_OPEN[g.rel||((g.id||'')+'|'+g.n)]=g.open;});
   renderTree();
+  saveSessionTabs();
 }
 $$('.rt').forEach(t=>t.onclick=()=>{
   $('#rtabsBar').style.display='';
@@ -5606,10 +5833,11 @@ function layoutMode(m){
   if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
   syncPaneBtns();
+  saveSessionTabs();
 }
 function setMode(m){
   if(app.classList.contains('zen')){
-    app.classList.remove('zen');
+    app.classList.remove('zen','pdf-zen');
     const zb=$('#zenBtn'); if(zb) zb.classList.remove('on');
   }
   layoutMode(m);
@@ -5622,11 +5850,23 @@ function setMode(m){
     openPage(o);
   }
 }
+function isPdfTab(id){
+  if(!String(id||'').startsWith('note:')) return false;
+  const p=pages[id];
+  const ext=(p&&p.ext?p.ext:String(id).slice(String(id).lastIndexOf('.'))).toLowerCase();
+  return ext==='.pdf';
+}
+function syncPdfFocusMode(){
+  if(!app) return;
+  const on=app.classList.contains('zen')&&isPdfTab(active);
+  app.classList.toggle('pdf-zen',on);
+}
 function toggleZen(){
   const isZen=app.classList.toggle('zen');
   const btn=$('#zenBtn');
   if(btn) btn.classList.toggle('on',isZen);
   syncPaneBtns();
+  syncPdfFocusMode();
   if(!isZen) applyPaneWidths();
 }
 $$('.rbtn[data-mode]').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
@@ -5647,6 +5887,7 @@ document.addEventListener('keydown',e=>{
   }
   if(e.key==='Tab'&&e.shiftKey&&!e.ctrlKey&&isAI(active)){e.preventDefault();cycleMode(active);return;}
   if(e.key==='Escape'){
+    if($('#notionTreeMenu')?.classList.contains('show')){ closeNotionTreeMenu(); return; }
     if(notionState.slashOpen){ closeNotionSlash(); return; }
     if(notionState.activeMathChip){ closeInlineMathPop(); return; }
     if($('#gcalModalBg')?.classList.contains('show')){ closeCalModal(); return; }
@@ -6537,6 +6778,8 @@ function initMediaHub(){
   setInterval(()=>{if(!document.hidden)refreshMediaNow();},2500);
 }
 
-/* ---------- Başlat (İlk açılışta NotebookLM Kasalar ekranı) ---------- */
+/* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects();
-setMode('kasalar'); loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
+if(!restoreSessionTabs()) setMode('kasalar');
+window.addEventListener('beforeunload',saveSessionTabs);
+loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());

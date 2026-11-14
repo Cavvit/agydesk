@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=notion6">
+<link rel="stylesheet" href="/styles.css?v=notion7">
 </head>
 <body>
 <div class="app" id="app">
@@ -42,20 +42,16 @@
   <!-- SOL -->
   <aside class="left" id="left"><div class="pane-in">
     <div class="kswitch" id="kasaSwitchWrap">
-      <span style="color:var(--cu)">❖</span>
+      <span style="color:var(--cu);display:inline-flex;align-items:center">❖</span>
       <select id="kasaSelect" onchange="selectKasaFilter(this.value)" title="Aktif Kasa Filtresi">
         <option value="all">Tüm Kasalar</option>
       </select>
-      <button class="ph-btn" onclick="openNewNoteModal()" title="Bu kasaya yeni not ekle (Alt+N)">＋</button>
-      <button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan belge/fotoğraf yükle (PDF/DOCX/Görsel)">📎</button>
-    </div>
-    <div style="display:flex;gap:5px;margin:2px 8px 4px">
-      <div class="newses" style="flex:1.25;margin:0;border-color:color-mix(in srgb,var(--cu) 40%,transparent);color:var(--txt)" onclick="triggerAssetUpload()" title="Bilgisayardan belge, PDF, Word veya fotoğraf ekle"><span>📎</span><span>Belge / Fotoğraf Ekle</span></div>
-      <div class="newses" style="flex:0.85;margin:0" id="newNoteSideBtn" onclick="openNewNoteModal()" title="Seçili kasaya yeni not ekle (Alt+N)"><span>＋</span><span>Yeni Not</span></div>
+      <button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Oluştur (Alt+N)">✎</button>
+      <button class="ph-btn" onclick="openNotionTreeMenu(event,{rel:currentKasa==='all'?'':currentKasa,kasa:currentKasa,isRoot:true})" title="Kasa, Klasör veya Dosya Seçenekleri">⋯</button>
     </div>
     <input type="file" id="hiddenFileIn" multiple accept=".md,.txt,.html,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,image/*" style="display:none" onchange="handleGlobalUpload(this.files)">
     <input type="file" id="chatImgIn" multiple accept="image/*" style="display:none" onchange="handleChatImgSelect(this.files)">
-    <div class="ph"><span id="leftTitle">Kasa Notları</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan Belge / Fotoğraf Ekle">📎</button><button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Ekle (Alt+N)">＋</button><button class="ph-btn" id="leftActBtn" onclick="leftHeaderAct()" title="Klasörleri daralt/genişlet">↕</button></div></div>
+    <div class="ph"><span id="leftTitle">Kasalar</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="openNewKasaModal()" title="Yeni Açılır Kasa Oluştur">＋</button><button class="ph-btn" id="leftActBtn" onclick="leftHeaderAct()" title="Klasörleri daralt/genişlet">↕</button></div></div>
     <div id="sessWrap" style="display:none;flex-direction:column;gap:4px;margin-bottom:4px">
       <div class="newses" onclick="newSession()"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg><span>Yeni AI oturumu</span></div>
       <div class="sess" id="sessions" style="flex:none"></div>
@@ -67,6 +63,7 @@
 
   <!-- ORTA -->
   <section class="center">
+    <button class="pdf-zen-fab" id="pdfZenFab" onclick="toggleZen()" title="Odak modundan çık (Esc veya Ctrl+.)">◐ Odak</button>
     <div class="resizer resizer-l" id="resLeft" title="Sürükle: Sol paneli boyutlandır (200–480 px) · Çift tıkla: Sıfırla"></div>
     <div class="topbar">
       <button class="pbtn on" id="leftTog" onclick="togglePane('left')" title="Sol paneli aç/kapat (Ctrl+B)">
@@ -150,9 +147,10 @@
   </div></aside>
 </div>
 
-<!-- MODAL -->
+<!-- MODAL & MENÜ -->
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
+<div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=notion6"></script>
+<script src="/app.js?v=notion7"></script>
 </body>
 </html>

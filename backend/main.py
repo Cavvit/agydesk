@@ -88,6 +88,11 @@ class NoteCreateReq(BaseModel):
     content: str = ""
 
 
+class FolderCreateReq(BaseModel):
+    parent: str
+    name: str
+
+
 class CalEventReq(BaseModel):
     day: int
     title: str
@@ -127,6 +132,19 @@ async def create_kasa_ep(r: KasaCreateReq):
         store.add_log("vault", f"❖ Yeni kasa oluşturuldu: {r.title}", "ok")
         emit("log")
         return res
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/folder")
+async def create_folder_ep(r: FolderCreateReq):
+    try:
+        res = vault.create_folder(r.parent, r.name)
+        store.add_log("vault", f"📁 Yeni klasör oluşturuldu: {res['rel']}", "ok")
+        emit("log")
+        return res
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Üst klasör bulunamadı: {e}")
     except Exception as e:
         raise HTTPException(400, str(e))
 

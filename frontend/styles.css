@@ -92,6 +92,11 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .zen-exit-btn{display:none;align-items:center;gap:5px;padding:3px 9px;margin-bottom:4px;border:1px solid var(--cu);border-radius:6px;font:500 11.5px var(--sans);color:var(--cu);background:var(--cu-d);flex-shrink:0;cursor:pointer;transition:.12s}
 .zen-exit-btn:hover{background:var(--cu);color:var(--on-cu)}
 .app.zen .zen-exit-btn{display:inline-flex}
+.pdf-zen-fab{display:none;position:fixed;top:12px;left:12px;z-index:95;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;border:1px solid rgba(255,255,255,.26);background:rgba(16,18,20,.52);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f3f4f6;font:600 12px var(--sans);opacity:.44;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.35);transition:opacity .16s ease,background .16s ease,border-color .16s ease,transform .16s ease}
+.pdf-zen-fab:hover{opacity:.98;background:var(--bg2);border-color:var(--cu);color:var(--cu);transform:translateY(-1px)}
+.app.zen.pdf-zen .topbar,.app.zen.pdf-zen .status,.app.zen.pdf-zen .pdf-bar{display:none!important}
+.app.zen.pdf-zen .pdf-studio,.app.zen.pdf-zen .pdf-stage,.app.zen.pdf-zen .pdf-frame-wrap{height:100vh!important}
+.app.zen.pdf-zen .pdf-zen-fab{display:inline-flex}
 .rail{background:var(--bg);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
 .logo{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;margin-bottom:12px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.4);border:1px solid var(--line);transition:transform .15s,border-color .15s}
 .logo:hover{transform:scale(1.06);border-color:var(--cu)}
@@ -128,23 +133,38 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .rview-docx table{width:100%;border-collapse:collapse;margin:10px 0;font-size:12.5px}
 .rview-docx th,.rview-docx td{border:1px solid var(--line);padding:6px 8px;text-align:left;color:var(--txt)}
 .rview-docx th{background:var(--bg);color:var(--cu)}
-.ph{padding:14px 12px 5px;font:600 10.5px var(--sans);letter-spacing:.06em;color:var(--mut);text-transform:uppercase;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;user-select:none}
-.ph-btn{width:20px;height:20px;border-radius:5px;display:grid;place-items:center;color:var(--mut);cursor:pointer;transition:.12s;font-size:13px}
+.ph{padding:10px 12px 4px;font:600 11px var(--sans);letter-spacing:.04em;color:var(--mut);display:flex;align-items:center;justify-content:space-between;flex-shrink:0;user-select:none}
+.ph-btn{width:22px;height:22px;border-radius:5px;display:grid;place-items:center;color:var(--mut);cursor:pointer;transition:.12s;font-size:13px;line-height:1}
 .ph-btn:hover{background:var(--bg3);color:var(--txt)}
-.tree{overflow-y:auto;overflow-x:hidden;padding:2px 8px 14px;flex:1;min-height:0;display:flex;flex-direction:column;gap:1px}
-.ti{display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:6px;color:var(--txt);opacity:.85;font-size:13px;cursor:pointer;transition:background .12s,color .12s,opacity .12s;white-space:nowrap;overflow:hidden;user-select:none;min-height:28px}
-.ti.folder{color:var(--txt);opacity:1;font-weight:600;margin-top:2px}
+.tree{overflow-y:auto;overflow-x:hidden;padding:2px 6px 16px;flex:1;min-height:0;display:flex;flex-direction:column;gap:1px}
+.ti{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;color:var(--txt);opacity:.86;font-size:13px;cursor:pointer;transition:background .12s,color .12s,opacity .12s;white-space:nowrap;overflow:hidden;user-select:none;min-height:28px;position:relative}
+.ti.folder{color:var(--txt);opacity:.96;font-weight:500;margin-top:1px}
+.ti.root-kasa{font-weight:600;margin-top:3px}
 .ti .tn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
 .ti:hover{background:var(--bg3);color:var(--txt);opacity:1}
 .ti.on{background:var(--cu-d);color:var(--txt);font-weight:600;opacity:1}
-.ti .tic{width:15px;height:15px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;opacity:.75;color:inherit;transition:.12s}
-.ti:hover .tic{opacity:.95}
+.ti .tic{width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;opacity:.78;color:inherit;transition:.12s}
+.ti:hover .tic{opacity:1}
 .ti.on .tic{color:var(--cu);opacity:1}
-.ti .car{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--mut);transition:transform .15s ease,color .12s;flex-shrink:0}
-.ti:hover .car{color:var(--txt)}
+.ti .car{width:14px;height:14px;display:inline-flex;align-items:center;justify-content:center;color:var(--mut);transition:transform .15s ease,color .12s,background .12s;flex-shrink:0;border-radius:4px}
+.ti.folder:hover .car{color:var(--txt);background:color-mix(in srgb,var(--txt) 8%,transparent)}
 .ti.open .car{transform:rotate(90deg)}
-.kids{margin-left:14px;border-left:1px solid var(--line);padding-left:6px;display:none;flex-direction:column;gap:1px;margin-top:1px;margin-bottom:3px}
+.ti .ti-act{margin-left:auto;display:inline-flex;align-items:center;gap:1px;flex-shrink:0}
+.ti .ti-more{width:22px;height:22px;border-radius:5px;font-size:14px;letter-spacing:.5px;opacity:.48;color:var(--mut)}
+.ti:hover .ti-more,.ti .ti-more.open{opacity:1;color:var(--txt);background:color-mix(in srgb,var(--txt) 8%,transparent)}
+.ti .ti-more:hover{background:var(--cu-d)!important;color:var(--cu)!important}
+.ti .ti-hover-btn{opacity:0;width:20px;height:20px;font-size:11px;border-radius:5px;color:var(--mut);transition:opacity .12s,background .12s,color .12s}
+.ti:hover .ti-hover-btn{opacity:.82}
+.ti .ti-hover-btn:hover{opacity:1!important;background:color-mix(in srgb,var(--txt) 9%,transparent);color:var(--txt)}
+.kids{margin-left:12px;border-left:1px solid color-mix(in srgb,var(--line) 72%,transparent);padding-left:6px;display:none;flex-direction:column;gap:1px;margin-top:1px;margin-bottom:2px}
 .kids.show{display:flex}
+.notion-tmenu{position:fixed;min-width:220px;max-width:268px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:5px;z-index:120;display:none;flex-direction:column;gap:2px;box-shadow:0 14px 36px rgba(0,0,0,.45);backdrop-filter:blur(8px)}
+.notion-tmenu.show{display:flex;animation:in .12s ease}
+.notion-tmenu-hdr{padding:5px 9px 4px;font:600 10.5px var(--mono);color:var(--mut);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.notion-tmenu-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:7px 9px;border-radius:6px;font:500 12.5px var(--sans);color:var(--txt);cursor:pointer;transition:background .1s,color .1s}
+.notion-tmenu-item:hover{background:var(--bg3);color:var(--cu)}
+.notion-tmenu-item .mi{width:16px;text-align:center;flex-shrink:0}
+.notion-tmenu-sep{height:1px;background:var(--line);margin:3px 6px}
 .left .pane-in>:not(.tree):not(#sources){flex-shrink:0}
 #sources{overflow-y:auto;overflow-x:hidden;flex:1;min-height:0;padding:0 0 14px}
 .src-bar{display:flex;align-items:center;gap:5px;padding:0 10px 6px}
@@ -673,8 +693,9 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .ktool .ic{width:36px;height:36px;border-radius:8px;background:var(--bg3);color:var(--cu);display:grid;place-items:center;font-size:17px;flex-shrink:0}
 .ktool b{display:block;font-size:13.5px;color:var(--txt)}
 .ktool small{color:var(--mut);font-size:12px}
-.kswitch{margin:8px 8px 4px;padding:7px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12.5px}
-.kswitch select{background:none;border:0;color:var(--txt);font:600 12.5px var(--sans);outline:0;flex:1;min-width:0;cursor:pointer}
+.kswitch{margin:8px 8px 2px;padding:5px 8px;background:transparent;border:1px solid transparent;border-radius:7px;display:flex;align-items:center;justify-content:space-between;gap:5px;font-size:13px;transition:background .12s,border-color .12s}
+.kswitch:hover{background:var(--bg3);border-color:var(--line)}
+.kswitch select{background:none;border:0;color:var(--txt);font:600 13px var(--sans);outline:0;flex:1;min-width:0;cursor:pointer}
 .kswitch select option{background:var(--bg2);color:var(--txt)}
 .kmodal-bg{position:fixed;inset:0;background:#000b;display:none;align-items:center;justify-content:center;z-index:80;backdrop-filter:blur(3px)}
 .kmodal-bg.show{display:flex}

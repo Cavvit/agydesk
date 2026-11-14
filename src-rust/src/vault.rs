@@ -210,6 +210,194 @@ fn rel_posix(p: &Path) -> String {
         .replace('\\', "/")
 }
 
+struct ScanDirCtx<'a> {
+    f_key: &'a str,
+    f_label: &'a str,
+    n_notes: &'a mut usize,
+    n_docs: &'a mut usize,
+    n_imgs: &'a mut usize,
+    latest_mtime: &'a mut f64,
+    preview_items: &'a mut Vec<Value>,
+    index_id: &'a mut Option<String>,
+    pages: &'a mut serde_json::Map<String, Value>,
+    wikimap: &'a mut serde_json::Map<String, Value>,
+    sources: &'a mut Vec<Value>,
+    md_links_raw: &'a mut HashMap<String, Vec<String>>,
+}
+
+fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_>) -> Vec<Value> {
+    let mut items: Vec<Value> = Vec::new();
+    let mut entries: Vec<PathBuf> = fs::read_dir(cur_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    entries.sort_by_key(|x| {
+        (
+            x.is_dir(),
+            x.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase(),
+        )
+    });
+
+    for f in entries {
+        let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        if fname.starts_with('.') {
+            continue;
+        }
+        if f.is_dir() {
+            let special_bucket = fname == "_gorseller" || fname == "_ekler" || fname == "assets";
+            let sub_kids = scan_dir_items(&f, is_asset_bucket || special_bucket, ctx);
+            if special_bucket && sub_kids.is_empty() {
+                continue;
+            }
+            let sub_rel = rel_posix(&f);
+            let mt = mtime_of(&f);
+            if mt > *ctx.latest_mtime {
+                *ctx.latest_mtime = mt;
+            }
+            let sub_label = if fname == "_ekler" {
+                format!("📎 Kaynak Belgeler ({})", sub_kids.len())
+            } else if fname == "_gorseller" {
+                format!("🖼 Görseller ({})", sub_kids.len())
+            } else if fname == "assets" {
+                format!("📁 Ekler ({})", sub_kids.len())
+            } else {
+                let raw_lbl = folder_meta_for(&fname).label;
+                if sub_kids.is_empty() {
+                    raw_lbl
+                } else {
+                    format!("{} ({})", raw_lbl, sub_kids.len())
+                }
+            };
+            items.push(json!({
+                "n": sub_label,
+                "i": "📁",
+                "open": false,
+                "k": sub_kids,
+                "kasa": ctx.f_key,
+                "rel": sub_rel
+            }));
+            continue;
+        }
+
+        let ext = ext_lower(&f);
+        if is_asset_bucket && !is_asset_ext(&ext) {
+            continue;
+        }
+        if !is_asset_bucket && ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
+            continue;
+        }
+
+        let rel = rel_posix(&f);
+        let nid = format!("note:{}", rel);
+        let mt = mtime_of(&f);
+        if mt > *ctx.latest_mtime {
+            *ctx.latest_mtime = mt;
+        }
+        let mut head = String::new();
+        let mut full_md = String::new();
+        if ext == ".md" {
+            *ctx.n_notes += 1;
+            if let Ok(bytes) = fs::read(&f) {
+                full_md = String::from_utf8_lossy(&bytes).to_string();
+                head = full_md.chars().take(400).collect();
+            }
+        } else if ext == ".html" {
+            *ctx.n_notes += 1;
+        } else if is_img_ext(&ext) {
+            *ctx.n_imgs += 1;
+        } else {
+            *ctx.n_docs += 1;
+        }
+
+        let title = if is_asset_bucket {
+            fname.clone()
+        } else {
+            clean_title(&f, &head)
+        };
+        if ext == ".md" && !full_md.is_empty() {
+            let links: Vec<String> = WIKI_RE
+                .captures_iter(&full_md)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+                .collect();
+            ctx.md_links_raw.insert(nid.clone(), links);
+        }
+        let icon = if ext == ".md" {
+            "📝"
+        } else if ext == ".html" {
+            "🌐"
+        } else if is_img_ext(&ext) {
+            "🖼"
+        } else if ext == ".docx" || ext == ".doc" {
+            "📘"
+        } else {
+            "📄"
+        };
+        items.push(json!({
+            "n": title,
+            "id": nid,
+            "i": icon,
+            "rel": rel,
+            "ext": ext,
+            "kasa": ctx.f_key
+        }));
+        ctx.pages.insert(
+            nid.clone(),
+            json!({
+                "t": title,
+                "i": icon,
+                "rel": rel,
+                "folder": ctx.f_label,
+                "kasa": ctx.f_key,
+                "ext": ext,
+                "mtime": mt
+            }),
+        );
+        let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        ctx.wikimap.insert(fname.to_lowercase(), json!(nid));
+        ctx.wikimap.insert(stem.to_lowercase(), json!(nid));
+        ctx.wikimap.insert(title.to_lowercase(), json!(nid));
+        ctx.wikimap
+            .insert(stem.to_lowercase().replace('_', " "), json!(nid));
+
+        if !is_asset_bucket && (ctx.index_id.is_none() || stem.starts_with("00_")) {
+            *ctx.index_id = Some(nid.clone());
+        }
+        if !is_asset_bucket
+            && (ext == ".md" || ext == ".html" || ext == ".pdf")
+            && ctx.preview_items.len() < 4
+        {
+            ctx.preview_items.push(json!({
+                "id": nid,
+                "title": title,
+                "icon": icon,
+                "ext": ext
+            }));
+        }
+        let checked = !is_asset_bucket
+            && (stem.starts_with("00_")
+                || stem.contains("TEK_PARCA")
+                || stem.contains("Deney_1"));
+        ctx.sources.push(json!({
+            "id": nid,
+            "rel": rel,
+            "title": format!("{} · {}", ctx.f_label, title),
+            "short_title": title,
+            "kasa": ctx.f_key,
+            "folder": ctx.f_label,
+            "ext": ext,
+            "icon": icon,
+            "checked": checked
+        }));
+    }
+    items
+}
+
 pub fn scan_vault() -> Value {
     if !VAULT_DIR.exists() {
         return json!({
@@ -256,237 +444,38 @@ pub fn scan_vault() -> Value {
         let meta = folder_meta_for(&f_key);
         let f_label = meta.label.clone();
 
-        let mut kids: Vec<Value> = Vec::new();
-        let mut n_notes = 0;
-        let mut n_docs = 0;
-        let mut n_imgs = 0;
+        let mut n_notes = 0usize;
+        let mut n_docs = 0usize;
+        let mut n_imgs = 0usize;
         let mut latest_mtime = mtime_of(d);
         let mut preview_items: Vec<Value> = Vec::new();
         let mut index_id: Option<String> = None;
 
-        let mut entries: Vec<PathBuf> = fs::read_dir(d)
-            .ok()
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .collect();
-        entries.sort_by_key(|x| {
-            (
-                x.is_dir(),
-                x.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .to_lowercase(),
-            )
-        });
-
-        for f in entries {
-            let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-            if f.is_dir() {
-                if fname == "_gorseller" || fname == "_ekler" || fname == "assets" {
-                    let mut ekler_kids: Vec<Value> = Vec::new();
-                    let f_tag = if fname == "_ekler" {
-                        "📎 Kaynak Belgeler"
-                    } else if fname == "_gorseller" {
-                        "🖼 Görseller"
-                    } else {
-                        "📁 Ekler"
-                    };
-                    let mut sub_entries: Vec<PathBuf> = fs::read_dir(&f)
-                        .ok()
-                        .into_iter()
-                        .flatten()
-                        .flatten()
-                        .map(|e| e.path())
-                        .collect();
-                    sub_entries.sort();
-
-                    for af in sub_entries {
-                        let af_name = af.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-                        if af.is_dir() || af_name.starts_with('.') {
-                            continue;
-                        }
-                        let aext = ext_lower(&af);
-                        if !is_asset_ext(&aext) {
-                            continue;
-                        }
-                        let arel = rel_posix(&af);
-                        let anid = format!("note:{}", arel);
-                        let atitle = af_name.clone();
-                        let aicon = if is_img_ext(&aext) {
-                            "🖼"
-                        } else if aext == ".docx" || aext == ".doc" {
-                            "📘"
-                        } else {
-                            "📄"
-                        };
-                        if is_img_ext(&aext) {
-                            n_imgs += 1;
-                        } else {
-                            n_docs += 1;
-                        }
-                        let mt = mtime_of(&af);
-                        if mt > latest_mtime {
-                            latest_mtime = mt;
-                        }
-                        ekler_kids.push(json!({
-                            "n": atitle,
-                            "id": anid,
-                            "i": aicon,
-                            "rel": arel,
-                            "ext": aext,
-                            "kasa": f_key
-                        }));
-                        pages.insert(
-                            anid.clone(),
-                            json!({
-                                "t": atitle,
-                                "i": aicon,
-                                "rel": arel,
-                                "folder": f_label,
-                                "kasa": f_key,
-                                "ext": aext
-                            }),
-                        );
-                        wikimap.insert(af_name.to_lowercase(), json!(anid));
-                        if let Some(stem) = af.file_stem().and_then(|s| s.to_str()) {
-                            wikimap.insert(stem.to_lowercase(), json!(anid));
-                        }
-                        sources.push(json!({
-                            "id": anid,
-                            "rel": arel,
-                            "title": format!("{} · {}", f_label, atitle),
-                            "short_title": atitle,
-                            "kasa": f_key,
-                            "folder": f_label,
-                            "ext": aext,
-                            "icon": aicon,
-                            "checked": false
-                        }));
-                    }
-                    if !ekler_kids.is_empty() {
-                        kids.push(json!({
-                            "n": format!("{} ({})", f_tag, ekler_kids.len()),
-                            "i": "📁",
-                            "open": false,
-                            "k": ekler_kids,
-                            "kasa": f_key
-                        }));
-                    }
-                }
-                continue;
-            }
-            if fname.starts_with('.') {
-                continue;
-            }
-            let ext = ext_lower(&f);
-            if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
-                continue;
-            }
-            let rel = rel_posix(&f);
-            let nid = format!("note:{}", rel);
-            let mt = mtime_of(&f);
-            if mt > latest_mtime {
-                latest_mtime = mt;
-            }
-            let mut head = String::new();
-            let mut full_md = String::new();
-            if ext == ".md" {
-                n_notes += 1;
-                if let Ok(bytes) = fs::read(&f) {
-                    full_md = String::from_utf8_lossy(&bytes).to_string();
-                    head = full_md.chars().take(400).collect();
-                }
-            } else if ext == ".html" {
-                n_notes += 1;
-            } else if is_img_ext(&ext) {
-                n_imgs += 1;
-            } else {
-                n_docs += 1;
-            }
-
-            let title = clean_title(&f, &head);
-            if ext == ".md" && !full_md.is_empty() {
-                let links: Vec<String> = WIKI_RE
-                    .captures_iter(&full_md)
-                    .filter_map(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
-                    .collect();
-                md_links_raw.insert(nid.clone(), links);
-            }
-            let icon = if ext == ".md" {
-                "📝"
-            } else if ext == ".html" {
-                "🌐"
-            } else if is_img_ext(&ext) {
-                "🖼"
-            } else if ext == ".docx" || ext == ".doc" {
-                "📘"
-            } else {
-                "📄"
-            };
-            kids.push(json!({
-                "n": title,
-                "id": nid,
-                "i": icon,
-                "rel": rel,
-                "ext": ext,
-                "kasa": f_key
-            }));
-            pages.insert(
-                nid.clone(),
-                json!({
-                    "t": title,
-                    "i": icon,
-                    "rel": rel,
-                    "folder": f_label,
-                    "kasa": f_key,
-                    "ext": ext,
-                    "mtime": mt
-                }),
-            );
-            let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            wikimap.insert(stem.to_lowercase(), json!(nid));
-            wikimap.insert(title.to_lowercase(), json!(nid));
-            wikimap.insert(stem.to_lowercase().replace('_', " "), json!(nid));
-
-            if index_id.is_none() || stem.starts_with("00_") {
-                index_id = Some(nid.clone());
-            }
-            if (ext == ".md" || ext == ".html" || ext == ".pdf") && preview_items.len() < 4 {
-                preview_items.push(json!({
-                    "id": nid,
-                    "title": title,
-                    "icon": icon,
-                    "ext": ext
-                }));
-            }
-            let checked = stem.starts_with("00_")
-                || stem.contains("TEK_PARCA")
-                || stem.contains("Deney_1");
-            sources.push(json!({
-                "id": nid,
-                "rel": rel,
-                "title": format!("{} · {}", f_label, title),
-                "short_title": title,
-                "kasa": f_key,
-                "folder": f_label,
-                "ext": ext,
-                "icon": icon,
-                "checked": checked
-            }));
-        }
+        let mut ctx = ScanDirCtx {
+            f_key: &f_key,
+            f_label: &f_label,
+            n_notes: &mut n_notes,
+            n_docs: &mut n_docs,
+            n_imgs: &mut n_imgs,
+            latest_mtime: &mut latest_mtime,
+            preview_items: &mut preview_items,
+            index_id: &mut index_id,
+            pages: &mut pages,
+            wikimap: &mut wikimap,
+            sources: &mut sources,
+            md_links_raw: &mut md_links_raw,
+        };
+        let kids = scan_dir_items(d, false, &mut ctx);
 
         let fallback_idx = index_id.or_else(|| {
-            kids.first()
-                .and_then(|k| k.get("id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+            kids.iter()
+                .find_map(|k| k.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
         });
 
         tree.push(json!({
             "n": f_label,
             "kasa": f_key,
+            "rel": f_key,
             "i": "📘",
             "open": idx < 2,
             "k": kids
@@ -571,12 +560,17 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
         return Err(format!("Dosya bulunamadı: {}", rel));
     }
     let ext = ext_lower(&p);
-    let f_key = p
-        .parent()
-        .and_then(|pr| pr.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
+    let clean_rel = rel.replace('\\', "/");
+    let parts: Vec<&str> = clean_rel.trim_start_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    let f_key = if parts.len() > 1 {
+        parts[0].to_string()
+    } else {
+        p.parent()
+            .and_then(|pr| pr.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string()
+    };
     let folder = folder_meta_for(&f_key).label;
     let mtime = mtime_of(&p);
     if ext == ".pdf" {
@@ -708,15 +702,74 @@ pub fn create_kasa(title: &str, tag: &str, desc: &str, icon: &str) -> Result<Val
     }))
 }
 
+pub fn create_folder(parent_rel: &str, name: &str) -> Result<Value, String> {
+    let clean_name = name.trim();
+    if clean_name.is_empty() {
+        return Err("Klasör adı boş olamaz".to_string());
+    }
+    let parent_clean = parent_rel.replace('\\', "/").trim_matches('/').to_string();
+    if parent_clean.is_empty() {
+        return Err("Üst kasa/klasör belirtilmedi".to_string());
+    }
+    let parent_path = safe_path(&parent_clean)?;
+    if !parent_path.exists() || !parent_path.is_dir() {
+        return Err(format!("Üst klasör bulunamadı: {}", parent_clean));
+    }
+    let slug = slugify(clean_name);
+    let mut rel = format!("{}/{}", parent_clean, slug);
+    let mut d = safe_path(&rel)?;
+    let mut n = 2;
+    while d.exists() {
+        rel = format!("{}/{}_{}", parent_clean, slug, n);
+        d = safe_path(&rel)?;
+        n += 1;
+    }
+    fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or(&slug).to_string();
+    if let Ok(mut guard) = CUSTOM_FOLDERS.lock() {
+        guard.insert(
+            dir_name,
+            FolderMeta {
+                label: clean_name.to_string(),
+                icon: "📁".to_string(),
+                accent: "#e0a458".to_string(),
+                tag: "Klasör".to_string(),
+                desc: String::new(),
+            },
+        );
+    }
+    let mirror = ROOT.join("notes").join(&rel);
+    if mirror != d {
+        let _ = fs::create_dir_all(&mirror);
+    }
+    let top_kasa = parent_clean.split('/').next().unwrap_or(&parent_clean).to_string();
+    Ok(json!({
+        "rel": rel,
+        "name": clean_name,
+        "kasa": top_kasa
+    }))
+}
+
 pub fn create_note(kasa: &str, title: &str, content: &str) -> Result<Value, String> {
     let clean_title = title.trim();
     if clean_title.is_empty() {
         return Err("Not başlığı boş olamaz".to_string());
     }
-    let kasa_clean = if VAULT_DIR.join(kasa).exists() {
-        kasa.to_string()
-    } else {
-        slugify(kasa)
+    let raw_kasa = kasa.replace('\\', "/").trim_matches('/').to_string();
+    let kasa_clean = match safe_path(&raw_kasa) {
+        Ok(p) if p.exists() && p.is_dir() => raw_kasa,
+        _ => {
+            let parts: Vec<String> = raw_kasa
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(slugify)
+                .collect();
+            if parts.is_empty() {
+                slugify(kasa)
+            } else {
+                parts.join("/")
+            }
+        }
     };
     let slug = slugify(clean_title);
     let mut rel = format!("{}/{}.md", kasa_clean, slug);

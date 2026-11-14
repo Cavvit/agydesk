@@ -135,101 +135,96 @@ def scan_vault() -> dict:
         preview_items: list[dict] = []
         index_id: str | None = None
 
-        for f in sorted(d.iterdir(), key=lambda x: (x.is_dir(), x.name.lower())):
-            if f.is_dir():
-                if f.name in ("_gorseller", "_ekler", "assets"):
-                    ekler_kids: list[dict] = []
-                    f_tag = "📎 Kaynak Belgeler" if f.name == "_ekler" else ("🖼 Görseller" if f.name == "_gorseller" else "📁 Ekler")
-                    for af in sorted(f.iterdir()):
-                        if af.is_dir() or af.name.startswith("."):
-                            continue
-                        aext = af.suffix.lower()
-                        if aext not in ASSET_EXT:
-                            continue
-                        arel = af.relative_to(VAULT_DIR).as_posix()
-                        anid = f"note:{arel}"
-                        atitle = af.name
-                        aicon = "🖼" if aext in IMG_EXT else ("📘" if aext in (".docx", ".doc") else "📄")
-                        if aext in IMG_EXT:
-                            n_imgs += 1
-                        else:
-                            n_docs += 1
-                        latest_mtime = max(latest_mtime, af.stat().st_mtime)
-                        ekler_kids.append({"n": atitle, "id": anid, "i": aicon, "rel": arel, "ext": aext, "kasa": f_key})
-                        pages[anid] = {"t": atitle, "i": aicon, "rel": arel, "folder": f_label, "kasa": f_key, "ext": aext}
-                        wikimap[af.name.lower()] = anid
-                        wikimap[af.stem.lower()] = anid
-                        sources.append({
-                            "id": anid,
-                            "rel": arel,
-                            "title": f"{f_label} · {atitle}",
-                            "short_title": atitle,
-                            "kasa": f_key,
-                            "folder": f_label,
-                            "ext": aext,
-                            "icon": aicon,
-                            "checked": False,
-                        })
-                    if ekler_kids:
-                        kids.append({
-                            "n": f"{f_tag} ({len(ekler_kids)})",
-                            "i": "📁",
-                            "open": False,
-                            "k": ekler_kids,
-                            "kasa": f_key,
-                        })
-                continue
-            if f.name.startswith("."):
-                continue
-            ext = f.suffix.lower()
-            if ext not in (".md", ".html") and ext not in ASSET_EXT:
-                continue
-            rel = f.relative_to(VAULT_DIR).as_posix()
-            nid = f"note:{rel}"
-            latest_mtime = max(latest_mtime, f.stat().st_mtime)
-            head = ""
-            full_md = ""
-            if ext == ".md":
-                n_notes += 1
-                try:
-                    full_md = f.read_text(encoding="utf-8", errors="replace")
-                    head = full_md[:400]
-                except Exception:
-                    pass
-            elif ext == ".html":
-                n_notes += 1
-            elif ext in IMG_EXT:
-                n_imgs += 1
-            else:
-                n_docs += 1
+        def _scan_dir(cur_dir: Path, is_asset_bucket: bool = False) -> list[dict]:
+            nonlocal n_notes, n_docs, n_imgs, latest_mtime, index_id
+            items: list[dict] = []
+            for f in sorted(cur_dir.iterdir(), key=lambda x: (x.is_dir(), x.name.lower())):
+                if f.name.startswith("."):
+                    continue
+                if f.is_dir():
+                    special_bucket = f.name in ("_gorseller", "_ekler", "assets")
+                    sub_kids = _scan_dir(f, is_asset_bucket=(is_asset_bucket or special_bucket))
+                    if special_bucket and not sub_kids:
+                        continue
+                    sub_rel = f.relative_to(VAULT_DIR).as_posix()
+                    latest_mtime = max(latest_mtime, f.stat().st_mtime)
+                    if f.name == "_ekler":
+                        sub_label = f"📎 Kaynak Belgeler ({len(sub_kids)})"
+                    elif f.name == "_gorseller":
+                        sub_label = f"🖼 Görseller ({len(sub_kids)})"
+                    elif f.name == "assets":
+                        sub_label = f"📁 Ekler ({len(sub_kids)})"
+                    else:
+                        raw_lbl = FOLDER_NAMES.get(f.name, f.name.replace("_", " "))
+                        sub_label = f"{raw_lbl} ({len(sub_kids)})" if sub_kids else raw_lbl
+                    items.append({
+                        "n": sub_label,
+                        "i": "📁",
+                        "open": False,
+                        "k": sub_kids,
+                        "kasa": f_key,
+                        "rel": sub_rel,
+                    })
+                    continue
 
-            title = _clean_title(f, head)
-            if ext == ".md" and full_md:
-                md_links_raw[nid] = [m.strip() for m in _WIKI_RE.findall(full_md)]
-            icon = "📝" if ext == ".md" else ("🌐" if ext == ".html" else ("🖼" if ext in IMG_EXT else ("📘" if ext in (".docx", ".doc") else "📄")))
-            kids.append({"n": title, "id": nid, "i": icon, "rel": rel, "ext": ext, "kasa": f_key})
-            pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": f_label, "kasa": f_key, "ext": ext, "mtime": f.stat().st_mtime}
-            wikimap[f.stem.lower()] = nid
-            wikimap[title.lower()] = nid
-            wikimap[f.stem.lower().replace("_", " ")] = nid
-            if index_id is None or f.stem.startswith("00_"):
-                if f.stem.startswith("00_") or index_id is None:
-                    index_id = nid
-            if ext in (".md", ".html", ".pdf") and len(preview_items) < 4:
-                preview_items.append({"id": nid, "title": title, "icon": icon, "ext": ext})
-            sources.append({
-                "id": nid,
-                "rel": rel,
-                "title": f"{f_label} · {title}",
-                "short_title": title,
-                "kasa": f_key,
-                "folder": f_label,
-                "ext": ext,
-                "icon": icon,
-                "checked": f.stem.startswith("00_") or "TEK_PARCA" in f.stem or "Deney_1" in f.stem,
-            })
+                ext = f.suffix.lower()
+                allowed = (ASSET_EXT if is_asset_bucket else ((".md", ".html") + tuple(ASSET_EXT)))
+                if is_asset_bucket and ext not in ASSET_EXT:
+                    continue
+                if not is_asset_bucket and ext not in (".md", ".html") and ext not in ASSET_EXT:
+                    continue
 
-        tree.append({"n": f_label, "kasa": f_key, "i": "📘", "open": idx < 2, "k": kids})
+                rel = f.relative_to(VAULT_DIR).as_posix()
+                nid = f"note:{rel}"
+                latest_mtime = max(latest_mtime, f.stat().st_mtime)
+                head = ""
+                full_md = ""
+                if ext == ".md":
+                    n_notes += 1
+                    try:
+                        full_md = f.read_text(encoding="utf-8", errors="replace")
+                        head = full_md[:400]
+                    except Exception:
+                        pass
+                elif ext == ".html":
+                    n_notes += 1
+                elif ext in IMG_EXT:
+                    n_imgs += 1
+                else:
+                    n_docs += 1
+
+                title = f.name if is_asset_bucket else _clean_title(f, head)
+                if ext == ".md" and full_md:
+                    md_links_raw[nid] = [m.strip() for m in _WIKI_RE.findall(full_md)]
+                icon = "📝" if ext == ".md" else ("🌐" if ext == ".html" else ("🖼" if ext in IMG_EXT else ("📘" if ext in (".docx", ".doc") else "📄")))
+                items.append({"n": title, "id": nid, "i": icon, "rel": rel, "ext": ext, "kasa": f_key})
+                pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": f_label, "kasa": f_key, "ext": ext, "mtime": f.stat().st_mtime}
+                wikimap[f.name.lower()] = nid
+                wikimap[f.stem.lower()] = nid
+                wikimap[title.lower()] = nid
+                wikimap[f.stem.lower().replace("_", " ")] = nid
+                if not is_asset_bucket and (index_id is None or f.stem.startswith("00_")):
+                    if f.stem.startswith("00_") or index_id is None:
+                        index_id = nid
+                if not is_asset_bucket and ext in (".md", ".html", ".pdf") and len(preview_items) < 4:
+                    preview_items.append({"id": nid, "title": title, "icon": icon, "ext": ext})
+                sources.append({
+                    "id": nid,
+                    "rel": rel,
+                    "title": f"{f_label} · {title}",
+                    "short_title": title,
+                    "kasa": f_key,
+                    "folder": f_label,
+                    "ext": ext,
+                    "icon": icon,
+                    "checked": (not is_asset_bucket) and (f.stem.startswith("00_") or "TEK_PARCA" in f.stem or "Deney_1" in f.stem),
+                })
+            return items
+
+        kids = _scan_dir(d, False)
+
+        tree.append({"n": f_label, "kasa": f_key, "rel": f_key, "i": "📘", "open": idx < 2, "k": kids})
+        first_page_id = next((k["id"] for k in kids if "id" in k), None)
         kasalar.append({
             "key": f_key,
             "title": f_label,
@@ -238,7 +233,7 @@ def scan_vault() -> dict:
             "tag": meta["tag"],
             "desc": meta["desc"],
             "mtime": latest_mtime,
-            "index_id": index_id or (kids[0]["id"] if kids else None),
+            "index_id": index_id or first_page_id,
             "counts": {
                 "notes": n_notes,
                 "docs": n_docs,
@@ -275,7 +270,8 @@ def read_note(rel: str) -> dict:
     if not p.exists():
         raise FileNotFoundError(rel)
     ext = p.suffix.lower()
-    f_key = p.parent.name
+    parts = [part for part in rel.replace("\\", "/").lstrip("/").split("/") if part]
+    f_key = parts[0] if len(parts) > 1 else p.parent.name
     folder = FOLDER_NAMES.get(f_key, f_key.replace("_", " "))
     mtime = p.stat().st_mtime
     if ext == ".pdf":
@@ -342,11 +338,46 @@ def create_kasa(title: str, tag: str = "Çalışma Kasası", desc: str = "", ico
     return {"key": folder_key, "title": clean_title, "index_id": f"note:{idx_rel}"}
 
 
+def create_folder(parent_rel: str, name: str) -> dict:
+    clean_name = name.strip()
+    if not clean_name:
+        raise ValueError("Klasör adı boş olamaz")
+    parent_clean = parent_rel.replace("\\", "/").strip("/")
+    if not parent_clean:
+        raise ValueError("Üst kasa/klasör belirtilmedi")
+    parent_path = _safe_path(parent_clean)
+    if not parent_path.exists() or not parent_path.is_dir():
+        raise FileNotFoundError(parent_clean)
+    slug = _slugify(clean_name)
+    rel = f"{parent_clean}/{slug}"
+    d = _safe_path(rel)
+    n = 2
+    while d.exists():
+        rel = f"{parent_clean}/{slug}_{n}"
+        d = _safe_path(rel)
+        n += 1
+    d.mkdir(parents=True, exist_ok=True)
+    FOLDER_NAMES[d.name] = clean_name
+    mirror = ROOT / "notes" / rel
+    if mirror.resolve() != d.resolve():
+        try:
+            mirror.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    return {"rel": rel, "name": clean_name, "kasa": parent_clean.split("/")[0]}
+
+
 def create_note(kasa: str, title: str, content: str = "") -> dict:
     clean_title = title.strip()
     if not clean_title:
         raise ValueError("Not başlığı boş olamaz")
-    kasa_clean = _slugify(kasa) if not (VAULT_DIR / kasa).exists() else kasa
+    raw_kasa = kasa.replace("\\", "/").strip("/")
+    kasa_path = _safe_path(raw_kasa)
+    if kasa_path.exists() and kasa_path.is_dir():
+        kasa_clean = raw_kasa
+    else:
+        parts = [_slugify(part) for part in raw_kasa.split("/") if part]
+        kasa_clean = "/".join(parts) or _slugify(raw_kasa)
     slug = _slugify(clean_title)
     rel = f"{kasa_clean}/{slug}.md"
     p = _safe_path(rel)

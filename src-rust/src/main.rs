@@ -163,6 +163,12 @@ struct NoteCreateReq {
 }
 
 #[derive(Deserialize)]
+struct FolderCreateReq {
+    parent: String,
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct CalEventReq {
     day: i64,
     title: String,
@@ -243,6 +249,28 @@ async fn create_kasa_ep(
             Json(res).into_response()
         }
         Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn create_folder_ep(
+    State(st): State<AppState>,
+    Json(r): Json<FolderCreateReq>,
+) -> Response {
+    match vault::create_folder(&r.parent, &r.name) {
+        Ok(res) => {
+            let rel = res.get("rel").and_then(|v| v.as_str()).unwrap_or("");
+            store::add_log("vault", &format!("📁 Yeni klasör oluşturuldu: {}", rel), "ok");
+            st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) => {
+            let code = if e.contains("bulunamadı") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            err_resp(code, e)
+        }
     }
 }
 
@@ -847,6 +875,7 @@ fn build_router() -> Router {
         .route("/api/ping", get(ping_ep))
         .route("/api/vault", get(get_vault_ep))
         .route("/api/kasa", post(create_kasa_ep))
+        .route("/api/folder", post(create_folder_ep))
         .route("/api/note", get(get_note_ep).post(save_note_ep).delete(delete_note_ep))
         .route("/api/note/create", post(create_note_ep))
         .route("/api/calendar", get(get_calendar_ep).post(post_calendar_ep))
