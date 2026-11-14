@@ -1,5 +1,6 @@
 """Gerçek Obsidian Kasası (Vault) okuyucu ve yazıcı."""
 import html
+import json
 import re
 import time
 import xml.etree.ElementTree as ET
@@ -12,6 +13,47 @@ IMG_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"}
 DOC_EXT = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"}
 ASSET_EXT = IMG_EXT | DOC_EXT
 MAX_ASSET = 50 * 1024 * 1024
+SPACES_FILENAME = ".agydesk_spaces.json"
+
+DEFAULT_SPACES = [
+    {
+        "id": "donem_7",
+        "title": "Dönem 7",
+        "icon": "🎓",
+        "accent": "#e0a458",
+        "tag": "EEM · 7. Dönem",
+        "desc": "7. dönem zorunlu ve seçmeli dersler, laboratuvar föyleri ve vize/final notları.",
+    },
+    {
+        "id": "donem_8",
+        "title": "Dönem 8",
+        "icon": "🚀",
+        "accent": "#79c0ff",
+        "tag": "EEM · 8. Dönem",
+        "desc": "8. dönem ders kasaları, bitirme projesi ve bahar dönemi çalışma alanları.",
+    },
+    {
+        "id": "belgeler",
+        "title": "Belgeler & Arşiv",
+        "icon": "🗂",
+        "accent": "#7bc47f",
+        "tag": "Belgeler · Genel & Proje",
+        "desc": "Ders dışı belgeler, CV, sertifikalar, resmi evraklar ve kişisel projeler.",
+    },
+]
+
+DEFAULT_SPACE_ASSIGNMENTS = {
+    "Difransiyel_Denklemler": "donem_7",
+    "Elektrik_Makineleri_Lab": "donem_7",
+    "Haberlesme_Lab": "donem_7",
+    "Katihal_Elektronigi": "donem_7",
+    "Kontrol_Lab": "donem_7",
+    "Kontrol_Sistemlerine_Giris": "donem_7",
+    "Mikrodalga": "donem_7",
+    "Secmeli_Tasarim": "donem_7",
+    "Universite_Secmeli_Beslenme": "donem_7",
+    "Yuksek_Gerilim_Teknigi": "donem_7",
+}
 
 FOLDER_NAMES = {
     "Difransiyel_Denklemler": "Diferansiyel Denklemler",
@@ -80,6 +122,12 @@ FOLDER_META = {
         "tag": "Üni Seçmeli · Beslenme & Metabolizma",
         "desc": "Makro/mikro besin ögeleri, CHO, lipidler, proteinler, vitaminler ve sporcu beslenmesi rehberleri.",
     },
+    "Mikrodalga": {
+        "icon": "〰️",
+        "accent": "#ff7b72",
+        "tag": "Mikrodalga · İletim & Kılavuz",
+        "desc": "İletim hatları, Smith abağı, çoklu yansıma ve dikdörtgen/dairesel dalga kılavuzları.",
+    },
 }
 
 _H1_RE = re.compile(r"^#\s+(.+)$", re.M)
@@ -106,12 +154,125 @@ def _safe_path(rel: str) -> Path:
     return target
 
 
+def _load_spaces_cfg() -> dict:
+    """`.agydesk_spaces.json` dosyasını okur; yoksa bellek içi varsayılanları döndürür."""
+    spaces = [dict(s) for s in DEFAULT_SPACES]
+    assignments = dict(DEFAULT_SPACE_ASSIGNMENTS)
+    kasa_meta: dict[str, dict] = {}
+    cfg_path = VAULT_DIR / SPACES_FILENAME
+    if cfg_path.exists():
+        try:
+            raw = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+            if isinstance(raw, dict):
+                raw_spaces = raw.get("spaces")
+                if isinstance(raw_spaces, list) and raw_spaces:
+                    parsed = []
+                    for item in raw_spaces:
+                        if isinstance(item, dict) and item.get("id") and item.get("title"):
+                            parsed.append({
+                                "id": str(item["id"]),
+                                "title": str(item["title"]),
+                                "icon": str(item.get("icon") or "🗂"),
+                                "accent": str(item.get("accent") or "#e0a458"),
+                                "tag": str(item.get("tag") or "Çalışma Alanı"),
+                                "desc": str(item.get("desc") or ""),
+                            })
+                    if parsed:
+                        spaces = parsed
+                raw_assign = raw.get("assignments")
+                if isinstance(raw_assign, dict):
+                    for k, v in raw_assign.items():
+                        if isinstance(k, str) and isinstance(v, str) and v:
+                            assignments[k] = v
+                raw_meta = raw.get("kasa_meta")
+                if isinstance(raw_meta, dict):
+                    for k, v in raw_meta.items():
+                        if isinstance(k, str) and isinstance(v, dict):
+                            kasa_meta[k] = dict(v)
+        except Exception:
+            pass
+    return {"spaces": spaces, "assignments": assignments, "kasa_meta": kasa_meta}
+
+
+def _save_spaces_cfg(cfg: dict) -> None:
+    VAULT_DIR.mkdir(parents=True, exist_ok=True)
+    cfg_path = VAULT_DIR / SPACES_FILENAME
+    payload = {
+        "version": 1,
+        "spaces": cfg.get("spaces", DEFAULT_SPACES),
+        "assignments": cfg.get("assignments", {}),
+        "kasa_meta": cfg.get("kasa_meta", {}),
+    }
+    cfg_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _resolve_kasa_space(key: str, cfg: dict) -> str:
+    spaces = cfg["spaces"]
+    valid_ids = {s["id"] for s in spaces}
+    assigned = cfg["assignments"].get(key)
+    if assigned and assigned in valid_ids:
+        return assigned
+    default_for_key = DEFAULT_SPACE_ASSIGNMENTS.get(key)
+    if default_for_key and default_for_key in valid_ids:
+        return default_for_key
+    if "belgeler" in valid_ids:
+        return "belgeler"
+    return spaces[0]["id"] if spaces else "donem_7"
+
+
+def _meta_for_folder(key: str, cfg: dict | None = None) -> dict:
+    base_label = FOLDER_NAMES.get(key, key.replace("_", " "))
+    base = FOLDER_META.get(key, {
+        "icon": "📘",
+        "accent": "#e0a458",
+        "tag": "Çalışma Kasası",
+        "desc": f"{base_label} ders notları, deney raporları ve kaynak belgeleri.",
+    })
+    out = {
+        "label": base_label,
+        "icon": base.get("icon", "📘"),
+        "accent": base.get("accent", "#e0a458"),
+        "tag": base.get("tag", "Çalışma Kasası"),
+        "desc": base.get("desc", ""),
+    }
+    if cfg:
+        ov = cfg.get("kasa_meta", {}).get(key)
+        if isinstance(ov, dict):
+            for field in ("label", "icon", "accent", "tag", "desc"):
+                val = ov.get(field)
+                if isinstance(val, str) and val.strip():
+                    out[field] = val.strip()
+    return out
+
+
 def scan_vault() -> dict:
+    cfg = _load_spaces_cfg()
     if not VAULT_DIR.exists():
-        return {"vault_path": str(VAULT_DIR), "tree": [], "kasalar": [], "pages": {}, "wikimap": {}, "sources": [], "backlinks": {}}
+        spaces_empty = [
+            {
+                **s,
+                "count_kasas": 0,
+                "counts": {"notes": 0, "docs": 0, "images": 0, "total": 0},
+                "mtime": 0,
+                "kasalar": [],
+            }
+            for s in cfg["spaces"]
+        ]
+        return {
+            "vault_path": str(VAULT_DIR),
+            "spaces": spaces_empty,
+            "tree": [],
+            "kasalar": [],
+            "root_docs": [],
+            "pages": {},
+            "wikimap": {},
+            "sources": [],
+            "backlinks": {},
+        }
 
     tree: list[dict] = []
     kasalar: list[dict] = []
+    root_docs: list[dict] = []
     pages: dict[str, dict] = {}
     wikimap: dict[str, str] = {}
     sources: list[dict] = []
@@ -120,13 +281,9 @@ def scan_vault() -> dict:
     folders = sorted([d for d in VAULT_DIR.iterdir() if d.is_dir() and not d.name.startswith(".")])
     for idx, d in enumerate(folders):
         f_key = d.name
-        f_label = FOLDER_NAMES.get(f_key, f_key.replace("_", " "))
-        meta = FOLDER_META.get(f_key, {
-            "icon": "📘",
-            "accent": "#e0a458",
-            "tag": "Çalışma Kasası",
-            "desc": f"{f_label} ders notları, deney raporları ve kaynak belgeleri.",
-        })
+        meta = _meta_for_folder(f_key, cfg)
+        f_label = meta["label"]
+        space_id = _resolve_kasa_space(f_key, cfg)
         kids: list[dict] = []
         n_notes = 0
         n_docs = 0
@@ -155,7 +312,7 @@ def scan_vault() -> dict:
                     elif f.name == "assets":
                         sub_label = f"📁 Ekler ({len(sub_kids)})"
                     else:
-                        raw_lbl = FOLDER_NAMES.get(f.name, f.name.replace("_", " "))
+                        raw_lbl = _meta_for_folder(f.name, cfg)["label"]
                         sub_label = f"{raw_lbl} ({len(sub_kids)})" if sub_kids else raw_lbl
                     items.append({
                         "n": sub_label,
@@ -163,12 +320,12 @@ def scan_vault() -> dict:
                         "open": False,
                         "k": sub_kids,
                         "kasa": f_key,
+                        "space": space_id,
                         "rel": sub_rel,
                     })
                     continue
 
                 ext = f.suffix.lower()
-                allowed = (ASSET_EXT if is_asset_bucket else ((".md", ".html") + tuple(ASSET_EXT)))
                 if is_asset_bucket and ext not in ASSET_EXT:
                     continue
                 if not is_asset_bucket and ext not in (".md", ".html") and ext not in ASSET_EXT:
@@ -197,8 +354,8 @@ def scan_vault() -> dict:
                 if ext == ".md" and full_md:
                     md_links_raw[nid] = [m.strip() for m in _WIKI_RE.findall(full_md)]
                 icon = "📝" if ext == ".md" else ("🌐" if ext == ".html" else ("🖼" if ext in IMG_EXT else ("📘" if ext in (".docx", ".doc") else "📄")))
-                items.append({"n": title, "id": nid, "i": icon, "rel": rel, "ext": ext, "kasa": f_key})
-                pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": f_label, "kasa": f_key, "ext": ext, "mtime": f.stat().st_mtime}
+                items.append({"n": title, "id": nid, "i": icon, "rel": rel, "ext": ext, "kasa": f_key, "space": space_id})
+                pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": f_label, "kasa": f_key, "space": space_id, "ext": ext, "mtime": f.stat().st_mtime}
                 wikimap[f.name.lower()] = nid
                 wikimap[f.stem.lower()] = nid
                 wikimap[title.lower()] = nid
@@ -214,6 +371,7 @@ def scan_vault() -> dict:
                     "title": f"{f_label} · {title}",
                     "short_title": title,
                     "kasa": f_key,
+                    "space": space_id,
                     "folder": f_label,
                     "ext": ext,
                     "icon": icon,
@@ -223,10 +381,11 @@ def scan_vault() -> dict:
 
         kids = _scan_dir(d, False)
 
-        tree.append({"n": f_label, "kasa": f_key, "rel": f_key, "i": "📘", "open": idx < 2, "k": kids})
+        tree.append({"n": f_label, "kasa": f_key, "space": space_id, "rel": f_key, "i": meta["icon"], "open": idx < 2, "k": kids})
         first_page_id = next((k["id"] for k in kids if "id" in k), None)
         kasalar.append({
             "key": f_key,
+            "space": space_id,
             "title": f_label,
             "icon": meta["icon"],
             "accent": meta["accent"],
@@ -243,6 +402,65 @@ def scan_vault() -> dict:
             "previews": preview_items,
         })
 
+    # Kök dizindeki tekil belgeler (örn. 00_LAB_ORTAK_TAKVIM.md)
+    for f in sorted(VAULT_DIR.iterdir(), key=lambda x: x.name.lower()):
+        if not f.is_file() or f.name.startswith("."):
+            continue
+        ext = f.suffix.lower()
+        if ext not in (".md", ".html") and ext not in ASSET_EXT:
+            continue
+        rel = f.name
+        nid = f"note:{rel}"
+        head = ""
+        full_md = ""
+        if ext == ".md":
+            try:
+                full_md = f.read_text(encoding="utf-8", errors="replace")
+                head = full_md[:400]
+            except Exception:
+                pass
+        title = _clean_title(f, head)
+        if ext == ".md" and full_md:
+            md_links_raw[nid] = [m.strip() for m in _WIKI_RE.findall(full_md)]
+        icon = "📝" if ext == ".md" else ("🌐" if ext == ".html" else ("🖼" if ext in IMG_EXT else ("📘" if ext in (".docx", ".doc") else "📄")))
+        root_space = "donem_7" if ("LAB" in f.stem.upper() or "TAKVIM" in f.stem.upper()) else ("belgeler" if any(s["id"] == "belgeler" for s in cfg["spaces"]) else cfg["spaces"][0]["id"])
+        pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": "Ortak Belgeler", "kasa": "", "space": root_space, "ext": ext, "mtime": f.stat().st_mtime}
+        wikimap[f.name.lower()] = nid
+        wikimap[f.stem.lower()] = nid
+        wikimap[title.lower()] = nid
+        wikimap[f.stem.lower().replace("_", " ")] = nid
+        root_docs.append({"id": nid, "rel": rel, "title": title, "icon": icon, "ext": ext, "space": root_space, "mtime": f.stat().st_mtime})
+
+    spaces_out: list[dict] = []
+    for sp in cfg["spaces"]:
+        sid = sp["id"]
+        sp_kasalar = [k for k in kasalar if k["space"] == sid]
+        sp_notes = sum(k["counts"]["notes"] for k in sp_kasalar)
+        sp_docs = sum(k["counts"]["docs"] for k in sp_kasalar)
+        sp_imgs = sum(k["counts"]["images"] for k in sp_kasalar)
+        sp_mtime = max([k["mtime"] for k in sp_kasalar], default=0)
+        spaces_out.append({
+            **sp,
+            "count_kasas": len(sp_kasalar),
+            "counts": {
+                "notes": sp_notes,
+                "docs": sp_docs,
+                "images": sp_imgs,
+                "total": sp_notes + sp_docs + sp_imgs,
+            },
+            "mtime": sp_mtime,
+            "kasalar": [
+                {
+                    "key": k["key"],
+                    "title": k["title"],
+                    "icon": k["icon"],
+                    "accent": k["accent"],
+                    "total": k["counts"]["total"],
+                }
+                for k in sp_kasalar
+            ],
+        })
+
     backlinks: dict[str, list[dict]] = {}
     for src_id, raw_targets in md_links_raw.items():
         src_page = pages.get(src_id, {})
@@ -256,8 +474,10 @@ def scan_vault() -> dict:
 
     return {
         "vault_path": str(VAULT_DIR),
+        "spaces": spaces_out,
         "tree": tree,
         "kasalar": kasalar,
+        "root_docs": root_docs,
         "pages": pages,
         "wikimap": wikimap,
         "sources": sources,
@@ -269,18 +489,21 @@ def read_note(rel: str) -> dict:
     p = _safe_path(rel)
     if not p.exists():
         raise FileNotFoundError(rel)
+    cfg = _load_spaces_cfg()
     ext = p.suffix.lower()
     parts = [part for part in rel.replace("\\", "/").lstrip("/").split("/") if part]
-    f_key = parts[0] if len(parts) > 1 else p.parent.name
-    folder = FOLDER_NAMES.get(f_key, f_key.replace("_", " "))
+    f_key = parts[0] if len(parts) > 1 else ""
+    folder = _meta_for_folder(f_key, cfg)["label"] if f_key else "Ortak Belgeler"
+    space_id = _resolve_kasa_space(f_key, cfg) if f_key else "donem_7"
     mtime = p.stat().st_mtime
     if ext == ".pdf":
-        return {"rel": rel, "ext": ext, "kasa": f_key, "folder": folder, "title": _clean_title(p), "content": "", "mtime": mtime}
+        return {"rel": rel, "ext": ext, "kasa": f_key, "space": space_id, "folder": folder, "title": _clean_title(p), "content": "", "mtime": mtime}
     text = p.read_text(encoding="utf-8", errors="replace")
     return {
         "rel": rel,
         "ext": ext,
         "kasa": f_key,
+        "space": space_id,
         "folder": folder,
         "title": _clean_title(p, text if ext == ".md" else ""),
         "content": text,
@@ -310,32 +533,164 @@ def _slugify(text: str) -> str:
     return s[:60] or "Yeni_Kasa"
 
 
-def create_kasa(title: str, tag: str = "Çalışma Kasası", desc: str = "", icon: str = "📘") -> dict:
+def create_kasa(title: str, tag: str = "Çalışma Kasası", desc: str = "", icon: str = "📘", space: str = "", accent: str = "") -> dict:
     clean_title = title.strip()
     if not clean_title:
         raise ValueError("Kasa adı boş olamaz")
     folder_key = _slugify(clean_title)
     d = _safe_path(folder_key)
     d.mkdir(parents=True, exist_ok=True)
+    clean_tag = tag.strip() or "Çalışma Kasası"
+    clean_desc = desc.strip() or f"{clean_title} ders notları, deney raporları ve kaynak belgeleri."
+    clean_icon = (icon or "📘").strip() or "📘"
+    clean_accent = (accent or "#e0a458").strip() or "#e0a458"
+
     FOLDER_NAMES[folder_key] = clean_title
     FOLDER_META[folder_key] = {
-        "icon": icon or "📘",
-        "accent": "#e0a458",
-        "tag": tag.strip() or "Çalışma Kasası",
-        "desc": desc.strip() or f"{clean_title} ders notları, deney raporları ve kaynak belgeleri.",
+        "icon": clean_icon,
+        "accent": clean_accent,
+        "tag": clean_tag,
+        "desc": clean_desc,
     }
+
+    cfg = _load_spaces_cfg()
+    valid_ids = {s["id"] for s in cfg["spaces"]}
+    clean_space = space.strip()
+    if clean_space and clean_space in valid_ids:
+        target_space = clean_space
+    else:
+        target_space = _resolve_kasa_space(folder_key, cfg)
+    cfg["assignments"][folder_key] = target_space
+    cfg["kasa_meta"][folder_key] = {
+        "label": clean_title,
+        "icon": clean_icon,
+        "accent": clean_accent,
+        "tag": clean_tag,
+        "desc": clean_desc,
+    }
+    _save_spaces_cfg(cfg)
+
     idx_rel = f"{folder_key}/00_{folder_key.upper()}_ANA_INDEKS.md"
     idx_path = _safe_path(idx_rel)
     if not idx_path.exists():
         content = (
             f"# {clean_title} — Ana İndeks\n\n"
             f"> [!NOTE] **Kasa Özeti**\n"
-            f"> {FOLDER_META[folder_key]['desc']}\n\n"
+            f"> {clean_desc}\n\n"
             f"## Konular & Notlar\n"
             f"- Bu kasaya yeni not eklemek için sol paneldeki **＋ Yeni Not** butonunu kullanabilir veya PDF/Görsel/Word dosyalarını doğrudan sürükleyip bırakabilirsin.\n"
         )
         write_note(idx_rel, content)
-    return {"key": folder_key, "title": clean_title, "index_id": f"note:{idx_rel}"}
+    return {"key": folder_key, "title": clean_title, "space": target_space, "index_id": f"note:{idx_rel}"}
+
+
+def update_kasa(
+    key: str,
+    title: str | None = None,
+    tag: str | None = None,
+    desc: str | None = None,
+    icon: str | None = None,
+    accent: str | None = None,
+    space: str | None = None,
+) -> dict:
+    clean_key = key.replace("\\", "/").strip("/")
+    if not clean_key or "/" in clean_key:
+        raise ValueError("Geçersiz kasa anahtarı")
+    d = _safe_path(clean_key)
+    if not d.exists() or not d.is_dir():
+        raise FileNotFoundError(clean_key)
+
+    cfg = _load_spaces_cfg()
+    valid_ids = {s["id"] for s in cfg["spaces"]}
+    if space is not None:
+        sp = space.strip()
+        if sp:
+            if sp not in valid_ids:
+                raise ValueError(f"Alan bulunamadı: {sp}")
+            cfg["assignments"][clean_key] = sp
+
+    cur_meta = _meta_for_folder(clean_key, cfg)
+    entry = dict(cfg["kasa_meta"].get(clean_key, {}))
+    if title is not None and title.strip():
+        entry["label"] = title.strip()
+        FOLDER_NAMES[clean_key] = title.strip()
+    elif "label" not in entry:
+        entry["label"] = cur_meta["label"]
+    for field, val in (("tag", tag), ("desc", desc), ("icon", icon), ("accent", accent)):
+        if val is not None and val.strip():
+            entry[field] = val.strip()
+        elif field not in entry:
+            entry[field] = cur_meta[field]
+
+    cfg["kasa_meta"][clean_key] = entry
+    _save_spaces_cfg(cfg)
+    resolved_space = _resolve_kasa_space(clean_key, cfg)
+    return {"key": clean_key, "space": resolved_space, **entry}
+
+
+def save_space(
+    space_id: str | None = None,
+    title: str = "",
+    icon: str = "🗂",
+    accent: str = "#e0a458",
+    tag: str = "",
+    desc: str = "",
+) -> dict:
+    clean_title = title.strip()
+    if not clean_title:
+        raise ValueError("Alan adı boş olamaz")
+    cfg = _load_spaces_cfg()
+    spaces = cfg["spaces"]
+    clean_id = (space_id or "").strip()
+    existing = next((s for s in spaces if s["id"] == clean_id), None) if clean_id else None
+
+    if existing:
+        existing["title"] = clean_title
+        if icon.strip():
+            existing["icon"] = icon.strip()
+        if accent.strip():
+            existing["accent"] = accent.strip()
+        existing["tag"] = tag.strip() or existing.get("tag") or "Çalışma Alanı"
+        existing["desc"] = desc.strip()
+        saved = existing
+    else:
+        base_id = _slugify(clean_title).lower()
+        new_id = base_id
+        n = 2
+        used = {s["id"] for s in spaces}
+        while new_id in used:
+            new_id = f"{base_id}_{n}"
+            n += 1
+        saved = {
+            "id": new_id,
+            "title": clean_title,
+            "icon": icon.strip() or "🗂",
+            "accent": accent.strip() or "#e0a458",
+            "tag": tag.strip() or "Çalışma Alanı",
+            "desc": desc.strip() or f"{clean_title} çalışma alanı ve kasaları.",
+        }
+        spaces.append(saved)
+
+    _save_spaces_cfg(cfg)
+    return saved
+
+
+def delete_space(space_id: str) -> dict:
+    clean_id = space_id.strip()
+    cfg = _load_spaces_cfg()
+    spaces = cfg["spaces"]
+    if len(spaces) <= 1:
+        raise ValueError("Son kalan çalışma alanı silinemez")
+    idx = next((i for i, s in enumerate(spaces) if s["id"] == clean_id), None)
+    if idx is None:
+        raise FileNotFoundError(clean_id)
+    spaces.pop(idx)
+    fallback = "belgeler" if any(s["id"] == "belgeler" for s in spaces) else spaces[0]["id"]
+    for k, v in list(cfg["assignments"].items()):
+        if v == clean_id:
+            cfg["assignments"][k] = fallback
+    _save_spaces_cfg(cfg)
+    return {"deleted": clean_id, "fallback": fallback}
 
 
 def create_folder(parent_rel: str, name: str) -> dict:

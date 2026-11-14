@@ -71,7 +71,8 @@ body[data-theme="eink"] .num, body[data-theme="sepia"] .num{color:#0550ae}
 body[data-theme="eink"] .str, body[data-theme="sepia"] .str{color:#0a3069}
 body[data-theme="eink"] .cm, body[data-theme="sepia"] .cm{color:#57606a}
 body[data-theme="eink"] .fn, body[data-theme="sepia"] .fn{color:#8250df}
-body[data-theme="mono-light"] .kcard-tag,body[data-theme="eink"] .kcard-tag,body[data-theme="sepia"] .kcard-tag{color:var(--cu);background:var(--cu-d)}
+body[data-theme="mono-light"] .kcard-tag,body[data-theme="eink"] .kcard-tag,body[data-theme="sepia"] .kcard-tag,body[data-theme="mono-light"] .scard-tag,body[data-theme="eink"] .scard-tag,body[data-theme="sepia"] .scard-tag{color:var(--txt);background:var(--cu-d);border:1px solid var(--line)}
+body[data-theme="mono-light"] .scard-go,body[data-theme="eink"] .scard-go,body[data-theme="sepia"] .scard-go{color:var(--cu)}
 body[data-theme="mono-light"] .acal-tab-pill.exam,body[data-theme="eink"] .acal-tab-pill.exam,body[data-theme="sepia"] .acal-tab-pill.exam{color:#b3261e;background:#b3261e18;border-color:#b3261e55}
 body[data-theme="mono-light"] .acal-tab-pill.pomo,body[data-theme="eink"] .acal-tab-pill.pomo,body[data-theme="sepia"] .acal-tab-pill.pomo{color:#188038;background:#18803818;border-color:#18803855}
 select option{background:var(--bg2);color:var(--txt)}
@@ -180,6 +181,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .pbtn{width:28px;height:28px;margin-bottom:5px;border-radius:6px;display:grid;place-items:center;color:var(--mut);flex-shrink:0;transition:.14s}
 .pbtn:hover{background:var(--bg3);color:var(--txt)}
 .pbtn.on{color:var(--cu);background:var(--cu-d)}
+.pbtn:disabled,.pbtn.dis{opacity:.3;pointer-events:none}
+.nav-grp{display:flex;align-items:center;gap:2px;margin-right:2px}
+.nav-grp .pbtn{width:24px;font-size:16px;font-weight:600;line-height:1}
 .tabs{display:flex;align-items:flex-end;flex:1;min-width:0;height:100%;gap:3px;overflow:hidden}
 .tab{display:flex;align-items:center;gap:6px;padding:0 10px;height:33px;flex:1 1 0;min-width:40px;max-width:205px;border-radius:9px 9px 0 0;background:var(--bg3);border:1px solid transparent;border-bottom:0;color:var(--mut);font-size:12.5px;cursor:pointer;user-select:none;transition:background .12s,color .12s,border-color .12s;white-space:nowrap;overflow:hidden;position:relative}
 .tab.dragging{opacity:.4;cursor:grabbing}
@@ -665,6 +669,94 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .lg small{display:block;color:var(--mut);font:10.5px var(--mono)}
 .lg.ok>div{color:var(--ok)}.lg.w>div{color:var(--cu)}.lg.m>div{color:var(--txt)}
 ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:var(--line);border-radius:9px}
+/* Çalışma Alanları (2 Seviyeli Hiyerarşi) & Sidebar Geçişi */
+.sswitch{display:flex;align-items:center;flex-wrap:wrap;gap:4px;padding:8px 10px 7px;border-bottom:1px solid var(--line)}
+.sp-pill{flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:4px 9px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--mut);font:500 11px var(--sans);cursor:pointer;white-space:nowrap;transition:border-color .15s ease,color .15s ease,background .15s ease,transform .12s ease}
+.sp-pill:hover{border-color:var(--sp-acc,var(--cu));color:var(--txt)}
+.sp-pill.on{border-color:var(--sp-acc,var(--cu));color:var(--txt);background:color-mix(in srgb,var(--sp-acc,var(--cu)) 14%,var(--bg));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--sp-acc,var(--cu)) 28%,transparent)}
+.sp-pill-cnt{font:10px var(--mono);color:var(--mut);opacity:.85}
+.sp-pill.add{border-style:dashed;padding:4px 8px}
+
+/* Seviye 1: Çalışma Alanları (Spaces) Izgarası */
+.ksect-hd{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 12px}
+.ksect-hd h2{font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);display:flex;align-items:center;gap:8px}
+.ksect-sub{font:11.5px var(--mono);color:var(--mut)}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(335px,1fr));gap:18px;margin-bottom:32px}
+.scard{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:14px;cursor:pointer;position:relative;overflow:hidden;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease,background .16s ease}
+.scard::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--sp-acc,var(--cu));opacity:.9}
+.scard:hover{border-color:var(--sp-acc,var(--cu));transform:translateY(-2px);box-shadow:0 14px 30px #00000038}
+.scard.drag-over{border-color:var(--sp-acc,var(--cu));border-style:dashed;background:color-mix(in srgb,var(--sp-acc,var(--cu)) 10%,var(--bg));transform:scale(1.01)}
+.scard-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.scard-id{display:flex;align-items:center;gap:13px;min-width:0}
+.scard-ico{width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:23px;flex-shrink:0;background:color-mix(in srgb,var(--sp-acc,var(--cu)) 14%,var(--bg2));border:1px solid color-mix(in srgb,var(--sp-acc,var(--cu)) 30%,var(--line))}
+.scard-titles{min-width:0}
+.scard-tag{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font:600 10.5px var(--mono);letter-spacing:.03em;color:var(--sp-acc,var(--cu));background:color-mix(in srgb,var(--sp-acc,var(--cu)) 13%,transparent);margin-bottom:5px}
+.scard-title{font-size:19px;font-weight:650;letter-spacing:-.02em;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scard-act-btn{width:28px;height:28px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mut);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;flex-shrink:0;transition:.14s}
+.scard-act-btn:hover{border-color:var(--line);background:var(--bg2);color:var(--txt)}
+.scard-desc{color:var(--mut);font-size:12.8px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.scard-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px;min-height:28px;align-items:center}
+.skchip{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:7px;border:1px solid var(--line);background:var(--bg2);color:var(--txt);font:500 11.5px var(--sans);cursor:pointer;max-width:190px;transition:border-color .14s ease,transform .12s ease}
+.skchip:hover{border-color:var(--kchip-acc,var(--sp-acc,var(--cu)));transform:translateY(-1px)}
+.skchip span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.skchip-more{font:11px var(--mono);color:var(--mut);padding:3px 6px}
+.scard-empty{font:12px var(--sans);color:var(--mut);padding:6px 10px;border:1px dashed var(--line);border-radius:8px;width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.scard-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:10px;border-top:1px solid var(--line);margin-top:auto}
+.scard-stat{display:flex;align-items:center;gap:10px;font:11.5px var(--mono);color:var(--mut)}
+.scard-go{font:500 12px var(--sans);color:var(--sp-acc,var(--cu));display:inline-flex;align-items:center;gap:4px}
+.scard.new-card{border-style:dashed;justify-content:center;align-items:center;text-align:center;min-height:205px;background:transparent}
+.scard.new-card::before{display:none}
+.scard.new-card:hover{background:var(--bg);border-color:var(--cu)}
+
+/* Seviye 2: Alan İçi Üst Navigasyon, Sürükle-Bırak Hedefleri & Liste Görünümü */
+.snav{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+.snav-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.snav-back{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font:500 12.5px var(--sans);cursor:pointer;transition:.14s ease}
+.snav-back:hover{border-color:var(--cu);color:var(--cu)}
+.snav-pills{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.spill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--bg);color:var(--mut);font:500 12px var(--sans);cursor:pointer;transition:.15s ease}
+.spill:hover{border-color:var(--sp-acc,var(--cu));color:var(--txt)}
+.spill.on{border-color:var(--sp-acc,var(--cu));color:var(--txt);background:color-mix(in srgb,var(--sp-acc,var(--cu)) 15%,var(--bg))}
+.spill.drag-over{border-color:var(--sp-acc,var(--cu));border-style:dashed;background:color-mix(in srgb,var(--sp-acc,var(--cu)) 20%,var(--bg));color:var(--txt);transform:scale(1.04)}
+.spill-cnt{font:10.5px var(--mono);color:var(--mut)}
+.vmode{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg)}
+.vmode button{border:0;background:transparent;color:var(--mut);padding:6px 10px;font:12px var(--sans);cursor:pointer;transition:.13s}
+.vmode button.on{background:var(--cu-d);color:var(--cu);font-weight:600}
+
+.kcard.dragging{opacity:.48;transform:scale(.98)}
+.kcard-head-actions{display:flex;align-items:center;gap:6px;min-width:0;max-width:calc(100% - 52px)}
+.kcard-more{width:26px;height:26px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;transition:.13s}
+.kcard-more:hover{border-color:var(--line);background:var(--bg2);color:var(--txt)}
+.kcard-space-pill{display:inline-flex;align-items:center;gap:4px;font:10.5px var(--mono);padding:2px 7px;border-radius:5px;border:1px solid var(--line);color:var(--mut);background:var(--bg2)}
+
+/* Kompakt Liste Görünümü */
+.klist{display:flex;flex-direction:column;gap:8px;margin-bottom:32px}
+.krow{display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg);border:1px solid var(--line);border-radius:10px;cursor:pointer;position:relative;overflow:hidden;transition:border-color .14s ease,transform .12s ease}
+.krow::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--kacc,var(--cu))}
+.krow:hover{border-color:var(--kacc,var(--cu));transform:translateX(2px)}
+.krow-ico{font-size:20px;width:34px;height:34px;border-radius:8px;background:var(--bg2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.krow-main{flex:1;min-width:0}
+.krow-title{font:600 14.5px var(--sans);color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.krow-sub{font:12px var(--sans);color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.krow-stats{display:flex;align-items:center;gap:12px;font:11.5px var(--mono);color:var(--mut);flex-shrink:0}
+
+/* Ortak Kök Belgeler Şeridi & Arama Sonuçları */
+.rdocs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:28px}
+.rdoc{display:inline-flex;align-items:center;gap:8px;padding:8px 13px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:var(--txt);font:500 12.5px var(--sans);cursor:pointer;transition:.14s ease}
+.rdoc:hover{border-color:var(--cu);transform:translateY(-1px)}
+.rdoc-sp{font:10.5px var(--mono);color:var(--mut);padding-left:4px;border-left:1px solid var(--line)}
+
+/* Modal Renk Seçici & Yardımcılar */
+.swatches{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:4px}
+.swatch{width:22px;height:22px;border-radius:999px;border:2px solid transparent;cursor:pointer;transition:transform .12s ease,border-color .12s ease}
+.swatch:hover{transform:scale(1.12)}
+.swatch.on{border-color:var(--txt);transform:scale(1.12)}
+.kdrag-hint{font:11px var(--mono);color:var(--mut);display:inline-flex;align-items:center;gap:5px}
+
+/* Sol Ağaçta Çalışma Alanı (Space) Kök Düğümleri */
+.ti.space-node{font-weight:600;color:var(--txt);margin-top:3px;border-left:2px solid var(--sp-acc,var(--cu))}
+.ti.space-node .tn{font-size:12.5px}
+
 /* NotebookLM Tarzı Kasalar Ana Ekranı */
 .khome{max-width:1120px;margin:0 auto;padding:36px 36px 96px}
 .khero{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:22px;border-bottom:1px solid var(--line);margin-bottom:26px;flex-wrap:wrap}
@@ -679,15 +771,15 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .kcard:hover{border-color:var(--kacc,var(--cu));transform:translateY(-2px);box-shadow:0 12px 32px #00000066}
 .kcard-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .kcard-ic{width:40px;height:40px;border-radius:10px;background:var(--bg3);border:1px solid var(--line);display:grid;place-items:center;font-size:20px;flex-shrink:0}
-.kcard-tag{font:500 11px var(--mono);color:var(--kacc,var(--cu));background:var(--cu-d);border:1px solid var(--line);padding:3px 9px;border-radius:99px}
+.kcard-tag{font:500 11px var(--mono);color:var(--kacc,var(--cu));background:var(--cu-d);border:1px solid var(--line);padding:3px 9px;border-radius:99px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:190px}
 .kcard h3{font-size:18px;letter-spacing:-.015em;color:var(--txt);line-height:1.25}
 .kcard-desc{font-size:12.8px;color:var(--mut);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .kcard-previews{display:flex;flex-direction:column;gap:4px;padding-top:4px;border-top:1px solid var(--line)}
 .kprev{display:flex;align-items:center;gap:7px;padding:4px 7px;border-radius:6px;font-size:12px;color:var(--txt);background:var(--bg2);transition:.12s;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .kprev:hover{background:var(--bg3);color:var(--cu)}
-.kcard-foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;font:11.5px var(--mono);color:var(--mut)}
-.kcard-acts{display:flex;gap:6px}
-.kcard-acts button{padding:4px 9px;border-radius:6px;border:1px solid var(--line);background:var(--bg2);font:11.5px var(--sans);color:var(--txt);transition:.12s}
+.kcard-foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font:11.5px var(--mono);color:var(--mut)}
+.kcard-acts{display:flex;gap:5px;flex-shrink:0;margin-left:auto}
+.kcard-acts button{padding:4px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg2);font:11.5px var(--sans);color:var(--txt);white-space:nowrap;transition:.12s}
 .kcard-acts button:hover{border-color:var(--cu);color:var(--cu);background:var(--cu-d)}
 .kcard.new-card{border-style:dashed;background:var(--bg2);align-items:center;justify-content:center;text-align:center;min-height:220px;color:var(--mut)}
 .kcard.new-card::before{display:none}

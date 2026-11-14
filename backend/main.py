@@ -80,6 +80,27 @@ class KasaCreateReq(BaseModel):
     tag: str = "Çalışma Kasası"
     desc: str = ""
     icon: str = "📘"
+    space: str = ""
+    accent: str = ""
+
+
+class KasaUpdateReq(BaseModel):
+    key: str
+    title: str | None = None
+    tag: str | None = None
+    desc: str | None = None
+    icon: str | None = None
+    accent: str | None = None
+    space: str | None = None
+
+
+class SpaceSaveReq(BaseModel):
+    id: str | None = None
+    title: str
+    icon: str = "🗂"
+    accent: str = "#e0a458"
+    tag: str = ""
+    desc: str = ""
 
 
 class NoteCreateReq(BaseModel):
@@ -128,10 +149,47 @@ async def get_vault():
 @app.post("/api/kasa")
 async def create_kasa_ep(r: KasaCreateReq):
     try:
-        res = vault.create_kasa(r.title, r.tag, r.desc, r.icon)
+        res = vault.create_kasa(r.title, r.tag, r.desc, r.icon, r.space, r.accent)
         store.add_log("vault", f"❖ Yeni kasa oluşturuldu: {r.title}", "ok")
         emit("log")
         return res
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/kasa/update")
+async def update_kasa_ep(r: KasaUpdateReq):
+    try:
+        res = vault.update_kasa(r.key, r.title, r.tag, r.desc, r.icon, r.accent, r.space)
+        store.add_log("vault", f"❖ Kasa güncellendi: {res.get('label', r.key)}", "ok")
+        emit("log")
+        return res
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Kasa bulunamadı: {e}")
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/space")
+async def save_space_ep(r: SpaceSaveReq):
+    try:
+        res = vault.save_space(r.id, r.title, r.icon, r.accent, r.tag, r.desc)
+        store.add_log("vault", f"🗂 Alan kaydedildi: {res['title']}", "ok")
+        emit("log")
+        return res
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/space")
+async def delete_space_ep(id: str):
+    try:
+        res = vault.delete_space(id)
+        store.add_log("vault", f"🗂 Alan silindi: {id}", "w")
+        emit("log")
+        return res
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Alan bulunamadı: {e}")
     except Exception as e:
         raise HTTPException(400, str(e))
 

@@ -334,6 +334,88 @@ def test_folder_creation_and_recursive_vault_scan(tmp_path, monkeypatch):
     assert v2["pages"][f"note:{note_rel}"]["kasa"] == "Difransiyel_Denklemler"
 
 
+def test_spaces_hierarchy_and_crud(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main, vault
+
+    vault_dir = tmp_path / "notes"
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(vault, "ROOT", tmp_path)
+    monkeypatch.setattr(vault, "VAULT_DIR", vault_dir)
+    monkeypatch.setattr(main, "VAULT_DIR", vault_dir)
+
+    client = TestClient(main.app)
+
+    # Empty vault still exposes the 3 default spaces cleanly with empty tree
+    v0 = client.get("/api/vault").json()
+    assert [s["id"] for s in v0["spaces"]] == ["donem_7", "donem_8", "belgeler"]
+    assert v0["tree"] == []
+    assert v0["root_docs"] == []
+
+    # Create a custom Space and kasas in distinct spaces
+    rs = client.post(
+        "/api/space",
+        json={"title": "Staj ve Sertifikalar", "icon": "💻", "accent": "#bc8cff", "tag": "Kariyer"},
+    )
+    assert rs.status_code == 200
+    sp_id = rs.json()["id"]
+
+    rk1 = client.post(
+        "/api/kasa",
+        json={"title": "Difransiyel Denklemler", "space": ""},  # known D7 default
+    )
+    assert rk1.status_code == 200
+    assert rk1.json()["space"] == "donem_7"
+
+    rk2 = client.post(
+        "/api/kasa",
+        json={"title": "Bitirme Projesi", "space": "donem_8", "accent": "#79c0ff"},
+    )
+    assert rk2.status_code == 200
+    assert rk2.json()["space"] == "donem_8"
+
+    rk3 = client.post(
+        "/api/kasa",
+        json={"title": "Belgelerim", "space": sp_id},
+    )
+    assert rk3.status_code == 200
+    assert rk3.json()["space"] == sp_id
+
+    # Write a root-level calendar doc -> should populate root_docs without breaking kasalar/tree
+    client.post("/api/note", json={"rel": "00_LAB_ORTAK_TAKVIM.md", "content": "# Ortak Takvim\nSinav"})
+    v1 = client.get("/api/vault").json()
+    assert len(v1["root_docs"]) == 1
+    assert v1["root_docs"][0]["rel"] == "00_LAB_ORTAK_TAKVIM.md"
+    assert v1["root_docs"][0]["space"] == "donem_7"
+
+    sp_map = {s["id"]: s for s in v1["spaces"]}
+    assert sp_map["donem_7"]["count_kasas"] == 1
+    assert sp_map["donem_8"]["count_kasas"] == 1
+    assert sp_map[sp_id]["count_kasas"] == 1
+    assert any(n["space"] == "donem_8" for n in v1["tree"] if n["kasa"] == "Bitirme_Projesi")
+
+    # Update kasa metadata & move Bitirme_Projesi to the custom space
+    ru = client.post(
+        "/api/kasa/update",
+        json={"key": "Bitirme_Projesi", "title": "Bitirme Tasarımı", "space": sp_id, "icon": "🚀"},
+    )
+    assert ru.status_code == 200
+    assert ru.json()["space"] == sp_id
+    assert ru.json()["label"] == "Bitirme Tasarımı"
+
+    # Deleting custom space preserves kasas by falling back safely to belgeler
+    rd = client.delete(f"/api/space?id={sp_id}")
+    assert rd.status_code == 200
+    assert rd.json()["fallback"] == "belgeler"
+
+    v2 = client.get("/api/vault").json()
+    bitirme = next(k for k in v2["kasalar"] if k["key"] == "Bitirme_Projesi")
+    assert bitirme["space"] == "belgeler"
+    assert bitirme["title"] == "Bitirme Tasarımı"
+    assert bitirme["icon"] == "🚀"
+
+
+
 
 
 

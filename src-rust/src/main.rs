@@ -146,12 +146,59 @@ struct KasaCreateReq {
     desc: String,
     #[serde(default = "default_kasa_icon")]
     icon: String,
+    #[serde(default)]
+    space: String,
+    #[serde(default)]
+    accent: String,
 }
 fn default_kasa_tag() -> String {
     "Çalışma Kasası".to_string()
 }
 fn default_kasa_icon() -> String {
     "📘".to_string()
+}
+
+#[derive(Deserialize)]
+struct KasaUpdateReq {
+    key: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    desc: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    accent: Option<String>,
+    #[serde(default)]
+    space: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SpaceSaveReq {
+    #[serde(default)]
+    id: Option<String>,
+    title: String,
+    #[serde(default = "default_space_icon")]
+    icon: String,
+    #[serde(default = "default_space_accent")]
+    accent: String,
+    #[serde(default)]
+    tag: String,
+    #[serde(default)]
+    desc: String,
+}
+fn default_space_icon() -> String {
+    "🗂".to_string()
+}
+fn default_space_accent() -> String {
+    "#e0a458".to_string()
+}
+
+#[derive(Deserialize)]
+struct SpaceDelQuery {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -242,12 +289,80 @@ async fn create_kasa_ep(
     State(st): State<AppState>,
     Json(r): Json<KasaCreateReq>,
 ) -> Response {
-    match vault::create_kasa(&r.title, &r.tag, &r.desc, &r.icon) {
+    match vault::create_kasa(&r.title, &r.tag, &r.desc, &r.icon, &r.space, &r.accent) {
         Ok(res) => {
             store::add_log("vault", &format!("❖ Yeni kasa oluşturuldu: {}", r.title), "ok");
             st.emit("log", json!({}));
             Json(res).into_response()
         }
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn update_kasa_ep(
+    State(st): State<AppState>,
+    Json(r): Json<KasaUpdateReq>,
+) -> Response {
+    match vault::update_kasa(
+        &r.key,
+        r.title.as_deref(),
+        r.tag.as_deref(),
+        r.desc.as_deref(),
+        r.icon.as_deref(),
+        r.accent.as_deref(),
+        r.space.as_deref(),
+    ) {
+        Ok(res) => {
+            let lbl = res
+                .get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&r.key);
+            store::add_log("vault", &format!("❖ Kasa güncellendi: {}", lbl), "ok");
+            st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) if e.starts_with("Kasa bulunamadı:") => err_resp(StatusCode::NOT_FOUND, e),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn save_space_ep(
+    State(st): State<AppState>,
+    Json(r): Json<SpaceSaveReq>,
+) -> Response {
+    match vault::save_space(
+        r.id.as_deref(),
+        &r.title,
+        &r.icon,
+        &r.accent,
+        &r.tag,
+        &r.desc,
+    ) {
+        Ok(res) => {
+            let ttl = res
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&r.title);
+            store::add_log("vault", &format!("🗂 Alan kaydedildi: {}", ttl), "ok");
+            st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) if e.starts_with("Alan bulunamadı:") => err_resp(StatusCode::NOT_FOUND, e),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn delete_space_ep(
+    State(st): State<AppState>,
+    Query(q): Query<SpaceDelQuery>,
+) -> Response {
+    match vault::delete_space(&q.id) {
+        Ok(res) => {
+            store::add_log("vault", &format!("🗂 Alan silindi: {}", q.id), "w");
+            st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) if e.starts_with("Alan bulunamadı:") => err_resp(StatusCode::NOT_FOUND, e),
         Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
     }
 }
@@ -875,6 +990,8 @@ fn build_router() -> Router {
         .route("/api/ping", get(ping_ep))
         .route("/api/vault", get(get_vault_ep))
         .route("/api/kasa", post(create_kasa_ep))
+        .route("/api/kasa/update", post(update_kasa_ep))
+        .route("/api/space", post(save_space_ep).delete(delete_space_ep))
         .route("/api/folder", post(create_folder_ep))
         .route("/api/note", get(get_note_ep).post(save_note_ep).delete(delete_note_ep))
         .route("/api/note/create", post(create_note_ep))

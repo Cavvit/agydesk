@@ -3,6 +3,7 @@ use once_cell::sync::Lazy;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
@@ -132,28 +133,226 @@ static CUSTOM_FOLDERS: Lazy<Mutex<HashMap<String, FolderMeta>>> = Lazy::new(|| {
             desc: "Makro/mikro besin ögeleri, CHO, lipidler, proteinler, vitaminler ve sporcu beslenmesi rehberleri.".to_string(),
         },
     );
+    m.insert(
+        "Mikrodalga".to_string(),
+        FolderMeta {
+            label: "Mikrodalga".to_string(),
+            icon: "〰️".to_string(),
+            accent: "#ff7b72".to_string(),
+            tag: "Mikrodalga · İletim & Kılavuz".to_string(),
+            desc: "İletim hatları, Smith abağı, çoklu yansıma ve dikdörtgen/dairesel dalga kılavuzları.".to_string(),
+        },
+    );
     Mutex::new(m)
 });
+
+const SPACES_FILENAME: &str = ".agydesk_spaces.json";
+
+const DEFAULT_D7_KEYS: &[&str] = &[
+    "Difransiyel_Denklemler",
+    "Elektrik_Makineleri_Lab",
+    "Haberlesme_Lab",
+    "Katihal_Elektronigi",
+    "Kontrol_Lab",
+    "Kontrol_Sistemlerine_Giris",
+    "Mikrodalga",
+    "Secmeli_Tasarim",
+    "Universite_Secmeli_Beslenme",
+    "Yuksek_Gerilim_Teknigi",
+];
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SpaceDef {
+    pub id: String,
+    pub title: String,
+    #[serde(default = "def_space_icon")]
+    pub icon: String,
+    #[serde(default = "def_accent")]
+    pub accent: String,
+    #[serde(default = "def_space_tag")]
+    pub tag: String,
+    #[serde(default)]
+    pub desc: String,
+}
+
+fn def_space_icon() -> String {
+    "🗂".to_string()
+}
+fn def_accent() -> String {
+    "#e0a458".to_string()
+}
+fn def_space_tag() -> String {
+    "Çalışma Alanı".to_string()
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct KasaOverride {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub accent: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub desc: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SpacesCfg {
+    #[serde(default = "def_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub spaces: Vec<SpaceDef>,
+    #[serde(default)]
+    pub assignments: HashMap<String, String>,
+    #[serde(default)]
+    pub kasa_meta: HashMap<String, KasaOverride>,
+}
+
+fn def_version() -> u32 {
+    1
+}
+
+fn default_spaces_list() -> Vec<SpaceDef> {
+    vec![
+        SpaceDef {
+            id: "donem_7".to_string(),
+            title: "Dönem 7".to_string(),
+            icon: "🎓".to_string(),
+            accent: "#e0a458".to_string(),
+            tag: "EEM · 7. Dönem".to_string(),
+            desc: "7. dönem zorunlu ve seçmeli dersler, laboratuvar föyleri ve vize/final notları.".to_string(),
+        },
+        SpaceDef {
+            id: "donem_8".to_string(),
+            title: "Dönem 8".to_string(),
+            icon: "🚀".to_string(),
+            accent: "#79c0ff".to_string(),
+            tag: "EEM · 8. Dönem".to_string(),
+            desc: "8. dönem ders kasaları, bitirme projesi ve bahar dönemi çalışma alanları.".to_string(),
+        },
+        SpaceDef {
+            id: "belgeler".to_string(),
+            title: "Belgeler & Arşiv".to_string(),
+            icon: "🗂".to_string(),
+            accent: "#7bc47f".to_string(),
+            tag: "Belgeler · Genel & Proje".to_string(),
+            desc: "Ders dışı belgeler, CV, sertifikalar, resmi evraklar ve kişisel projeler.".to_string(),
+        },
+    ]
+}
+
+fn load_spaces_cfg() -> SpacesCfg {
+    let mut cfg = SpacesCfg {
+        version: 1,
+        spaces: default_spaces_list(),
+        assignments: DEFAULT_D7_KEYS
+            .iter()
+            .map(|k| ((*k).to_string(), "donem_7".to_string()))
+            .collect(),
+        kasa_meta: HashMap::new(),
+    };
+    let p = VAULT_DIR.join(SPACES_FILENAME);
+    if let Ok(raw) = fs::read_to_string(&p) {
+        if let Ok(parsed) = serde_json::from_str::<SpacesCfg>(&raw) {
+            let valid_spaces: Vec<SpaceDef> = parsed
+                .spaces
+                .into_iter()
+                .filter(|s| !s.id.trim().is_empty() && !s.title.trim().is_empty())
+                .collect();
+            if !valid_spaces.is_empty() {
+                cfg.spaces = valid_spaces;
+            }
+            for (k, v) in parsed.assignments {
+                if !k.trim().is_empty() && !v.trim().is_empty() {
+                    cfg.assignments.insert(k, v);
+                }
+            }
+            cfg.kasa_meta = parsed.kasa_meta;
+        }
+    }
+    cfg
+}
+
+fn save_spaces_cfg(cfg: &SpacesCfg) -> Result<(), String> {
+    fs::create_dir_all(&*VAULT_DIR).map_err(|e| e.to_string())?;
+    let p = VAULT_DIR.join(SPACES_FILENAME);
+    let body = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    fs::write(&p, body.as_bytes()).map_err(|e| e.to_string())
+}
+
+fn resolve_kasa_space(key: &str, cfg: &SpacesCfg) -> String {
+    let valid: std::collections::HashSet<&str> = cfg.spaces.iter().map(|s| s.id.as_str()).collect();
+    if let Some(a) = cfg.assignments.get(key) {
+        if valid.contains(a.as_str()) {
+            return a.clone();
+        }
+    }
+    if DEFAULT_D7_KEYS.contains(&key) && valid.contains("donem_7") {
+        return "donem_7".to_string();
+    }
+    if valid.contains("belgeler") {
+        return "belgeler".to_string();
+    }
+    cfg.spaces
+        .first()
+        .map(|s| s.id.clone())
+        .unwrap_or_else(|| "donem_7".to_string())
+}
 
 static H1_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^#\s+(.+)$").unwrap());
 static WIKI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap());
 static NUM_PREFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+_").unwrap());
 static HTML_TAG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<[^>]+>").unwrap());
 
-fn folder_meta_for(key: &str) -> FolderMeta {
-    if let Ok(map) = CUSTOM_FOLDERS.lock() {
-        if let Some(m) = map.get(key) {
-            return m.clone();
+fn folder_meta_for(key: &str, cfg: Option<&SpacesCfg>) -> FolderMeta {
+    let mut base = if let Ok(map) = CUSTOM_FOLDERS.lock() {
+        map.get(key).cloned()
+    } else {
+        None
+    }
+    .unwrap_or_else(|| {
+        let label = key.replace('_', " ");
+        FolderMeta {
+            label: label.clone(),
+            icon: "📘".to_string(),
+            accent: "#e0a458".to_string(),
+            tag: "Çalışma Kasası".to_string(),
+            desc: format!("{} ders notları, deney raporları ve kaynak belgeleri.", label),
+        }
+    });
+    if let Some(c) = cfg {
+        if let Some(ov) = c.kasa_meta.get(key) {
+            if let Some(v) = &ov.label {
+                if !v.trim().is_empty() {
+                    base.label = v.trim().to_string();
+                }
+            }
+            if let Some(v) = &ov.icon {
+                if !v.trim().is_empty() {
+                    base.icon = v.trim().to_string();
+                }
+            }
+            if let Some(v) = &ov.accent {
+                if !v.trim().is_empty() {
+                    base.accent = v.trim().to_string();
+                }
+            }
+            if let Some(v) = &ov.tag {
+                if !v.trim().is_empty() {
+                    base.tag = v.trim().to_string();
+                }
+            }
+            if let Some(v) = &ov.desc {
+                if !v.trim().is_empty() {
+                    base.desc = v.trim().to_string();
+                }
+            }
         }
     }
-    let label = key.replace('_', " ");
-    FolderMeta {
-        label: label.clone(),
-        icon: "📘".to_string(),
-        accent: "#e0a458".to_string(),
-        tag: "Çalışma Kasası".to_string(),
-        desc: format!("{} ders notları, deney raporları ve kaynak belgeleri.", label),
-    }
+    base
 }
 
 fn clean_title(p: &Path, text: &str) -> String {
@@ -213,6 +412,8 @@ fn rel_posix(p: &Path) -> String {
 struct ScanDirCtx<'a> {
     f_key: &'a str,
     f_label: &'a str,
+    space_id: &'a str,
+    cfg: &'a SpacesCfg,
     n_notes: &'a mut usize,
     n_docs: &'a mut usize,
     n_imgs: &'a mut usize,
@@ -267,7 +468,7 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
             } else if fname == "assets" {
                 format!("📁 Ekler ({})", sub_kids.len())
             } else {
-                let raw_lbl = folder_meta_for(&fname).label;
+                let raw_lbl = folder_meta_for(&fname, Some(ctx.cfg)).label;
                 if sub_kids.is_empty() {
                     raw_lbl
                 } else {
@@ -280,6 +481,7 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
                 "open": false,
                 "k": sub_kids,
                 "kasa": ctx.f_key,
+                "space": ctx.space_id,
                 "rel": sub_rel
             }));
             continue;
@@ -344,7 +546,8 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
             "i": icon,
             "rel": rel,
             "ext": ext,
-            "kasa": ctx.f_key
+            "kasa": ctx.f_key,
+            "space": ctx.space_id
         }));
         ctx.pages.insert(
             nid.clone(),
@@ -354,6 +557,7 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
                 "rel": rel,
                 "folder": ctx.f_label,
                 "kasa": ctx.f_key,
+                "space": ctx.space_id,
                 "ext": ext,
                 "mtime": mt
             }),
@@ -389,6 +593,7 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
             "title": format!("{} · {}", ctx.f_label, title),
             "short_title": title,
             "kasa": ctx.f_key,
+            "space": ctx.space_id,
             "folder": ctx.f_label,
             "ext": ext,
             "icon": icon,
@@ -399,11 +604,32 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
 }
 
 pub fn scan_vault() -> Value {
+    let cfg = load_spaces_cfg();
     if !VAULT_DIR.exists() {
+        let spaces_empty: Vec<Value> = cfg
+            .spaces
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "title": s.title,
+                    "icon": s.icon,
+                    "accent": s.accent,
+                    "tag": s.tag,
+                    "desc": s.desc,
+                    "count_kasas": 0,
+                    "counts": { "notes": 0, "docs": 0, "images": 0, "total": 0 },
+                    "mtime": 0.0,
+                    "kasalar": []
+                })
+            })
+            .collect();
         return json!({
             "vault_path": VAULT_DIR.to_string_lossy(),
+            "spaces": spaces_empty,
             "tree": [],
             "kasalar": [],
+            "root_docs": [],
             "pages": {},
             "wikimap": {},
             "sources": [],
@@ -413,6 +639,7 @@ pub fn scan_vault() -> Value {
 
     let mut tree: Vec<Value> = Vec::new();
     let mut kasalar: Vec<Value> = Vec::new();
+    let mut root_docs: Vec<Value> = Vec::new();
     let mut pages: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut wikimap: serde_json::Map<String, Value> = serde_json::Map::new();
     let mut sources: Vec<Value> = Vec::new();
@@ -441,8 +668,9 @@ pub fn scan_vault() -> Value {
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        let meta = folder_meta_for(&f_key);
+        let meta = folder_meta_for(&f_key, Some(&cfg));
         let f_label = meta.label.clone();
+        let space_id = resolve_kasa_space(&f_key, &cfg);
 
         let mut n_notes = 0usize;
         let mut n_docs = 0usize;
@@ -454,6 +682,8 @@ pub fn scan_vault() -> Value {
         let mut ctx = ScanDirCtx {
             f_key: &f_key,
             f_label: &f_label,
+            space_id: &space_id,
+            cfg: &cfg,
             n_notes: &mut n_notes,
             n_docs: &mut n_docs,
             n_imgs: &mut n_imgs,
@@ -475,13 +705,15 @@ pub fn scan_vault() -> Value {
         tree.push(json!({
             "n": f_label,
             "kasa": f_key,
+            "space": space_id,
             "rel": f_key,
-            "i": "📘",
+            "i": meta.icon,
             "open": idx < 2,
             "k": kids
         }));
         kasalar.push(json!({
             "key": f_key,
+            "space": space_id,
             "title": f_label,
             "icon": meta.icon,
             "accent": meta.accent,
@@ -498,6 +730,153 @@ pub fn scan_vault() -> Value {
             "previews": preview_items
         }));
     }
+
+    // Kök dizindeki tekil belgeler (örn. 00_LAB_ORTAK_TAKVIM.md)
+    let mut root_files: Vec<PathBuf> = fs::read_dir(&*VAULT_DIR)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .starts_with('.')
+        })
+        .collect();
+    root_files.sort();
+    for f in root_files {
+        let ext = ext_lower(&f);
+        if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
+            continue;
+        }
+        let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+        let nid = format!("note:{}", fname);
+        let mt = mtime_of(&f);
+        let mut head = String::new();
+        let mut full_md = String::new();
+        if ext == ".md" {
+            if let Ok(bytes) = fs::read(&f) {
+                full_md = String::from_utf8_lossy(&bytes).to_string();
+                head = full_md.chars().take(400).collect();
+            }
+        }
+        let title = clean_title(&f, &head);
+        if ext == ".md" && !full_md.is_empty() {
+            let links: Vec<String> = WIKI_RE
+                .captures_iter(&full_md)
+                .filter_map(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+                .collect();
+            md_links_raw.insert(nid.clone(), links);
+        }
+        let icon = if ext == ".md" {
+            "📝"
+        } else if ext == ".html" {
+            "🌐"
+        } else if is_img_ext(&ext) {
+            "🖼"
+        } else if ext == ".docx" || ext == ".doc" {
+            "📘"
+        } else {
+            "📄"
+        };
+        let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let stem_up = stem.to_uppercase();
+        let root_space = if stem_up.contains("LAB") || stem_up.contains("TAKVIM") {
+            if cfg.spaces.iter().any(|s| s.id == "donem_7") {
+                "donem_7".to_string()
+            } else {
+                cfg.spaces.first().map(|s| s.id.clone()).unwrap_or_else(|| "donem_7".to_string())
+            }
+        } else if cfg.spaces.iter().any(|s| s.id == "belgeler") {
+            "belgeler".to_string()
+        } else {
+            cfg.spaces.first().map(|s| s.id.clone()).unwrap_or_else(|| "donem_7".to_string())
+        };
+        pages.insert(
+            nid.clone(),
+            json!({
+                "t": title,
+                "i": icon,
+                "rel": fname,
+                "folder": "Ortak Belgeler",
+                "kasa": "",
+                "space": root_space,
+                "ext": ext,
+                "mtime": mt
+            }),
+        );
+        wikimap.insert(fname.to_lowercase(), json!(nid));
+        wikimap.insert(stem.to_lowercase(), json!(nid));
+        wikimap.insert(title.to_lowercase(), json!(nid));
+        wikimap.insert(stem.to_lowercase().replace('_', " "), json!(nid));
+        root_docs.push(json!({
+            "id": nid,
+            "rel": fname,
+            "title": title,
+            "icon": icon,
+            "ext": ext,
+            "space": root_space,
+            "mtime": mt
+        }));
+    }
+
+    let spaces_out: Vec<Value> = cfg
+        .spaces
+        .iter()
+        .map(|sp| {
+            let mut n_kasas = 0usize;
+            let mut sp_notes = 0usize;
+            let mut sp_docs = 0usize;
+            let mut sp_imgs = 0usize;
+            let mut sp_mtime = 0.0f64;
+            let mut sp_list: Vec<Value> = Vec::new();
+            for k in &kasalar {
+                if k.get("space").and_then(|v| v.as_str()) == Some(sp.id.as_str()) {
+                    n_kasas += 1;
+                    let cnt = k.get("counts");
+                    let kn = cnt.and_then(|c| c.get("notes")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let kd = cnt.and_then(|c| c.get("docs")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let ki = cnt.and_then(|c| c.get("images")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    let kt = cnt.and_then(|c| c.get("total")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                    sp_notes += kn;
+                    sp_docs += kd;
+                    sp_imgs += ki;
+                    let km = k.get("mtime").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    if km > sp_mtime {
+                        sp_mtime = km;
+                    }
+                    sp_list.push(json!({
+                        "key": k.get("key").and_then(|v| v.as_str()).unwrap_or(""),
+                        "title": k.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                        "icon": k.get("icon").and_then(|v| v.as_str()).unwrap_or("📘"),
+                        "accent": k.get("accent").and_then(|v| v.as_str()).unwrap_or("#e0a458"),
+                        "total": kt
+                    }));
+                }
+            }
+            json!({
+                "id": sp.id,
+                "title": sp.title,
+                "icon": sp.icon,
+                "accent": sp.accent,
+                "tag": sp.tag,
+                "desc": sp.desc,
+                "count_kasas": n_kasas,
+                "counts": {
+                    "notes": sp_notes,
+                    "docs": sp_docs,
+                    "images": sp_imgs,
+                    "total": sp_notes + sp_docs + sp_imgs
+                },
+                "mtime": sp_mtime,
+                "kasalar": sp_list
+            })
+        })
+        .collect();
 
     let mut backlinks: serde_json::Map<String, Value> = serde_json::Map::new();
     for (src_id, raw_targets) in md_links_raw {
@@ -545,8 +924,10 @@ pub fn scan_vault() -> Value {
 
     json!({
         "vault_path": VAULT_DIR.to_string_lossy(),
+        "spaces": spaces_out,
         "tree": tree,
         "kasalar": kasalar,
+        "root_docs": root_docs,
         "pages": pages,
         "wikimap": wikimap,
         "sources": sources,
@@ -559,25 +940,32 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
     if !p.exists() {
         return Err(format!("Dosya bulunamadı: {}", rel));
     }
+    let cfg = load_spaces_cfg();
     let ext = ext_lower(&p);
     let clean_rel = rel.replace('\\', "/");
     let parts: Vec<&str> = clean_rel.trim_start_matches('/').split('/').filter(|s| !s.is_empty()).collect();
     let f_key = if parts.len() > 1 {
         parts[0].to_string()
     } else {
-        p.parent()
-            .and_then(|pr| pr.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string()
+        String::new()
     };
-    let folder = folder_meta_for(&f_key).label;
+    let folder = if f_key.is_empty() {
+        "Ortak Belgeler".to_string()
+    } else {
+        folder_meta_for(&f_key, Some(&cfg)).label
+    };
+    let space_id = if f_key.is_empty() {
+        "donem_7".to_string()
+    } else {
+        resolve_kasa_space(&f_key, &cfg)
+    };
     let mtime = mtime_of(&p);
     if ext == ".pdf" {
         return Ok(json!({
             "rel": rel,
             "ext": ext,
             "kasa": f_key,
+            "space": space_id,
             "folder": folder,
             "title": clean_title(&p, ""),
             "content": "",
@@ -591,6 +979,7 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
         "rel": rel,
         "ext": ext,
         "kasa": f_key,
+        "space": space_id,
         "folder": folder,
         "title": title,
         "content": text,
@@ -650,7 +1039,14 @@ fn slugify(text: &str) -> String {
     }
 }
 
-pub fn create_kasa(title: &str, tag: &str, desc: &str, icon: &str) -> Result<Value, String> {
+pub fn create_kasa(
+    title: &str,
+    tag: &str,
+    desc: &str,
+    icon: &str,
+    space: &str,
+    accent: &str,
+) -> Result<Value, String> {
     let clean_title = title.trim();
     if clean_title.is_empty() {
         return Err("Kasa adı boş olamaz".to_string());
@@ -659,6 +1055,11 @@ pub fn create_kasa(title: &str, tag: &str, desc: &str, icon: &str) -> Result<Val
     let d = safe_path(&folder_key)?;
     fs::create_dir_all(&d).map_err(|e| e.to_string())?;
 
+    let clean_tag = if tag.trim().is_empty() {
+        "Çalışma Kasası".to_string()
+    } else {
+        tag.trim().to_string()
+    };
     let meta_desc = if desc.trim().is_empty() {
         format!(
             "{} ders notları, deney raporları ve kaynak belgeleri.",
@@ -667,24 +1068,50 @@ pub fn create_kasa(title: &str, tag: &str, desc: &str, icon: &str) -> Result<Val
     } else {
         desc.trim().to_string()
     };
+    let clean_icon = if icon.trim().is_empty() {
+        "📘".to_string()
+    } else {
+        icon.trim().to_string()
+    };
+    let clean_accent = if accent.trim().is_empty() {
+        "#e0a458".to_string()
+    } else {
+        accent.trim().to_string()
+    };
+
     let meta = FolderMeta {
         label: clean_title.to_string(),
-        icon: if icon.trim().is_empty() {
-            "📘".to_string()
-        } else {
-            icon.trim().to_string()
-        },
-        accent: "#e0a458".to_string(),
-        tag: if tag.trim().is_empty() {
-            "Çalışma Kasası".to_string()
-        } else {
-            tag.trim().to_string()
-        },
+        icon: clean_icon.clone(),
+        accent: clean_accent.clone(),
+        tag: clean_tag.clone(),
         desc: meta_desc.clone(),
     };
     if let Ok(mut map) = CUSTOM_FOLDERS.lock() {
         map.insert(folder_key.clone(), meta);
     }
+
+    let mut cfg = load_spaces_cfg();
+    let valid_ids: std::collections::HashSet<String> =
+        cfg.spaces.iter().map(|s| s.id.clone()).collect();
+    let clean_space = space.trim();
+    let target_space = if !clean_space.is_empty() && valid_ids.contains(clean_space) {
+        clean_space.to_string()
+    } else {
+        resolve_kasa_space(&folder_key, &cfg)
+    };
+    cfg.assignments
+        .insert(folder_key.clone(), target_space.clone());
+    cfg.kasa_meta.insert(
+        folder_key.clone(),
+        KasaOverride {
+            label: Some(clean_title.to_string()),
+            icon: Some(clean_icon),
+            accent: Some(clean_accent),
+            tag: Some(clean_tag),
+            desc: Some(meta_desc.clone()),
+        },
+    );
+    save_spaces_cfg(&cfg)?;
 
     let idx_rel = format!("{}/00_{}_ANA_INDEKS.md", folder_key, folder_key.to_uppercase());
     let idx_path = safe_path(&idx_rel)?;
@@ -698,7 +1125,195 @@ pub fn create_kasa(title: &str, tag: &str, desc: &str, icon: &str) -> Result<Val
     Ok(json!({
         "key": folder_key,
         "title": clean_title,
+        "space": target_space,
         "index_id": format!("note:{}", idx_rel)
+    }))
+}
+
+pub fn update_kasa(
+    key: &str,
+    title: Option<&str>,
+    tag: Option<&str>,
+    desc: Option<&str>,
+    icon: Option<&str>,
+    accent: Option<&str>,
+    space: Option<&str>,
+) -> Result<Value, String> {
+    let clean_key = key.replace('\\', "/").trim_matches('/').to_string();
+    if clean_key.is_empty() || clean_key.contains('/') {
+        return Err("Geçersiz kasa anahtarı".to_string());
+    }
+    let d = safe_path(&clean_key)?;
+    if !d.exists() || !d.is_dir() {
+        return Err(format!("Kasa bulunamadı: {}", clean_key));
+    }
+
+    let mut cfg = load_spaces_cfg();
+    let valid_ids: std::collections::HashSet<String> =
+        cfg.spaces.iter().map(|s| s.id.clone()).collect();
+    if let Some(sp) = space {
+        let sp_clean = sp.trim();
+        if !sp_clean.is_empty() {
+            if !valid_ids.contains(sp_clean) {
+                return Err(format!("Geçersiz alan: {}", sp_clean));
+            }
+            cfg.assignments
+                .insert(clean_key.clone(), sp_clean.to_string());
+        }
+    }
+
+    let cur_meta = folder_meta_for(&clean_key, Some(&cfg));
+    let mut entry = cfg.kasa_meta.get(&clean_key).cloned().unwrap_or_default();
+
+    let pick = |new_val: Option<&str>, existing: Option<String>, fallback: String| -> String {
+        if let Some(v) = new_val {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        existing.filter(|s| !s.trim().is_empty()).unwrap_or(fallback)
+    };
+
+    let new_label = pick(title, entry.label, cur_meta.label);
+    let new_icon = pick(icon, entry.icon, cur_meta.icon);
+    let new_accent = pick(accent, entry.accent, cur_meta.accent);
+    let new_tag = pick(tag, entry.tag, cur_meta.tag);
+    let new_desc = pick(desc, entry.desc, cur_meta.desc);
+
+    entry.label = Some(new_label.clone());
+    entry.icon = Some(new_icon.clone());
+    entry.accent = Some(new_accent.clone());
+    entry.tag = Some(new_tag.clone());
+    entry.desc = Some(new_desc.clone());
+
+    if let Ok(mut map) = CUSTOM_FOLDERS.lock() {
+        map.insert(
+            clean_key.clone(),
+            FolderMeta {
+                label: new_label.clone(),
+                icon: new_icon.clone(),
+                accent: new_accent.clone(),
+                tag: new_tag.clone(),
+                desc: new_desc.clone(),
+            },
+        );
+    }
+
+    cfg.kasa_meta.insert(clean_key.clone(), entry);
+    save_spaces_cfg(&cfg)?;
+    let resolved_space = resolve_kasa_space(&clean_key, &cfg);
+    Ok(json!({
+        "key": clean_key,
+        "space": resolved_space,
+        "label": new_label,
+        "icon": new_icon,
+        "accent": new_accent,
+        "tag": new_tag,
+        "desc": new_desc,
+    }))
+}
+
+pub fn save_space(
+    space_id: Option<&str>,
+    title: &str,
+    icon: &str,
+    accent: &str,
+    tag: &str,
+    desc: &str,
+) -> Result<Value, String> {
+    let clean_title = title.trim();
+    if clean_title.is_empty() {
+        return Err("Alan adı boş olamaz".to_string());
+    }
+    let mut cfg = load_spaces_cfg();
+    let clean_id = space_id.unwrap_or("").trim();
+
+    let saved = if !clean_id.is_empty() {
+        if let Some(existing) = cfg.spaces.iter_mut().find(|s| s.id == clean_id) {
+            existing.title = clean_title.to_string();
+            if !icon.trim().is_empty() {
+                existing.icon = icon.trim().to_string();
+            }
+            if !accent.trim().is_empty() {
+                existing.accent = accent.trim().to_string();
+            }
+            if !tag.trim().is_empty() {
+                existing.tag = tag.trim().to_string();
+            } else if existing.tag.trim().is_empty() {
+                existing.tag = "Çalışma Alanı".to_string();
+            }
+            existing.desc = desc.trim().to_string();
+            existing.clone()
+        } else {
+            return Err(format!("Alan bulunamadı: {}", clean_id));
+        }
+    } else {
+        let base_id = slugify(clean_title).to_lowercase();
+        let mut new_id = base_id.clone();
+        let mut n = 2usize;
+        let used: std::collections::HashSet<String> =
+            cfg.spaces.iter().map(|s| s.id.clone()).collect();
+        while used.contains(&new_id) {
+            new_id = format!("{}_{}", base_id, n);
+            n += 1;
+        }
+        let item = SpaceDef {
+            id: new_id,
+            title: clean_title.to_string(),
+            icon: if icon.trim().is_empty() {
+                "🗂".to_string()
+            } else {
+                icon.trim().to_string()
+            },
+            accent: if accent.trim().is_empty() {
+                "#e0a458".to_string()
+            } else {
+                accent.trim().to_string()
+            },
+            tag: if tag.trim().is_empty() {
+                "Çalışma Alanı".to_string()
+            } else {
+                tag.trim().to_string()
+            },
+            desc: if desc.trim().is_empty() {
+                format!("{} çalışma alanı ve kasaları.", clean_title)
+            } else {
+                desc.trim().to_string()
+            },
+        };
+        cfg.spaces.push(item.clone());
+        item
+    };
+
+    save_spaces_cfg(&cfg)?;
+    serde_json::to_value(saved).map_err(|e| e.to_string())
+}
+
+pub fn delete_space(space_id: &str) -> Result<Value, String> {
+    let clean_id = space_id.trim();
+    let mut cfg = load_spaces_cfg();
+    if cfg.spaces.len() <= 1 {
+        return Err("Son kalan çalışma alanı silinemez".to_string());
+    }
+    let Some(idx) = cfg.spaces.iter().position(|s| s.id == clean_id) else {
+        return Err(format!("Alan bulunamadı: {}", clean_id));
+    };
+    cfg.spaces.remove(idx);
+    let fallback = if cfg.spaces.iter().any(|s| s.id == "belgeler") {
+        "belgeler".to_string()
+    } else {
+        cfg.spaces[0].id.clone()
+    };
+    for v in cfg.assignments.values_mut() {
+        if v == clean_id {
+            *v = fallback.clone();
+        }
+    }
+    save_spaces_cfg(&cfg)?;
+    Ok(json!({
+        "deleted": clean_id,
+        "fallback": fallback
     }))
 }
 
@@ -1426,4 +2041,56 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
         "ext": ext,
         "embed": embed
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_kasa_space_defaults_and_overrides() {
+        let mut cfg = SpacesCfg {
+            version: 1,
+            spaces: default_spaces_list(),
+            assignments: DEFAULT_D7_KEYS
+                .iter()
+                .map(|k| ((*k).to_string(), "donem_7".to_string()))
+                .collect(),
+            kasa_meta: HashMap::new(),
+        };
+        assert_eq!(resolve_kasa_space("Mikrodalga", &cfg), "donem_7");
+        assert_eq!(resolve_kasa_space("CV_ve_Belgeler", &cfg), "belgeler");
+        cfg.assignments
+            .insert("Bitirme_Projesi".to_string(), "donem_8".to_string());
+        assert_eq!(resolve_kasa_space("Bitirme_Projesi", &cfg), "donem_8");
+        cfg.assignments
+            .insert("Hayalet_Kasa".to_string(), "olmayan_alan".to_string());
+        assert_eq!(resolve_kasa_space("Hayalet_Kasa", &cfg), "belgeler");
+    }
+
+    #[test]
+    fn folder_meta_applies_override() {
+        let mut cfg = SpacesCfg {
+            version: 1,
+            spaces: default_spaces_list(),
+            assignments: HashMap::new(),
+            kasa_meta: HashMap::new(),
+        };
+        cfg.kasa_meta.insert(
+            "Mikrodalga".to_string(),
+            KasaOverride {
+                label: Some("Mikrodalga Mühendisliği".to_string()),
+                icon: Some("📡".to_string()),
+                accent: Some("#79c0ff".to_string()),
+                tag: Some("RF".to_string()),
+                desc: Some("Özel açıklama".to_string()),
+            },
+        );
+        let meta = folder_meta_for("Mikrodalga", Some(&cfg));
+        assert_eq!(meta.label, "Mikrodalga Mühendisliği");
+        assert_eq!(meta.icon, "📡");
+        assert_eq!(meta.accent, "#79c0ff");
+        assert_eq!(meta.tag, "RF");
+        assert_eq!(meta.desc, "Özel açıklama");
+    }
 }

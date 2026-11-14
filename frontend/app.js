@@ -4,11 +4,237 @@ const app=$('#app');
 /* ---------- Veri & Gerçek Obsidian Kasası ---------- */
 let vaultTree=[];
 let kasalarData=[];
+let spacesData=[];
+let rootDocsData=[];
 let allSources=[];
 let backlinksMap={};
+let currentSpace='all';
 let currentKasa='all';
 let kasaSearchQ='';
+let kasaViewMode=localStorage.getItem('agydesk_kview')||'grid';
+let draggedKasaKey=null;
 let tree=[];
+
+const SPACE_ACCENTS=['#e0a458','#79c0ff','#7bc47f','#f0883e','#bc8cff','#ff7b72','#3fb950','#f1e05a'];
+const ICON_POOL=[
+  ['📘','Ders Kasası'],['🎓','Akademik Dönem'],['🚀','İleri Dönem / Proje'],['🗂','Belgeler & Arşiv'],
+  ['⚡','Elektrik & Enerji'],['∿','Kontrol & Sinyal'],['📡','Haberleşme & RF'],['🛰','Tasarım & İHA'],
+  ['🌩','Yüksek Gerilim'],['🎛️','Lab & Otomasyon'],['⚛️','Fizik & Yarıiletken'],['🥑','Seçmeli & Genel'],
+  ['💻','Yazılım & Kod'],['🧪','Araştırma & Makale'],['📄','Resmi Evrak / CV']
+];
+function getSpaceObj(id){
+  return spacesData.find(s=>s.id===id)||null;
+}
+function renderAccentSwatches(inputId,activeHex){
+  const cur=(activeHex||'#e0a458').toLowerCase();
+  return `<input type="hidden" id="${inputId}" value="${escHtml(activeHex||'#e0a458')}">
+    <div class="swatches">${SPACE_ACCENTS.map(c=>`<button type="button" class="swatch ${c.toLowerCase()===cur?'on':''}" style="background:${c}" title="${c}" onclick="const inp=$('#${inputId}');if(inp)inp.value='${c}';this.parentElement.querySelectorAll('.swatch').forEach(x=>x.classList.toggle('on',x===this));"></button>`).join('')}</div>`;
+}
+function renderIconOptions(selectedIcon){
+  const cur=selectedIcon||'📘';
+  const has=ICON_POOL.some(([ic])=>ic===cur);
+  const list=has?ICON_POOL:[[cur,'Mevcut İkon'],...ICON_POOL];
+  return list.map(([ic,lbl])=>`<option value="${ic}" ${ic===cur?'selected':''}>${ic} ${lbl}</option>`).join('');
+}
+function renderKasaGroupOptions(selectedKey,emptyLabel=''){
+  let html=emptyLabel?`<option value="" ${!selectedKey?'selected':''}>${escHtml(emptyLabel)}</option>`:'';
+  const visibleSpaces=(spacesData&&spacesData.length)?spacesData:[{id:'_all',icon:'❖',title:'Kasalar'}];
+  visibleSpaces.forEach(sp=>{
+    const items=kasalarData.filter(k=>sp.id==='_all'||k.space===sp.id);
+    if(!items.length) return;
+    html+=`<optgroup label="${escHtml(sp.icon+' '+sp.title)}">${items.map(k=>`<option value="${escHtml(k.key)}" ${selectedKey===k.key?'selected':''}>${escHtml(k.icon+' '+k.title)} (${k.counts?k.counts.total:0})</option>`).join('')}</optgroup>`;
+  });
+  const orphan=kasalarData.filter(k=>!visibleSpaces.some(sp=>sp.id==='_all'||sp.id===k.space));
+  if(orphan.length){
+    html+=orphan.map(k=>`<option value="${escHtml(k.key)}" ${selectedKey===k.key?'selected':''}>${escHtml(k.icon+' '+k.title)}</option>`).join('');
+  }
+  return html;
+}
+
+/* ---------- Tarayıcı Tarzı Geri/İleri Geçmişi (Fare Yan Tuşları + Alt+Oklar) ---------- */
+let navHistory=[];
+let navHistoryIdx=-1;
+let _navSuppress=false;
+let _navQueuePending=false;
+let _lastMouseNavAt=0;
+
+function captureNavSnap(){
+  return {
+    mode:typeof curMode!=='undefined'?curMode:'kasalar',
+    space:currentSpace||'all',
+    kasa:currentKasa||'all',
+    active:typeof active!=='undefined'?active:'kasalar',
+    q:typeof kasaSearchQ!=='undefined'?(kasaSearchQ||''):''
+  };
+}
+function sameNavSnap(a,b){
+  return Boolean(a&&b&&a.mode===b.mode&&a.space===b.space&&a.kasa===b.kasa&&a.active===b.active&&(a.q||'')===(b.q||''));
+}
+function syncNavButtons(){
+  const bBtn=$('#navBackBtn'), fBtn=$('#navFwdBtn');
+  const canB=navHistoryIdx>0;
+  const canF=navHistoryIdx>=0&&navHistoryIdx<navHistory.length-1;
+  if(bBtn){ bBtn.classList.toggle('dis',!canB); bBtn.disabled=!canB; }
+  if(fBtn){ fBtn.classList.toggle('dis',!canF); fBtn.disabled=!canF; }
+}
+function recordNavState(){
+  if(_navSuppress||_restoringSession) return;
+  const snap=captureNavSnap();
+  if(navHistoryIdx>=0&&sameNavSnap(navHistory[navHistoryIdx],snap)){
+    syncNavButtons();
+    return;
+  }
+  navHistory=navHistory.slice(0,navHistoryIdx+1);
+  navHistory.push(snap);
+  if(navHistory.length>80) navHistory.shift();
+  navHistoryIdx=navHistory.length-1;
+  syncNavButtons();
+}
+function scheduleRecordNavState(){
+  if(_navSuppress||_navQueuePending||_restoringSession) return;
+  _navQueuePending=true;
+  queueMicrotask(()=>{
+    _navQueuePending=false;
+    recordNavState();
+  });
+}
+function initNavHistory(){
+  navHistory=[captureNavSnap()];
+  navHistoryIdx=0;
+  syncNavButtons();
+}
+function applyNavSnap(snap){
+  if(!snap) return;
+  if(typeof closeNotionTreeMenu==='function') closeNotionTreeMenu();
+  if(typeof closeNotionSlash==='function') closeNotionSlash();
+  if(typeof closeKasaModal==='function') closeKasaModal();
+  _navSuppress=true;
+  try{
+    currentSpace=(snap.space==='all'||getSpaceObj(snap.space))?snap.space:'all';
+    currentKasa=(snap.kasa==='all'||kasalarData.some(k=>k.key===snap.kasa))?snap.kasa:'all';
+    if(currentSpace!=='all'&&currentKasa!=='all'){
+      const kObj=kasalarData.find(k=>k.key===currentKasa);
+      if(!kObj||kObj.space!==currentSpace) currentKasa='all';
+    }
+    kasaSearchQ=snap.q||'';
+    let targetPage=snap.active||'kasalar';
+    if(String(targetPage).startsWith('note:')&&!pages[targetPage]) targetPage='kasalar';
+    if(isAI(targetPage)&&!ai[targetPage]) targetPage='kasalar';
+    const targetMode=targetPage==='kasalar'?'kasalar':(snap.mode||'write');
+
+    renderKasaFilterSelect();
+    rebuildTreeAndSources();
+    if(typeof curMode!=='undefined'&&curMode!==targetMode) layoutMode(targetMode);
+    if(active!==targetPage){
+      openPage(targetPage);
+    }else{
+      renderTree(); renderTabs(); renderMain(); updateSideAiCtx(); updateRightProps(); saveSessionTabs();
+    }
+  }finally{
+    Promise.resolve().then(()=>{
+      _navSuppress=false;
+      syncNavButtons();
+    });
+  }
+}
+function navBack(){
+  const now=Date.now();
+  if(now-_lastMouseNavAt<45) return false;
+  if(navHistoryIdx<=0) return false;
+  _lastMouseNavAt=now;
+  navHistoryIdx--;
+  applyNavSnap(navHistory[navHistoryIdx]);
+  return true;
+}
+function navForward(){
+  const now=Date.now();
+  if(now-_lastMouseNavAt<45) return false;
+  if(navHistoryIdx<0||navHistoryIdx>=navHistory.length-1) return false;
+  _lastMouseNavAt=now;
+  navHistoryIdx++;
+  applyNavSnap(navHistory[navHistoryIdx]);
+  return true;
+}
+
+/* Fare Yan Tuşları (XBUTTON1=3 Geri, XBUTTON2=4 İleri) */
+document.addEventListener('mousedown',e=>{
+  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); }
+},true);
+document.addEventListener('auxclick',e=>{
+  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); }
+},true);
+document.addEventListener('mouseup',e=>{
+  if(e.button===3){ e.preventDefault(); e.stopPropagation(); navBack(); }
+  else if(e.button===4){ e.preventDefault(); e.stopPropagation(); navForward(); }
+},true);
+
+/* ---------- Uygulama Geneli Geri Al / Yinele (Ctrl+Z / Ctrl+Y) ---------- */
+const APP_UNDO_STACK=[];
+const APP_REDO_STACK=[];
+const CLOSED_TABS=[];
+let _appUndoRunning=false;
+let lastAppActionAt=0;
+
+function pushAppUndo(entry){
+  if(_appUndoRunning||!entry||typeof entry.undo!=='function') return;
+  APP_UNDO_STACK.push(entry);
+  if(APP_UNDO_STACK.length>40) APP_UNDO_STACK.shift();
+  APP_REDO_STACK.length=0;
+  lastAppActionAt=Date.now();
+}
+async function performAppUndo(){
+  if(_appUndoRunning) return false;
+  const entry=APP_UNDO_STACK.pop();
+  if(!entry) return false;
+  _appUndoRunning=true;
+  try{
+    await entry.undo();
+    if(typeof entry.redo==='function'){
+      APP_REDO_STACK.push(entry);
+      if(APP_REDO_STACK.length>40) APP_REDO_STACK.shift();
+    }
+    toast(`↶ Geri alındı: ${entry.label}`);
+    return true;
+  }catch(e){
+    alert('İşlem geri alınamadı: '+e.message);
+    return false;
+  }finally{
+    _appUndoRunning=false;
+  }
+}
+async function performAppRedo(){
+  if(_appUndoRunning) return false;
+  const entry=APP_REDO_STACK.pop();
+  if(!entry||typeof entry.redo!=='function') return false;
+  _appUndoRunning=true;
+  try{
+    await entry.redo();
+    APP_UNDO_STACK.push(entry);
+    if(APP_UNDO_STACK.length>40) APP_UNDO_STACK.shift();
+    toast(`↷ İleri alındı: ${entry.label}`);
+    return true;
+  }catch(e){
+    alert('İşlem tekrar uygulanamadı: '+e.message);
+    return false;
+  }finally{
+    _appUndoRunning=false;
+  }
+}
+function reopenLastClosedTab(){
+  while(CLOSED_TABS.length){
+    const item=CLOSED_TABS.pop();
+    if(!item||!item.id) continue;
+    if(String(item.id).startsWith('note:')&&!pages[item.id]) continue;
+    if(isAI(item.id)&&!ai[item.id]) continue;
+    if(!openTabs.includes(item.id)){
+      const pos=Math.min(Math.max(0,item.idx),openTabs.length);
+      openTabs.splice(pos,0,item.id);
+    }
+    openPage(item.id);
+    return true;
+  }
+  return false;
+}
 const pages={
  kasalar:{t:'Kasalar (Ana Ekran)',i:'❖'},
  trafo:{t:'Trafo Lab Analizörü',i:'⚡'},
@@ -359,6 +585,7 @@ function saveSessionTabs(){
       openTabs:[...openTabs],
       active,
       curMode:typeof curMode!=='undefined'?curMode:'kasalar',
+      currentSpace,
       currentKasa,
       treeOpen:{...TREE_OPEN},
       noLeft:app?app.classList.contains('no-left'):false,
@@ -377,6 +604,7 @@ function restoreSessionTabs(){
     if(saved.treeOpen&&typeof saved.treeOpen==='object'){
       Object.assign(TREE_OPEN,saved.treeOpen);
     }
+    if(typeof saved.currentSpace==='string'&&saved.currentSpace) currentSpace=saved.currentSpace;
     if(typeof saved.currentKasa==='string'&&saved.currentKasa) currentKasa=saved.currentKasa;
     const cleaned=[];
     saved.openTabs.forEach(t=>{
@@ -410,9 +638,14 @@ function restoreSessionTabs(){
   }
 }
 
+function scopedSources(){
+  if(currentKasa!=='all') return allSources.filter(s=>s.kasa===currentKasa);
+  if(currentSpace!=='all') return allSources.filter(s=>s.space===currentSpace);
+  return allSources;
+}
 function getCheckedSources(){
-  if(currentKasa!=='all'){
-    const allowed=new Set(allSources.filter(s=>s.kasa===currentKasa).map(s=>s.rel));
+  if(currentKasa!=='all'||currentSpace!=='all'){
+    const allowed=new Set(scopedSources().map(s=>s.rel));
     return [...checkedSources].filter(r=>allowed.has(r));
   }
   return [...checkedSources];
@@ -421,19 +654,79 @@ function updateSideAiCtx(){
   const el=$('#sideAiCtx'); if(!el)return;
   const n=getCheckedSources().length;
   const hasNote=String(active).startsWith('note:');
-  const kName=currentKasa==='all'?'Tüm Kasalar':((kasalarData.find(k=>k.key===currentKasa)||{}).title||currentKasa);
+  const spObj=getSpaceObj(currentSpace);
+  const kObj=kasalarData.find(k=>k.key===currentKasa);
+  const kName=kObj?kObj.title:(spObj?spObj.title:'Tüm Alanlar');
   el.textContent=`📚 ${kName} · ${n} kaynak${hasNote?' + aktif not':''}`;
   const s1=$('#scSrc'); if(s1) s1.textContent=`📚 ${kName}`;
   const s2=$('#scN'); if(s2) s2.textContent=n+' kaynak';
   const stK=$('#stKasa');
-  if(stK) stK.textContent=`Kasa: ${kName} (${kasalarData.reduce((a,k)=>a+(k.counts?k.counts.total:0),0)} dosya)`;
+  if(stK){
+    const visKasas=currentSpace==='all'?kasalarData:kasalarData.filter(k=>k.space===currentSpace);
+    stK.textContent=`Alan: ${kName} (${visKasas.reduce((a,k)=>a+(k.counts?k.counts.total:0),0)} dosya)`;
+  }
+}
+function renderSpaceSidebar(){
+  const host=$('#spaceSwitchWrap');
+  if(!host) return;
+  const chips=[
+    `<button type="button" class="sp-pill ${currentSpace==='all'?'on':''}" onclick="selectSpaceFilter('all')" ondragover="handleSpaceDragOver(event,this)" ondragleave="handleSpaceDragLeave(this)" ondrop="handleSpaceDrop(event,'all')" title="Tüm Çalışma Alanları">❖ Tümü <span class="sp-pill-cnt">${kasalarData.length}</span></button>`,
+    ...spacesData.map(sp=>`
+      <button type="button" class="sp-pill ${currentSpace===sp.id?'on':''}" style="--sp-acc:${escHtml(sp.accent||'#e0a458')}" onclick="selectSpaceFilter('${escHtml(sp.id)}')" ondragover="handleSpaceDragOver(event,this)" ondragleave="handleSpaceDragLeave(this)" ondrop="handleSpaceDrop(event,'${escHtml(sp.id)}')" title="${escHtml(sp.title)} · Kasayı sürükleyip bırakabilirsin">
+        <span>${escHtml(sp.icon||'🗂')}</span>
+        <span>${escHtml(sp.title)}</span>
+        <span class="sp-pill-cnt">${sp.count_kasas||0}</span>
+      </button>
+    `),
+    `<button type="button" class="sp-pill add" onclick="openSpaceModal()" title="Yeni Çalışma Alanı Oluştur">＋</button>`
+  ];
+  host.innerHTML=chips.join('');
 }
 function rebuildTreeAndSources(){
-  const filtered=currentKasa==='all'?vaultTree:vaultTree.filter(g=>g.kasa===currentKasa);
+  renderSpaceSidebar();
+  const lt=$('#leftTitle');
+  if(lt&&typeof curMode!=='undefined'&&curMode!=='ai'&&curMode!=='study'&&curMode!=='plan'){
+    const sp=getSpaceObj(currentSpace);
+    lt.textContent=sp?`${sp.icon} ${sp.title}`:'Alanlar & Kasalar';
+  }
+  let topGroups=[];
+  if(currentKasa!=='all'){
+    topGroups=vaultTree.filter(g=>g.kasa===currentKasa).map(g=>({...g,open:true}));
+  }else if(currentSpace!=='all'){
+    topGroups=vaultTree.filter(g=>g.space===currentSpace).map(g=>({...g}));
+  }else if(spacesData.length){
+    topGroups=spacesData.map(sp=>{
+      const spKasas=vaultTree.filter(g=>g.space===sp.id);
+      const sk='space:'+sp.id;
+      const isOpen=(sk in TREE_OPEN)?TREE_OPEN[sk]:(sp.id==='donem_7'||(spKasas.length>0&&spKasas.length<=3));
+      return {
+        n:`${sp.title} (${spKasas.length})`,
+        i:sp.icon||'🗂',
+        spaceId:sp.id,
+        accent:sp.accent||'#e0a458',
+        open:isOpen,
+        k:spKasas
+      };
+    });
+    const orphan=vaultTree.filter(g=>!spacesData.some(sp=>sp.id===g.space));
+    if(orphan.length) topGroups.push(...orphan);
+  }else{
+    topGroups=vaultTree.map(g=>({...g}));
+  }
+  const visRoots=(currentKasa==='all')?rootDocsData.filter(d=>currentSpace==='all'||d.space===currentSpace):[];
+  if(visRoots.length){
+    topGroups.push({
+      n:`Ortak Belgeler (${visRoots.length})`,
+      i:'📌',
+      rel:'_root_docs',
+      open:false,
+      k:visRoots.map(d=>({n:d.title,i:d.icon,id:d.id,rel:d.rel}))
+    });
+  }
   tree=[
-    ...filtered.map(g=>({...g,open:currentKasa!=='all'?true:g.open})),
-    {n:'Mühendislik Araçları',i:'⚡',open:currentKasa==='all',k:[
-      {n:'Kasalar (NotebookLM Ana Ekran)',id:'kasalar',i:'❖'},
+    ...topGroups,
+    {n:'Mühendislik Araçları',i:'⚡',open:currentKasa==='all'&&currentSpace==='all',k:[
+      {n:'Kasalar & Çalışma Alanları',id:'kasalar',i:'❖'},
       {n:'Trafo Lab Analizörü',id:'trafo',i:'⚡'},
       {n:'RC Filtre Bode Simülatörü',id:'sim',i:'∿'},
       {n:'AgyCal · Akıllı Takvim',id:'cal',i:'▦'}
@@ -442,7 +735,7 @@ function rebuildTreeAndSources(){
   const sh=$('#sources');
   if(sh){
     const prevScroll=sh.scrollTop;
-    const srcs=currentKasa==='all'?allSources:allSources.filter(s=>s.kasa===currentKasa);
+    const srcs=scopedSources();
     const chkCount=srcs.filter(s=>checkedSources.has(s.rel)).length;
     const allChk=srcs.length>0&&chkCount===srcs.length;
     const someChk=chkCount>0&&chkCount<srcs.length;
@@ -529,36 +822,134 @@ function onSourceCheck(rel,chk){
   rebuildTreeAndSources();
 }
 function toggleAllSources(chk){
-  const srcs=currentKasa==='all'?allSources:allSources.filter(s=>s.kasa===currentKasa);
+  const srcs=scopedSources();
   srcs.forEach(s=>{ if(chk) checkedSources.add(s.rel); else checkedSources.delete(s.rel); });
   rebuildTreeAndSources();
 }
-function selectKasaFilter(val){
-  currentKasa=val||'all';
-  const sel=$('#kasaSelect'); if(sel&&sel.value!==currentKasa) sel.value=currentKasa;
+function renderKasaFilterSelect(){
+  const sel=$('#kasaSelect');
+  if(!sel) return;
+  const spObj=getSpaceObj(currentSpace);
+  const visKasas=currentSpace==='all'?kasalarData:kasalarData.filter(k=>k.space===currentSpace);
+  const allLabel=spObj?`${spObj.icon} ${spObj.title} (${visKasas.length})`:`Tüm Kasalar (${kasalarData.length})`;
+  if(currentSpace!=='all'){
+    sel.innerHTML=`<option value="all">${escHtml(allLabel)}</option>`+
+      visKasas.map(k=>`<option value="${escHtml(k.key)}" ${currentKasa===k.key?'selected':''}>${escHtml(k.icon+' '+k.title)} (${k.counts?k.counts.total:0})</option>`).join('');
+  }else{
+    sel.innerHTML=renderKasaGroupOptions(currentKasa==='all'?'':currentKasa, allLabel).replace('value=""','value="all"');
+  }
+  sel.value=(currentKasa!=='all'&&visKasas.some(k=>k.key===currentKasa))?currentKasa:'all';
+}
+function selectSpaceFilter(spaceId,openHome=false){
+  currentSpace=spaceId||'all';
+  if(currentSpace!=='all'&&!getSpaceObj(currentSpace)) currentSpace='all';
+  if(currentKasa!=='all'){
+    const kObj=kasalarData.find(k=>k.key===currentKasa);
+    if(!kObj||(currentSpace!=='all'&&kObj.space!==currentSpace)) currentKasa='all';
+  }
+  renderKasaFilterSelect();
   rebuildTreeAndSources();
   renderTree();
   updateRightProps();
+  updateSideAiCtx();
   saveSessionTabs();
+  if(openHome){
+    layoutMode('kasalar');
+    openPage('kasalar');
+  }else if(active==='kasalar'){
+    renderMain();
+  }
+  scheduleRecordNavState();
 }
-function openKasalarHome(){
+function enterSpace(spaceId){
+  kasaSearchQ='';
+  currentKasa='all';
+  selectSpaceFilter(spaceId,true);
+}
+function setKasaViewMode(mode){
+  kasaViewMode=mode==='list'?'list':'grid';
+  try{ localStorage.setItem('agydesk_kview',kasaViewMode); }catch(e){}
+  if(active==='kasalar') renderMain();
+}
+function selectKasaFilter(val){
+  currentKasa=val||'all';
+  if(currentKasa!=='all'){
+    const kObj=kasalarData.find(k=>k.key===currentKasa);
+    if(kObj&&kObj.space&&currentSpace!=='all'&&kObj.space!==currentSpace) currentSpace=kObj.space;
+  }
+  renderKasaFilterSelect();
+  rebuildTreeAndSources();
+  renderTree();
+  updateRightProps();
+  updateSideAiCtx();
+  saveSessionTabs();
+  scheduleRecordNavState();
+}
+function openKasalarHome(resetSpace=false){
+  if(resetSpace){ currentSpace='all'; currentKasa='all'; renderKasaFilterSelect(); rebuildTreeAndSources(); renderTree(); saveSessionTabs(); }
   layoutMode('kasalar');
   openPage('kasalar');
 }
 function enterKasa(kasaKey,targetMode='write'){
   currentKasa=kasaKey;
-  const sel=$('#kasaSelect'); if(sel) sel.value=kasaKey;
+  const kObj=kasalarData.find(x=>x.key===kasaKey);
+  if(kObj&&kObj.space) currentSpace=kObj.space;
+  renderKasaFilterSelect();
   allSources.forEach(s=>{
     if(s.kasa===kasaKey && (s.rel.includes('00_')||s.rel.includes('TEK_PARCA')||s.ext==='.md')) checkedSources.add(s.rel);
   });
   rebuildTreeAndSources();
-  const kObj=kasalarData.find(x=>x.key===kasaKey);
   layoutMode(targetMode);
   if(kObj&&kObj.index_id){
     openPage(kObj.index_id);
   }else{
     renderTree(); renderTabs(); renderMain(); saveSessionTabs();
   }
+}
+function handleSpaceDragStart(ev,kasaKey){
+  draggedKasaKey=kasaKey;
+  if(ev.dataTransfer){ ev.dataTransfer.effectAllowed='move'; ev.dataTransfer.setData('text/plain',kasaKey); }
+  const card=ev.currentTarget;
+  if(card&&card.classList) setTimeout(()=>card.classList.add('dragging'),0);
+}
+function handleSpaceDragEnd(ev){
+  draggedKasaKey=null;
+  if(ev.currentTarget&&ev.currentTarget.classList) ev.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
+}
+function handleSpaceDragOver(ev,el){
+  if(!draggedKasaKey&&!(ev.dataTransfer&&ev.dataTransfer.types&&[...ev.dataTransfer.types].includes('text/plain'))) return;
+  ev.preventDefault();
+  if(ev.dataTransfer) ev.dataTransfer.dropEffect='move';
+  if(el&&el.classList) el.classList.add('drag-over');
+}
+function handleSpaceDragLeave(el){
+  if(el&&el.classList) el.classList.remove('drag-over');
+}
+async function handleSpaceDrop(ev,targetSpaceId){
+  ev.preventDefault();
+  document.querySelectorAll('.drag-over').forEach(x=>x.classList.remove('drag-over'));
+  const kasaKey=draggedKasaKey||(ev.dataTransfer?ev.dataTransfer.getData('text/plain'):'');
+  draggedKasaKey=null;
+  if(!kasaKey||!targetSpaceId||targetSpaceId==='all') return;
+  await moveKasaToSpace(kasaKey,targetSpaceId);
+}
+async function moveKasaToSpace(kasaKey,targetSpaceId){
+  const kObj=kasalarData.find(k=>k.key===kasaKey);
+  const spObj=getSpaceObj(targetSpaceId);
+  if(!kObj||!spObj) return;
+  const prevSpace=kObj.space;
+  if(prevSpace===targetSpaceId){ toast(`"${kObj.title}" zaten "${spObj.title}" alanında`); return; }
+  try{
+    await api('/api/kasa/update',{key:kasaKey,space:targetSpaceId});
+    await loadVault();
+    pushAppUndo({
+      label:`"${kObj.title}" → ${spObj.title} taşıma`,
+      undo:async()=>{ await api('/api/kasa/update',{key:kasaKey,space:prevSpace}); await loadVault(); },
+      redo:async()=>{ await api('/api/kasa/update',{key:kasaKey,space:targetSpaceId}); await loadVault(); }
+    });
+    toast(`📦 "${kObj.title}" → ${spObj.icon} ${spObj.title} alanına taşındı (Ctrl+Z: Geri al)`);
+  }catch(e){ alert('Kasa taşınamadı: '+e.message); }
 }
 
 async function loadVault(){
@@ -577,17 +968,22 @@ async function loadVault(){
     Object.assign(WIKI_MAP,v.wikimap||{});
     vaultTree=v.tree||[];
     kasalarData=v.kasalar||[];
+    spacesData=v.spaces||[];
+    rootDocsData=v.root_docs||[];
+    window.kasalarData=kasalarData;
+    window.spacesData=spacesData;
+    if(currentSpace!=='all'&&!spacesData.some(s=>s.id===currentSpace)) currentSpace='all';
     if(currentKasa!=='all'&&!kasalarData.some(k=>k.key===currentKasa)) currentKasa='all';
+    if(currentSpace!=='all'&&currentKasa!=='all'){
+      const ko=kasalarData.find(k=>k.key===currentKasa);
+      if(!ko||ko.space!==currentSpace) currentKasa='all';
+    }
     allSources=v.sources||[];
     backlinksMap=v.backlinks||{};
     if(!checkedSources.size){
       allSources.forEach(s=>{ if(s.checked) checkedSources.add(s.rel); });
     }
-    const sel=$('#kasaSelect');
-    if(sel){
-      sel.innerHTML=`<option value="all">Tüm Kasalar (${kasalarData.length})</option>`+
-        kasalarData.map(k=>`<option value="${k.key}" ${currentKasa===k.key?'selected':''}>${k.icon} ${k.title} (${k.counts.total})</option>`).join('');
-    }
+    renderKasaFilterSelect();
     rebuildTreeAndSources();
     renderTree(); renderTabs(); renderMain(); updateRightProps(); updateSideAiCtx(); saveSessionTabs();
   }catch(e){ console.error('loadVault error:',e); }
@@ -624,6 +1020,7 @@ function svgIcon(raw){
   if(raw==='∿') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M1.8 8c1.5-4.5 3.1-4.5 4.6 0s3.1 4.5 4.6 0 2.2-2.2 3.2 0"/></svg>';
   if(raw==='▦') return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.8" width="12" height="11.4" rx="2"/><path d="M2 5.8h12M5.2 1.6v2.2M10.8 1.6v2.2"/><text x="8" y="12.1" text-anchor="middle" fill="currentColor" stroke="none" font-size="6.2" font-weight="800" font-family="var(--mono)">${new Date().getDate()}</text></svg>`;
   if(raw==='◆') return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 2.2 13.8 8 8 13.8 2.2 8Z"/></svg>';
+  if(raw&&raw!=='📝'&&raw!=='📄'&&raw!=='🗒') return `<span style="font-size:13px;line-height:1">${escHtml(raw)}</span>`;
   return '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.2h5.5L12.5 5v8.8a1 1 0 0 1-1 1h-7.5a1 1 0 0 1-1-1V3.2a1 1 0 0 1 1-1Z"/><path d="M9.2 2.2V5.2h3.2M5.5 8h5M5.5 10.6h3.5"/></svg>';
 }
 function firstVaultTab(){
@@ -645,7 +1042,7 @@ function closeNotionTreeMenu(){
 }
 document.addEventListener('click',e=>{
   const menu=$('#notionTreeMenu');
-  if(menu&&menu.classList.contains('show')&&!menu.contains(e.target)&&!e.target.closest('.ti-more')) closeNotionTreeMenu();
+  if(menu&&menu.classList.contains('show')&&!menu.contains(e.target)&&!e.target.closest('.ti-more,.kcard-more,.scard-act-btn')) closeNotionTreeMenu();
 });
 function flattenFolderTargets(nodes=vaultTree,depth=0,out=[]){
   (nodes||[]).forEach(n=>{
@@ -660,7 +1057,7 @@ function flattenFolderTargets(nodes=vaultTree,depth=0,out=[]){
   });
   return out;
 }
-function openNotionTreeMenu(ev,target={}){
+function showTreeMenuItems(ev,label,items){
   ev.stopPropagation();
   const menu=$('#notionTreeMenu');
   if(!menu) return;
@@ -670,21 +1067,6 @@ function openNotionTreeMenu(ev,target={}){
   activeNotionMenuBtn=trigger;
   if(trigger&&trigger.classList) trigger.classList.add('open');
 
-  const resolvedRel=(target.rel||(target.kasa&&target.kasa!=='all'?target.kasa:'')||(kasalarData[0]?kasalarData[0].key:''));
-  const resolvedKasa=target.kasa&&target.kasa!=='all'?target.kasa:(resolvedRel?resolvedRel.split('/')[0]:(kasalarData[0]?kasalarData[0].key:''));
-  const label=target.label||(kasalarData.find(k=>k.key===resolvedKasa)||{}).title||'Çalışma Alanı';
-  const items=[];
-  if(resolvedRel){
-    items.push({icon:'📝',text:'Yeni Sayfa / Not Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewNoteModal(resolvedRel); }});
-    items.push({icon:'📁',text:'Yeni Alt Klasör Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewFolderModal(resolvedRel,label); }});
-    items.push({icon:'📎',text:'Belge / Fotoğraf Yükle',fn:()=>{ closeNotionTreeMenu(); triggerAssetUpload(resolvedRel); }});
-    if(target.isKasa&&resolvedKasa){
-      items.push({icon:'📖',text:'Kasa Ana İndeksini Aç',fn:()=>{ closeNotionTreeMenu(); enterKasa(resolvedKasa,'write'); }});
-    }
-    items.push({sep:true});
-  }
-  items.push({icon:'❖',text:'Yeni Açılır Kasa Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewKasaModal(); }});
-
   menu.innerHTML=`<div class="notion-tmenu-hdr"></div>`;
   menu.firstChild.textContent=label;
   menu.firstChild.title=label;
@@ -693,6 +1075,7 @@ function openNotionTreeMenu(ev,target={}){
     const b=document.createElement('button');
     b.type='button';
     b.className='notion-tmenu-item';
+    if(it.danger) b.style.color='var(--err,#f85149)';
     b.innerHTML=`<span class="mi">${it.icon}</span><span>${escHtml(it.text)}</span>`;
     b.onclick=e=>{ e.stopPropagation(); it.fn(); };
     menu.appendChild(b);
@@ -700,26 +1083,96 @@ function openNotionTreeMenu(ev,target={}){
 
   menu.classList.add('show');
   const rect=trigger&&trigger.getBoundingClientRect?trigger.getBoundingClientRect():{left:ev.clientX,right:ev.clientX,top:ev.clientY,bottom:ev.clientY};
-  const mw=menu.offsetWidth||230, mh=menu.offsetHeight||210;
+  const mw=menu.offsetWidth||240, mh=menu.offsetHeight||230;
   let left=Math.min(window.innerWidth-mw-10,Math.max(8,rect.right+6));
   if(rect.right+6+mw>window.innerWidth-8) left=Math.max(8,rect.left-mw-4);
   let top=Math.min(window.innerHeight-mh-10,Math.max(8,rect.top));
   menu.style.left=left+'px';
   menu.style.top=top+'px';
 }
+function openNotionTreeMenu(ev,target={}){
+  const resolvedRel=(target.rel||(target.kasa&&target.kasa!=='all'?target.kasa:'')||(kasalarData[0]?kasalarData[0].key:''));
+  const resolvedKasa=target.kasa&&target.kasa!=='all'?target.kasa:(resolvedRel?resolvedRel.split('/')[0]:(kasalarData[0]?kasalarData[0].key:''));
+  const kObj=kasalarData.find(k=>k.key===resolvedKasa);
+  const label=target.label||(kObj?kObj.title:'Çalışma Alanı');
+  const items=[];
+  if(resolvedRel){
+    items.push({icon:'📝',text:'Yeni Sayfa / Not Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewNoteModal(resolvedRel); }});
+    items.push({icon:'📁',text:'Yeni Alt Klasör Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewFolderModal(resolvedRel,label); }});
+    items.push({icon:'📎',text:'Belge / Fotoğraf Yükle',fn:()=>{ closeNotionTreeMenu(); triggerAssetUpload(resolvedRel); }});
+    if(target.isKasa&&resolvedKasa){
+      items.push({icon:'📖',text:'Kasa Ana İndeksini Aç',fn:()=>{ closeNotionTreeMenu(); enterKasa(resolvedKasa,'write'); }});
+      items.push({icon:'✎',text:'Kasa Ayarları / Alan Değiştir',fn:()=>{ closeNotionTreeMenu(); openEditKasaModal(resolvedKasa); }});
+    }
+    items.push({sep:true});
+  }
+  items.push({icon:'❖',text:'Yeni Çalışma Kasası Oluştur',fn:()=>{ closeNotionTreeMenu(); openNewKasaModal(); }});
+  items.push({icon:'🗂',text:'Yeni Çalışma Alanı Oluştur',fn:()=>{ closeNotionTreeMenu(); openSpaceModal(); }});
+  showTreeMenuItems(ev,label,items);
+}
+function openSpaceCardMenu(ev,spaceId){
+  const sp=getSpaceObj(spaceId);
+  if(!sp) return;
+  const items=[
+    {icon:'📂',text:'Bu Alanı Aç',fn:()=>{ closeNotionTreeMenu(); enterSpace(spaceId); }},
+    {icon:'❖',text:'Bu Alana Yeni Kasa Ekle',fn:()=>{ closeNotionTreeMenu(); openNewKasaModal(spaceId); }},
+    {icon:'✎',text:'Alanı Düzenle (Ad / İkon / Renk)',fn:()=>{ closeNotionTreeMenu(); openSpaceModal(spaceId); }},
+    {sep:true}
+  ];
+  if(spacesData.length>1){
+    items.push({icon:'🗑',text:'Alanı Sil (Kasalar Korunur)',danger:true,fn:()=>{ closeNotionTreeMenu(); deleteSpaceConfirm(spaceId); }});
+  }
+  showTreeMenuItems(ev,`${sp.icon} ${sp.title}`,items);
+}
+function openKasaCardMenu(ev,kasaKey){
+  const kObj=kasalarData.find(k=>k.key===kasaKey);
+  if(!kObj) return;
+  const items=[
+    {icon:'📖',text:'Kasayı Aç (Yaz & Düzenle)',fn:()=>{ closeNotionTreeMenu(); enterKasa(kasaKey,'write'); }},
+    {icon:'◈',text:'NotebookLM Çalışma Modu',fn:()=>{ closeNotionTreeMenu(); enterKasa(kasaKey,'study'); }},
+    {icon:'✎',text:'Kasayı Düzenle (Ad / İkon / Renk)',fn:()=>{ closeNotionTreeMenu(); openEditKasaModal(kasaKey); }},
+    {sep:true}
+  ];
+  spacesData.filter(sp=>sp.id!==kObj.space).forEach(sp=>{
+    items.push({icon:sp.icon||'🗂',text:`Taşı → ${sp.title}`,fn:()=>{ closeNotionTreeMenu(); moveKasaToSpace(kasaKey,sp.id); }});
+  });
+  if(spacesData.length>1) items.push({sep:true});
+  items.push({icon:'📎',text:'Bu Kasaya Dosya / Fotoğraf Yükle',fn:()=>{ closeNotionTreeMenu(); triggerAssetUpload(kasaKey); }});
+  items.push({icon:'📝',text:'Bu Kasaya Yeni Not Ekle',fn:()=>{ closeNotionTreeMenu(); openNewNoteModal(kasaKey); }});
+  showTreeMenuItems(ev,`${kObj.icon} ${kObj.title}`,items);
+}
 function renderTree(){
   const root=$('#tree'); root.innerHTML='';
   const build=(arr,host)=>arr.forEach(x=>{
     const d=document.createElement('div');
     const side=x.id&&isSideDoc(x.id);
-    const tk=x.rel||((x.id||'')+'|'+x.n);
+    const tk=x.spaceId?('space:'+x.spaceId):(x.rel||((x.id||'')+'|'+x.n));
     if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
-    const isRootKasa=Boolean(x.k&&x.rel&&!String(x.rel).includes('/'));
-    d.className='ti'+(x.k?' folder':'')+(isRootKasa?' root-kasa':'')+(x.open?' open':'')+(x.id===active?' on':'');
-    d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:x.n;
+    const isSpace=Boolean(x.spaceId);
+    const isRootKasa=Boolean(!isSpace&&x.k&&x.rel&&!String(x.rel).includes('/')&&x.rel!=='_root_docs');
+    d.className='ti'+(x.k?' folder':'')+(isSpace?' space-node':'')+(isRootKasa?' root-kasa':'')+(x.open?' open':'')+(x.id===active?' on':'');
+    if(isSpace&&x.accent) d.style.setProperty('--sp-acc',x.accent);
+    if(isSpace){
+      d.ondragover=e=>handleSpaceDragOver(e,d);
+      d.ondragleave=()=>handleSpaceDragLeave(d);
+      d.ondrop=e=>handleSpaceDrop(e,x.spaceId);
+    }else if(isRootKasa&&x.kasa){
+      d.draggable=true;
+      d.ondragstart=e=>handleSpaceDragStart(e,x.kasa);
+      d.ondragend=handleSpaceDragEnd;
+    }
+    d.title=side?`${x.n} (Tıkla: Sağda önizle · Çift tıkla: Sekmede aç)`:(isRootKasa?`${x.n} · Başka alana sürükleyebilirsin`:x.n);
     d.innerHTML=`<span class="car">${x.k?CHEV_SVG:''}</span><span class="tic">${svgIcon(x.i)}</span><span class="tn">${escHtml(x.n)}</span><span class="ti-act"></span>`;
     const act=d.querySelector('.ti-act');
-    if(x.k&&(x.rel||x.kasa)){
+    if(isSpace){
+      const more=document.createElement('button');
+      more.type='button';
+      more.className='ph-btn ti-more';
+      more.textContent='⋯';
+      more.title='Çalışma Alanı Seçenekleri';
+      more.onclick=e=>openSpaceCardMenu(e,x.spaceId);
+      act.appendChild(more);
+    }else if(x.k&&(x.rel||x.kasa)&&x.rel!=='_root_docs'){
       const more=document.createElement('button');
       more.type='button';
       more.className='ph-btn ti-more';
@@ -934,16 +1387,31 @@ function openPage(id,forceTab=false,opts={}){
   else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
   syncPdfSlotsWithTabs();
   renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
+  scheduleRecordNavState();
 }
-function closeTab(id){
+function closeTab(id,opts={}){
   if(isAI(id)){ closeSession(id); return; }
   const idx=openTabs.indexOf(id);
+  const pgTitle=(typeof pg==='function'?pg(id).t:id);
   openTabs=openTabs.filter(t=>t!==id);
   if(!openTabs.length)openTabs=['kasalar'];
   if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
   removePdfSlot(id);
+  if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'){
+    CLOSED_TABS.push({id,idx});
+    if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
+    pushAppUndo({
+      label:`"${pgTitle}" sekmesi`,
+      undo:async()=>{
+        if(!openTabs.includes(id)) openTabs.splice(Math.min(idx,openTabs.length),0,id);
+        openPage(id);
+      },
+      redo:async()=>{ closeTab(id,{silentUndo:true}); }
+    });
+  }
   renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
+  scheduleRecordNavState();
 }
 const isAI=id=>id.startsWith('ai');
 pages.studychat={t:'Sohbet',i:'❖'};
@@ -1460,62 +1928,11 @@ function fmtRelTime(ts){
   if(diff<86400) return `Bugün ${new Date(ts*1000).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}`;
   return new Date(ts*1000).toLocaleDateString('tr-TR',{day:'numeric',month:'short'});
 }
-function renderKasalarHome(m){
-  const q=kasaSearchQ.trim().toLowerCase();
-  const filtered=kasalarData.filter(k=>!q || k.title.toLowerCase().includes(q) || k.desc.toLowerCase().includes(q) || k.tag.toLowerCase().includes(q) || (k.previews||[]).some(p=>p.title.toLowerCase().includes(q)));
-  const totalNotes=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
-  const totalDocs=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
-
-  m.innerHTML=`<div class="khome">
-    <div class="khero">
-      <div>
-        <h1><span style="color:var(--cu)">❖</span> Atölye Kasaları</h1>
-        <p>NotebookLM tarzı ders ve proje çalışma kasaların · <b>${kasalarData.length} kasa</b>, <b>${totalNotes} not</b>, <b>${totalDocs} PDF/görsel kaynak</b> gerçek diske bağlı.</p>
-      </div>
-      <div class="kbar">
-        <input class="ksrch" id="kasaSrchIn" placeholder="Kasa veya ders notu ara…" value="${kasaSearchQ.replace(/"/g,'&quot;')}">
-        <button class="btn" style="padding:8px 14px" onclick="triggerAssetUpload()">📎 Dosyadan Belge / Fotoğraf Ekle</button>
-        <button class="hb" onclick="openNewNoteModal()">＋ Yeni Not</button>
-        <button class="hb" onclick="openNewKasaModal()">＋ Yeni Kasa Oluştur</button>
-      </div>
+function renderToolsGridHtml(){
+  return `<div class="ksect-hd" style="margin-top:34px">
+      <h2>⚡ Mühendislik Araçları &amp; Çalışma İstasyonları</h2>
+      <span class="ksect-sub">Anında geçiş</span>
     </div>
-
-    <div class="kgrid">
-      ${filtered.map(k=>`
-        <div class="kcard" style="--kacc:${k.accent||'#e0a458'}" onclick="enterKasa('${k.key}','write')">
-          <div class="kcard-top">
-            <div class="kcard-ic">${k.icon}</div>
-            <span class="kcard-tag">${k.tag}</span>
-          </div>
-          <div>
-            <h3>${k.title}</h3>
-            <div class="kcard-desc" style="margin-top:4px">${k.desc}</div>
-          </div>
-          <div class="kcard-previews">
-            ${(k.previews||[]).slice(0,3).map(p=>`
-              <div class="kprev" onclick="event.stopPropagation();currentKasa='${k.key}';rebuildTreeAndSources();openPage('${p.id}')" title="${p.title}">
-                <span>${p.icon}</span><span style="overflow:hidden;text-overflow:ellipsis">${p.title}</span>
-              </div>
-            `).join('')||'<div class="kprev" style="color:var(--mut)">Henüz not yok — tıklayıp ekle</div>'}
-          </div>
-          <div class="kcard-foot">
-            <span><b>${k.counts.total} kaynak</b> (${k.counts.notes} not${k.counts.docs?`, ${k.counts.docs} belge`:''}${k.counts.images?`, ${k.counts.images} görsel`:''}) · ${fmtRelTime(k.mtime)}</span>
-            <div class="kcard-acts" onclick="event.stopPropagation()">
-              <button onclick="triggerAssetUpload('${k.key}')" title="Bu kasaya bilgisayardan belge veya fotoğraf yükle">📎 Dosya Ekle</button>
-              <button onclick="openNewNoteModal('${k.key}')" title="Bu kasaya yeni not ekle">＋ Not</button>
-              <button onclick="enterKasa('${k.key}','study')" title="NotebookLM Çalışma Modunda Aç">◈ Çalış</button>
-            </div>
-          </div>
-        </div>
-      `).join('')}
-      <div class="kcard new-card" onclick="openNewKasaModal()">
-        <div style="font-size:28px;margin-bottom:4px">＋</div>
-        <b style="font-size:15px;color:var(--txt)">Yeni Kasa Oluştur</b>
-        <span style="font-size:12.5px;max-width:220px">Yeni bir ders, laboratuvar veya proje için Obsidian kasası klasörü aç</span>
-      </div>
-    </div>
-
-    <div class="ph" style="padding:0 0 10px;font-size:11.5px"><span>Mühendislik Araçları &amp; Çalışma Alanları</span></div>
     <div class="ktools">
       <div class="ktool" onclick="openPage('trafo')">
         <div class="ic">⚡</div>
@@ -1533,8 +1950,269 @@ function renderKasalarHome(m){
         <div class="ic">◆</div>
         <div><b>Tam Ekran AI İstasyonu</b><small>Çoklu oturum, agy CLI &amp; yerel modeller</small></div>
       </div>
+    </div>`;
+}
+function renderRootDocsHtml(docs){
+  if(!docs||!docs.length) return '';
+  return `<div class="ksect-hd">
+      <h2>📌 Ortak Kök Belgeler</h2>
+      <span class="ksect-sub">${docs.length} dosya</span>
+    </div>
+    <div class="rdocs">
+      ${docs.map(d=>{
+        const sp=getSpaceObj(d.space);
+        return `<button type="button" class="rdoc" onclick="openPage('${escHtml(d.id)}')" title="${escHtml(d.rel)}">
+          <span>${escHtml(d.icon||'📄')}</span>
+          <span>${escHtml(d.title)}</span>
+          ${sp?`<span class="rdoc-sp">${escHtml(sp.icon)} ${escHtml(sp.title)}</span>`:''}
+        </button>`;
+      }).join('')}
+    </div>`;
+}
+function renderKasaCardHtml(k,showSpaceBadge=false){
+  const sp=showSpaceBadge?getSpaceObj(k.space):null;
+  const counts=k.counts||{total:0,notes:0,docs:0,images:0};
+  return `<div class="kcard" draggable="true" ondragstart="handleSpaceDragStart(event,'${k.key}')" ondragend="handleSpaceDragEnd(event)" style="--kacc:${escHtml(k.accent||'#e0a458')}" onclick="enterKasa('${k.key}','write')">
+    <div class="kcard-top">
+      <div class="kcard-ic">${escHtml(k.icon||'📘')}</div>
+      <div class="kcard-head-actions">
+        ${sp?`<span class="kcard-space-pill" title="Bağlı Çalışma Alanı">${escHtml(sp.icon)} ${escHtml(sp.title)}</span>`:''}
+        <span class="kcard-tag">${escHtml(k.tag||'Çalışma Kasası')}</span>
+        <button type="button" class="kcard-more" title="Kasa seçenekleri, düzenle veya taşı" onclick="event.stopPropagation();openKasaCardMenu(event,'${k.key}')">⋯</button>
+      </div>
+    </div>
+    <div>
+      <h3>${escHtml(k.title)}</h3>
+      <div class="kcard-desc" style="margin-top:4px">${escHtml(k.desc||'')}</div>
+    </div>
+    <div class="kcard-previews">
+      ${(k.previews||[]).slice(0,3).map(p=>`
+        <div class="kprev" onclick="event.stopPropagation();currentKasa='${k.key}';${k.space?`currentSpace='${k.space}';`:''}rebuildTreeAndSources();openPage('${escHtml(p.id)}')" title="${escHtml(p.title)}">
+          <span>${escHtml(p.icon||'📄')}</span><span style="overflow:hidden;text-overflow:ellipsis">${escHtml(p.title)}</span>
+        </div>
+      `).join('')||'<div class="kprev" style="color:var(--mut)">Henüz not yok — tıklayıp ekle</div>'}
+    </div>
+    <div class="kcard-foot">
+      <span><b>${counts.total} kaynak</b> (${counts.notes} not${counts.docs?`, ${counts.docs} belge`:''}${counts.images?`, ${counts.images} görsel`:''}) · ${fmtRelTime(k.mtime)}</span>
+      <div class="kcard-acts" onclick="event.stopPropagation()">
+        <button onclick="triggerAssetUpload('${k.key}')" title="Bu kasaya bilgisayardan belge veya fotoğraf yükle">📎 Ekle</button>
+        <button onclick="openNewNoteModal('${k.key}')" title="Bu kasaya yeni not ekle">＋ Not</button>
+        <button onclick="enterKasa('${k.key}','study')" title="NotebookLM Çalışma Modunda Aç">◈ Çalış</button>
+      </div>
     </div>
   </div>`;
+}
+function renderKasaRowHtml(k,showSpaceBadge=false){
+  const sp=showSpaceBadge?getSpaceObj(k.space):null;
+  const counts=k.counts||{total:0,notes:0,docs:0,images:0};
+  return `<div class="krow" draggable="true" ondragstart="handleSpaceDragStart(event,'${k.key}')" ondragend="handleSpaceDragEnd(event)" style="--kacc:${escHtml(k.accent||'#e0a458')}" onclick="enterKasa('${k.key}','write')">
+    <div class="krow-ico">${escHtml(k.icon||'📘')}</div>
+    <div class="krow-main">
+      <div style="display:flex;align-items:center;gap:8px;min-width:0">
+        <span class="krow-title">${escHtml(k.title)}</span>
+        ${sp?`<span class="kcard-space-pill">${escHtml(sp.icon)} ${escHtml(sp.title)}</span>`:''}
+        <span class="kcard-tag">${escHtml(k.tag||'Kasa')}</span>
+      </div>
+      <div class="krow-sub">${escHtml(k.desc||'')}</div>
+    </div>
+    <div class="krow-stats">
+      <span>${counts.notes} not · ${counts.docs+counts.images} dosya</span>
+      <span>${fmtRelTime(k.mtime)}</span>
+    </div>
+    <div class="kcard-acts" onclick="event.stopPropagation()">
+      <button onclick="openNewNoteModal('${k.key}')" title="Yeni not ekle">＋ Not</button>
+      <button onclick="enterKasa('${k.key}','study')" title="Çalışma Modunda Aç">◈ Çalış</button>
+      <button class="kcard-more" onclick="openKasaCardMenu(event,'${k.key}')" title="Seçenekler">⋯</button>
+    </div>
+  </div>`;
+}
+function renderKasalarHome(m){
+  const q=kasaSearchQ.trim().toLowerCase();
+  const activeSpaceObj=currentSpace!=='all'?getSpaceObj(currentSpace):null;
+  const totalKasas=kasalarData.length;
+  const totalNotes=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
+  const totalDocs=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
+
+  if(q){
+    const kMatches=kasalarData.filter(k=>{
+      if(activeSpaceObj&&k.space!==activeSpaceObj.id) return false;
+      return k.title.toLowerCase().includes(q)
+        ||(k.desc||'').toLowerCase().includes(q)
+        ||(k.tag||'').toLowerCase().includes(q)
+        ||(k.previews||[]).some(p=>p.title.toLowerCase().includes(q));
+    });
+    const otherMatches=activeSpaceObj?kasalarData.filter(k=>k.space!==activeSpaceObj.id&&(
+      k.title.toLowerCase().includes(q)||(k.desc||'').toLowerCase().includes(q)||(k.tag||'').toLowerCase().includes(q)||(k.previews||[]).some(p=>p.title.toLowerCase().includes(q))
+    )):[];
+    const pageHits=Object.entries(pages)
+      .filter(([id,p])=>id.startsWith('note:')&&p&&(!activeSpaceObj||p.space===activeSpaceObj.id)&&((p.t||'').toLowerCase().includes(q)||(p.rel||'').toLowerCase().includes(q)))
+      .slice(0,10);
+
+    m.innerHTML=`<div class="khome">
+      ${activeSpaceObj?`<div class="snav">
+        <div class="snav-left">
+          <button type="button" class="snav-back" onclick="selectSpaceFilter('all')">← Tüm Alanlar</button>
+          <span class="spill on" style="--sp-acc:${escHtml(activeSpaceObj.accent||'#e0a458')}">${escHtml(activeSpaceObj.icon)} ${escHtml(activeSpaceObj.title)}</span>
+        </div>
+      </div>`:''}
+      <div class="khero">
+        <div>
+          <h1><span style="color:var(--cu)">🔎</span> Arama Sonuçları</h1>
+          <p>"<b>${escHtml(kasaSearchQ)}</b>" için ${activeSpaceObj?`<b>${escHtml(activeSpaceObj.title)}</b> alanında`:'tüm alanlarda'} <b>${kMatches.length} kasa</b>, <b>${pageHits.length} doğrudan not/belge</b> bulundu.</p>
+        </div>
+        <div class="kbar">
+          <input class="ksrch" id="kasaSrchIn" placeholder="Alan, kasa veya not ara…" value="${escHtml(kasaSearchQ)}">
+          <button class="hb" onclick="kasaSearchQ='';renderKasalarHome($('#main'))">✕ Temizle</button>
+        </div>
+      </div>
+      ${kMatches.length?`<div class="ksect-hd"><h2>❖ Eşleşen Kasalar</h2><span class="ksect-sub">${kMatches.length}</span></div>
+        <div class="kgrid">${kMatches.map(k=>renderKasaCardHtml(k,true)).join('')}</div>`
+      :`<div class="scard-empty" style="margin-bottom:24px"><span>Bu alanda "${escHtml(kasaSearchQ)}" ile eşleşen kasa yok.</span>${activeSpaceObj?`<button class="hb" onclick="selectSpaceFilter('all')">Tüm Alanlarda Ara</button>`:''}</div>`}
+      ${pageHits.length?`<div class="ksect-hd"><h2>📄 Doğrudan Eşleşen Not &amp; Belgeler</h2><span class="ksect-sub">${pageHits.length}</span></div>
+        <div class="rdocs">${pageHits.map(([id,p])=>`<button type="button" class="rdoc" onclick="${p.kasa?`currentKasa='${p.kasa}';${p.space?`currentSpace='${p.space}';`:''}rebuildTreeAndSources();`:''}openPage('${escHtml(id)}')"><span>${escHtml(p.i||'📄')}</span><span>${escHtml(p.t||id)}</span><span class="rdoc-sp">${escHtml(p.folder||'Ortak')}</span></button>`).join('')}</div>`:''}
+      ${otherMatches.length?`<div class="ksect-hd"><h2>🗂 Diğer Alanlardaki Eşleşmeler</h2><span class="ksect-sub">${otherMatches.length}</span></div>
+        <div class="kgrid">${otherMatches.map(k=>renderKasaCardHtml(k,true)).join('')}</div>`:''}
+    </div>`;
+  }else if(!activeSpaceObj){
+    /* ---- SEVİYE 1: ÇALIŞMA ALANLARI (Dönem 7, Dönem 8, Belgeler & Arşiv, Özel Alanlar) ---- */
+    m.innerHTML=`<div class="khome">
+      <div class="khero">
+        <div>
+          <h1><span style="color:var(--cu)">❖</span> Çalışma Alanları</h1>
+          <p>Derslerini ve belgelerini dönem ve türe göre düzenli tut · <b>${spacesData.length} alan</b>, <b>${totalKasas} kasa</b>, <b>${totalNotes} not</b>, <b>${totalDocs} kaynak</b>.</p>
+        </div>
+        <div class="kbar">
+          <input class="ksrch" id="kasaSrchIn" placeholder="Alan, kasa veya ders notu ara…" value="">
+          <button class="btn" style="padding:8px 14px" onclick="openSpaceModal()">＋ Yeni Alan</button>
+          <button class="hb" onclick="openNewKasaModal()">＋ Yeni Kasa</button>
+          <button class="hb" onclick="triggerAssetUpload()" title="Aktif kasaya belge/fotoğraf yükle">📎 Belge Ekle</button>
+        </div>
+      </div>
+
+      <div class="ksect-hd">
+        <h2>🗂 Çalışma Alanların (${spacesData.length})</h2>
+        <span class="kdrag-hint">Alan kartına tıkla → içindeki kasaları gör</span>
+      </div>
+      <div class="sgrid">
+        ${spacesData.map(sp=>{
+          const spKasas=kasalarData.filter(k=>k.space===sp.id);
+          const sc=sp.counts||{total:0,notes:0,docs:0,images:0};
+          const chipsHtml=spKasas.length
+            ? spKasas.slice(0,5).map(k=>`
+                <button type="button" class="skchip" style="--kchip-acc:${escHtml(k.accent||sp.accent||'#e0a458')}" onclick="event.stopPropagation();enterKasa('${k.key}','write')" title="${escHtml(k.title)} (${k.counts?k.counts.total:0} kaynak)">
+                  <span>${escHtml(k.icon||'📘')}</span>
+                  <span>${escHtml(k.title)}</span>
+                </button>
+              `).join('') + (spKasas.length>5?`<span class="skchip-more">+${spKasas.length-5} kasa daha</span>`:'')
+            : `<div class="scard-empty"><span>Henüz kasa eklenmemiş</span><button type="button" class="hb" style="padding:3px 9px;font-size:11px" onclick="event.stopPropagation();openNewKasaModal('${escHtml(sp.id)}')">＋ Kasa Ekle</button></div>`;
+          return `<div class="scard" style="--sp-acc:${escHtml(sp.accent||'#e0a458')}" onclick="enterSpace('${escHtml(sp.id)}')" ondragover="handleSpaceDragOver(event,this)" ondragleave="handleSpaceDragLeave(this)" ondrop="handleSpaceDrop(event,'${escHtml(sp.id)}')">
+            <div class="scard-top">
+              <div class="scard-id">
+                <div class="scard-ico">${escHtml(sp.icon||'🗂')}</div>
+                <div class="scard-titles">
+                  <div class="scard-tag">${escHtml(sp.tag||'Çalışma Alanı')}</div>
+                  <div class="scard-title">${escHtml(sp.title)}</div>
+                </div>
+              </div>
+              <button type="button" class="scard-act-btn" title="Alan seçenekleri (Düzenle / Kasa Ekle)" onclick="event.stopPropagation();openSpaceCardMenu(event,'${escHtml(sp.id)}')">⋯</button>
+            </div>
+            <div class="scard-desc">${escHtml(sp.desc||'')}</div>
+            <div class="scard-chips">${chipsHtml}</div>
+            <div class="scard-foot">
+              <div class="scard-stat">
+                <span><b>${spKasas.length}</b> kasa</span>
+                <span>·</span>
+                <span><b>${sc.notes}</b> not</span>
+                ${(sc.docs+sc.images)?`<span>·</span><span><b>${sc.docs+sc.images}</b> kaynak</span>`:''}
+              </div>
+              <span class="scard-go">Alana Gir →</span>
+            </div>
+          </div>`;
+        }).join('')}
+        <div class="scard new-card" onclick="openSpaceModal()">
+          <div style="font-size:26px;margin-bottom:4px;color:var(--cu)">＋</div>
+          <b style="font-size:15px;color:var(--txt)">Yeni Çalışma Alanı Ekle</b>
+          <span style="font-size:12.5px;color:var(--mut);max-width:230px">Örn. Dönem 8, Staj Dosyaları, Bitirme Projesi veya Sertifikalar</span>
+        </div>
+      </div>
+
+      ${renderRootDocsHtml(rootDocsData)}
+      ${renderToolsGridHtml()}
+    </div>`;
+  }else{
+    /* ---- SEVİYE 2: SEÇİLİ ÇALIŞMA ALANI İÇİNDEKİ KASALAR ---- */
+    const sp=activeSpaceObj;
+    const spKasas=kasalarData.filter(k=>k.space===sp.id);
+    const spNotes=spKasas.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
+    const spDocs=spKasas.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
+    const spRoots=rootDocsData.filter(d=>d.space===sp.id);
+
+    const pillsHtml=spacesData.map(s=>`
+      <button type="button" class="spill ${s.id===sp.id?'on':''}" style="--sp-acc:${escHtml(s.accent||'#e0a458')}" onclick="enterSpace('${escHtml(s.id)}')" ondragover="handleSpaceDragOver(event,this)" ondragleave="handleSpaceDragLeave(this)" ondrop="handleSpaceDrop(event,'${escHtml(s.id)}')" title="${escHtml(s.title)} · Kasayı buraya sürükleyip taşıyabilirsin">
+        <span>${escHtml(s.icon||'🗂')}</span>
+        <span>${escHtml(s.title)}</span>
+        <span class="spill-cnt">${s.count_kasas||0}</span>
+      </button>
+    `).join('')+`<button type="button" class="spill" onclick="openSpaceModal()" title="Yeni Çalışma Alanı Oluştur">＋ Yeni Alan</button>`;
+
+    const cardsHtml=spKasas.length
+      ? (kasaViewMode==='list'
+          ? `<div class="klist">${spKasas.map(k=>renderKasaRowHtml(k,false)).join('')}</div>`
+          : `<div class="kgrid">
+              ${spKasas.map(k=>renderKasaCardHtml(k,false)).join('')}
+              <div class="kcard new-card" onclick="openNewKasaModal('${escHtml(sp.id)}')">
+                <div style="font-size:28px;margin-bottom:4px">＋</div>
+                <b style="font-size:15px;color:var(--txt)">${escHtml(sp.title)} Alanına Kasa Ekle</b>
+                <span style="font-size:12.5px;max-width:220px">Yeni ders, laboratuvar, proje veya belge kasası oluştur</span>
+              </div>
+            </div>`)
+      : `<div class="scard" style="--sp-acc:${escHtml(sp.accent||'#e0a458')};align-items:center;text-align:center;padding:38px 24px;margin-bottom:28px;cursor:default">
+          <div class="scard-ico" style="width:56px;height:56px;font-size:28px">${escHtml(sp.icon||'🗂')}</div>
+          <div>
+            <div style="font-size:18px;font-weight:650;color:var(--txt)">${escHtml(sp.title)} henüz boş</div>
+            <div style="color:var(--mut);font-size:13px;max-width:440px;margin-top:6px">Buraya yeni bir kasa ekleyebilir, başka bir alandaki kasayı yukarıdaki haplardan bu alana taşıyabilir veya doğrudan belge yükleyebilirsin.</div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px">
+            <button type="button" class="btn" style="padding:8px 16px" onclick="openNewKasaModal('${escHtml(sp.id)}')">＋ Bu Alana İlk Kasayı Ekle</button>
+            <button type="button" class="hb" onclick="triggerSpaceUpload('${escHtml(sp.id)}')">📎 Doğrudan Belge / Görsel Ekle</button>
+          </div>
+        </div>`;
+
+    m.innerHTML=`<div class="khome">
+      <div class="snav">
+        <div class="snav-left">
+          <button type="button" class="snav-back" onclick="selectSpaceFilter('all',true)">← Tüm Alanlar</button>
+          <div class="snav-pills">${pillsHtml}</div>
+        </div>
+        <div class="vmode" title="Görünüm Modu">
+          <button type="button" class="${kasaViewMode!=='list'?'on':''}" onclick="setKasaViewMode('grid')">⊞ Kart</button>
+          <button type="button" class="${kasaViewMode==='list'?'on':''}" onclick="setKasaViewMode('list')">☰ Liste</button>
+        </div>
+      </div>
+
+      <div class="khero">
+        <div>
+          <h1><span>${escHtml(sp.icon||'🗂')}</span> ${escHtml(sp.title)} <span class="scard-tag" style="--sp-acc:${escHtml(sp.accent||'#e0a458')};margin:0;vertical-align:middle">${escHtml(sp.tag||'Alan')}</span></h1>
+          <p>${escHtml(sp.desc||'')} · <b>${spKasas.length} kasa</b>, <b>${spNotes} not</b>, <b>${spDocs} PDF/görsel kaynak</b>.</p>
+        </div>
+        <div class="kbar">
+          <input class="ksrch" id="kasaSrchIn" placeholder="Bu alanda kasa veya not ara…" value="">
+          <button class="hb" onclick="openSpaceModal('${escHtml(sp.id)}')">✎ Alanı Düzenle</button>
+          <button class="hb" onclick="triggerSpaceUpload('${escHtml(sp.id)}')">📎 Belge Ekle</button>
+          <button class="btn" style="padding:8px 14px" onclick="openNewKasaModal('${escHtml(sp.id)}')">＋ Yeni Kasa</button>
+        </div>
+      </div>
+
+      <div class="ksect-hd">
+        <h2>❖ Kasalar (${spKasas.length})</h2>
+        ${spKasas.length?`<span class="kdrag-hint">İpucu: Kartı üstteki başka bir alan hapına sürükleyerek taşıyabilirsin</span>`:''}
+      </div>
+      ${cardsHtml}
+      ${renderRootDocsHtml(spRoots)}
+      ${renderToolsGridHtml()}
+    </div>`;
+  }
+
   const sIn=$('#kasaSrchIn');
   if(sIn){
     sIn.oninput=e=>{ kasaSearchQ=e.target.value; renderKasalarHome(m); const el=$('#kasaSrchIn'); if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);} };
@@ -1544,24 +2222,130 @@ function renderKasalarHome(m){
 function closeKasaModal(){ $('#kasaModal').classList.remove('show'); }
 $('#kasaModal').onclick=e=>{ if(e.target.id==='kasaModal') closeKasaModal(); };
 
-function openNewKasaModal(){
+function openSpaceModal(spaceId=null){
+  const existing=spaceId?getSpaceObj(spaceId):null;
+  const box=$('#kasaModalBox');
+  box.innerHTML=`
+    <h3>${existing?`✎ Çalışma Alanını Düzenle · ${escHtml(existing.title)}`:'🗂 Yeni Çalışma Alanı Oluştur'}</h3>
+    <label>Alan Adı
+      <input id="msTitle" placeholder="ör. Dönem 8, Staj & Başvuru, Bitirme Projesi" value="${escHtml(existing?existing.title:'')}">
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label>İkon Seç
+        <select id="msIcon">${renderIconOptions(existing?existing.icon:'🗂')}</select>
+      </label>
+      <label>Kısa Etiket
+        <input id="msTag" placeholder="ör. EEM · 8. Dönem" value="${escHtml(existing?existing.tag:'Çalışma Alanı')}">
+      </label>
+    </div>
+    <label>Vurgu Rengi
+      ${renderAccentSwatches('msAccent',existing?existing.accent:'#79c0ff')}
+    </label>
+    <label>Kısa Açıklama
+      <textarea id="msDesc" rows="2" placeholder="Bu alanda toplanacak ders kasaları veya belge türleri…">${escHtml(existing?existing.desc:'')}</textarea>
+    </label>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px">
+      ${(existing&&spacesData.length>1)?`<button class="hb" style="color:var(--err,#f85149);border-color:color-mix(in srgb,var(--err,#f85149) 40%,var(--line))" onclick="deleteSpaceConfirm('${escHtml(existing.id)}')">🗑 Alanı Sil</button>`:'<span></span>'}
+      <div style="display:flex;gap:8px">
+        <button class="hb" onclick="closeKasaModal()">İptal</button>
+        <button class="btn" style="padding:7px 16px" onclick="submitSpace(${existing?`'${escHtml(existing.id)}'`:'null'})">${existing?'Değişiklikleri Kaydet':'Alanı Oluştur'}</button>
+      </div>
+    </div>`;
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>{ const el=$('#msTitle'); if(el){ el.focus(); el.onkeydown=e=>{ if(e.key==='Enter') submitSpace(existing?existing.id:null); }; } },50);
+}
+async function submitSpace(spaceId=null){
+  const title=$('#msTitle').value.trim();
+  const icon=$('#msIcon').value;
+  const tag=$('#msTag').value.trim();
+  const accent=$('#msAccent').value.trim()||'#e0a458';
+  const desc=$('#msDesc').value.trim();
+  if(!title){ $('#msTitle').focus(); return; }
+  const prev=spaceId?getSpaceObj(spaceId):null;
+  const prevCopy=prev?{id:prev.id,title:prev.title,icon:prev.icon,accent:prev.accent,tag:prev.tag,desc:prev.desc}:null;
+  try{
+    const res=await api('/api/space',{id:spaceId||undefined,title,icon,accent,tag,desc});
+    let activeId=res.id;
+    pushAppUndo({
+      label:prevCopy?`"${prevCopy.title}" alan düzenlemesi`:`"${res.title}" alanını oluşturma`,
+      undo:async()=>{
+        if(prevCopy){
+          await api('/api/space',prevCopy);
+        }else{
+          await api('/api/space?id='+encodeURIComponent(activeId),null,'DELETE');
+          if(currentSpace===activeId) currentSpace='all';
+        }
+        await loadVault();
+      },
+      redo:async()=>{
+        const saved=await api('/api/space',{id:prevCopy?prevCopy.id:undefined,title,icon,accent,tag,desc});
+        activeId=saved.id;
+        await loadVault();
+      }
+    });
+    closeKasaModal();
+    await loadVault();
+    enterSpace(res.id);
+    toast(`🗂 "${res.title}" çalışma alanı kaydedildi`);
+  }catch(e){ alert('Çalışma alanı kaydedilemedi: '+e.message); }
+}
+async function deleteSpaceConfirm(spaceId){
+  const sp=getSpaceObj(spaceId);
+  if(!sp) return;
+  if(!confirm(`"${sp.title}" çalışma alanı kaldırılsın mı?\n\nBu alandaki kasalar ve dosyalar ASLA silinmez; varsayılan başka bir alana güvenle aktarılır.`)) return;
+  const spCopy={title:sp.title,icon:sp.icon,accent:sp.accent,tag:sp.tag,desc:sp.desc};
+  const affectedKeys=kasalarData.filter(k=>k.space===spaceId).map(k=>k.key);
+  try{
+    const res=await api('/api/space?id='+encodeURIComponent(spaceId),null,'DELETE');
+    let restoredId=null;
+    pushAppUndo({
+      label:`"${spCopy.title}" alanını geri alma`,
+      undo:async()=>{
+        const created=await api('/api/space',spCopy);
+        restoredId=created.id;
+        for(const key of affectedKeys){
+          await api('/api/kasa/update',{key,space:restoredId});
+        }
+        await loadVault();
+        enterSpace(restoredId);
+      },
+      redo:async()=>{
+        const delId=restoredId||spaceId;
+        await api('/api/space?id='+encodeURIComponent(delId),null,'DELETE');
+        if(currentSpace===delId) currentSpace='all';
+        await loadVault();
+      }
+    });
+    closeKasaModal();
+    if(currentSpace===spaceId) currentSpace=res.fallback||'all';
+    await loadVault();
+    toast(`🗂 "${sp.title}" kaldırıldı (Ctrl+Z: Geri al)`);
+  }catch(e){ alert('Alan silinemedi: '+e.message); }
+}
+
+function openNewKasaModal(defaultSpaceId=null){
+  const prefSpace=defaultSpaceId||(currentSpace!=='all'?currentSpace:(spacesData[0]?spacesData[0].id:'belgeler'));
   const box=$('#kasaModalBox');
   box.innerHTML=`
     <h3>❖ Yeni Çalışma Kasası Oluştur</h3>
-    <label>Kasa / Ders Adı
-      <input id="mkTitle" placeholder="ör. Güç Elektroniği veya Mikroişlemciler Lab">
-    </label>
-    <label>Etiket (Kısa Kategori)
-      <input id="mkTag" placeholder="ör. EEM · Dönem 5" value="Çalışma Kasası">
-    </label>
-    <label>İkon Seç
-      <select id="mkIcon">
-        <option value="📘">📘 Ders Kasası</option>
-        <option value="⚡">⚡ Elektrik &amp; Enerji</option>
-        <option value="∿">∿ Kontrol &amp; Sinyal</option>
-        <option value="🛰">🛰 Tasarım &amp; Yapay Zeka</option>
-        <option value="🌩">🌩 Yüksek Gerilim</option>
+    <label>Bağlı Çalışma Alanı
+      <select id="mkSpace">
+        ${spacesData.map(sp=>`<option value="${escHtml(sp.id)}" ${sp.id===prefSpace?'selected':''}>${escHtml(sp.icon||'🗂')} ${escHtml(sp.title)}</option>`).join('')}
       </select>
+    </label>
+    <label>Kasa / Ders / Belge Grubu Adı
+      <input id="mkTitle" placeholder="ör. Güç Elektroniği, Bitirme Projesi veya Sertifikalar">
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label>İkon Seç
+        <select id="mkIcon">${renderIconOptions('📘')}</select>
+      </label>
+      <label>Etiket (Kısa Kategori)
+        <input id="mkTag" placeholder="ör. EEM · Dönem 8" value="Çalışma Kasası">
+      </label>
+    </div>
+    <label>Kart Rengi
+      ${renderAccentSwatches('mkAccent',(getSpaceObj(prefSpace)||{}).accent||'#e0a458')}
     </label>
     <label>Kısa Açıklama
       <textarea id="mkDesc" rows="2" placeholder="Bu kasada tutulacak ders notları, deney föyleri ve kaynaklar…"></textarea>
@@ -1578,9 +2362,11 @@ async function submitNewKasa(){
   const tag=$('#mkTag').value.trim();
   const icon=$('#mkIcon').value;
   const desc=$('#mkDesc').value.trim();
+  const space=$('#mkSpace')?$('#mkSpace').value:'';
+  const accent=$('#mkAccent')?$('#mkAccent').value:'#e0a458';
   if(!title){ $('#mkTitle').focus(); return; }
   try{
-    const res=await api('/api/kasa',{title,tag,icon,desc});
+    const res=await api('/api/kasa',{title,tag,icon,desc,space,accent});
     closeKasaModal();
     await loadVault();
     enterKasa(res.key,'write');
@@ -1588,9 +2374,78 @@ async function submitNewKasa(){
   }catch(e){ alert('Kasa oluşturulamadı: '+e.message); }
 }
 
+function openEditKasaModal(kasaKey){
+  const kObj=kasalarData.find(k=>k.key===kasaKey);
+  if(!kObj) return;
+  const box=$('#kasaModalBox');
+  box.innerHTML=`
+    <h3>✎ Kasayı Düzenle · ${escHtml(kObj.title)}</h3>
+    <label>Çalışma Alanı (Kasa Taşıma)
+      <select id="ekSpace">
+        ${spacesData.map(sp=>`<option value="${escHtml(sp.id)}" ${sp.id===kObj.space?'selected':''}>${escHtml(sp.icon||'🗂')} ${escHtml(sp.title)}</option>`).join('')}
+      </select>
+    </label>
+    <label>Görünen Kasa Adı
+      <input id="ekTitle" value="${escHtml(kObj.title)}">
+    </label>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <label>İkon Seç
+        <select id="ekIcon">${renderIconOptions(kObj.icon||'📘')}</select>
+      </label>
+      <label>Etiket
+        <input id="ekTag" value="${escHtml(kObj.tag||'')}">
+      </label>
+    </div>
+    <label>Kart Rengi
+      ${renderAccentSwatches('ekAccent',kObj.accent||'#e0a458')}
+    </label>
+    <label>Kısa Açıklama
+      <textarea id="ekDesc" rows="2">${escHtml(kObj.desc||'')}</textarea>
+    </label>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+      <button class="hb" onclick="closeKasaModal()">İptal</button>
+      <button class="btn" style="padding:7px 16px" onclick="submitEditKasa('${kasaKey}')">Kaydet</button>
+    </div>`;
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>$('#ekTitle').focus(),50);
+}
+async function submitEditKasa(kasaKey){
+  const title=$('#ekTitle').value.trim();
+  const space=$('#ekSpace').value;
+  const icon=$('#ekIcon').value;
+  const tag=$('#ekTag').value.trim();
+  const accent=$('#ekAccent').value.trim();
+  const desc=$('#ekDesc').value.trim();
+  if(!title){ $('#ekTitle').focus(); return; }
+  const prevObj=kasalarData.find(k=>k.key===kasaKey);
+  const prevMeta=prevObj?{key:kasaKey,title:prevObj.title,space:prevObj.space,icon:prevObj.icon,tag:prevObj.tag,accent:prevObj.accent,desc:prevObj.desc}:null;
+  const nextMeta={key:kasaKey,title,space,icon,tag,accent,desc};
+  try{
+    await api('/api/kasa/update',nextMeta);
+    if(prevMeta){
+      pushAppUndo({
+        label:`"${prevMeta.title}" kasa düzenlemesi`,
+        undo:async()=>{ await api('/api/kasa/update',prevMeta); await loadVault(); },
+        redo:async()=>{ await api('/api/kasa/update',nextMeta); await loadVault(); }
+      });
+    }
+    closeKasaModal();
+    await loadVault();
+    toast(`❖ "${title}" güncellendi (Ctrl+Z: Geri al)`);
+  }catch(e){ alert('Kasa güncellenemedi: '+e.message); }
+}
+
+function defaultTargetInScope(){
+  if(currentKasa!=='all') return currentKasa;
+  if(currentSpace!=='all'){
+    const spKasa=kasalarData.find(k=>k.space===currentSpace);
+    if(spKasa) return spKasa.key;
+  }
+  return '';
+}
 function openNewFolderModal(defaultParent,parentLabel){
   const targets=flattenFolderTargets();
-  const fallbackParent=defaultParent||(currentKasa!=='all'?currentKasa:(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab'));
+  const fallbackParent=defaultParent||defaultTargetInScope()||(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab');
   const box=$('#kasaModalBox');
   box.innerHTML=`
     <h3>📁 Yeni Açılır Klasör Oluştur</h3>
@@ -1629,7 +2484,7 @@ async function submitNewFolder(){
 
 function openNewNoteModal(defaultTarget){
   const targets=flattenFolderTargets();
-  const targetRel=defaultTarget||(currentKasa!=='all'?currentKasa:(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab'));
+  const targetRel=defaultTarget||defaultTargetInScope()||(targets[0]?targets[0].rel:'Elektrik_Makineleri_Lab');
   const box=$('#kasaModalBox');
   const opts=targets.length
     ? targets.map(t=>`<option value="${t.rel}" ${t.rel===targetRel?'selected':''}>${'  '.repeat(t.depth)}${t.depth?'└─ 📁 ':'❖ '}${escHtml(t.label)}</option>`).join('')
@@ -1684,25 +2539,55 @@ async function submitNewNote(){
 }
 
 let pendingUploadTarget=null;
+let pendingSpaceUpload=null;
 function triggerAssetUpload(targetKasaOrRel){
   pendingUploadTarget=targetKasaOrRel||null;
+  pendingSpaceUpload=null;
+  const inp=$('#hiddenFileIn');
+  if(inp){ inp.value=''; inp.click(); }
+}
+function triggerSpaceUpload(spaceId){
+  pendingSpaceUpload=spaceId||null;
+  pendingUploadTarget=null;
   const inp=$('#hiddenFileIn');
   if(inp){ inp.value=''; inp.click(); }
 }
 async function handleGlobalUpload(fileList){
   if(!fileList||!fileList.length) return;
   const explicitTarget=pendingUploadTarget;
+  const spaceUploadId=pendingSpaceUpload;
   pendingUploadTarget=null;
-  const attachToNote=explicitTarget
-    ?(String(explicitTarget).startsWith('note:')?explicitTarget:null)
-    :(String(active).startsWith('note:')?active:null);
-  const targetRel=attachToNote
-    ?attachToNote.slice(5)
-    :(explicitTarget||(currentKasa!=='all'?currentKasa:(kasalarData[0]?kasalarData[0].key:'')));
+  pendingSpaceUpload=null;
   try{
+    let targetRel='';
+    const attachToNote=explicitTarget
+      ?(String(explicitTarget).startsWith('note:')?explicitTarget:null)
+      :(!spaceUploadId&&String(active).startsWith('note:')?active:null);
     if(attachToNote){
       await dropImagesToNote(attachToNote,[...fileList]);
       return;
+    }
+    if(explicitTarget){
+      targetRel=explicitTarget;
+    }else if(spaceUploadId){
+      const existingKasa=kasalarData.find(k=>k.space===spaceUploadId);
+      if(existingKasa){
+        targetRel=existingKasa.key;
+      }else{
+        const sp=getSpaceObj(spaceUploadId);
+        const defTitle=spaceUploadId==='belgeler'?'Genel Belgeler':`${sp?sp.title:spaceUploadId} Belgeleri`;
+        const created=await api('/api/kasa',{
+          title:defTitle,
+          tag:sp?sp.tag:'Çalışma Kasası',
+          icon:sp?sp.icon:'🗂',
+          accent:sp?sp.accent:'#7bc47f',
+          space:spaceUploadId,
+          desc:`${sp?sp.title:'Çalışma alanı'} belgeleri ve kaynakları.`
+        });
+        targetRel=created.key;
+      }
+    }else{
+      targetRel=defaultTargetInScope()||(kasalarData[0]?kasalarData[0].key:'');
     }
     const uploaded=[];
     for(const f of fileList){
@@ -1752,17 +2637,49 @@ async function deleteActiveNote(id){
   if(!String(id).startsWith('note:')) return;
   const rel=id.slice(5);
   if(!confirm(`"${rel}" dosyasını kasadan silmek istediğine emin misin?`)) return;
+  const ext=rel.includes('.')?rel.slice(rel.lastIndexOf('.')).toLowerCase():'';
+  const restorableText=['.md','.txt','.html','.csv'].includes(ext);
+  let backupContent=null;
+  if(restorableText){
+    if(noteCache[id]&&typeof noteCache[id].content==='string'){
+      backupContent=noteCache[id].content;
+    }else{
+      try{
+        const loaded=await api('/api/note?rel='+encodeURIComponent(rel));
+        if(loaded&&typeof loaded.content==='string') backupContent=loaded.content;
+      }catch(e){}
+    }
+  }
   try{
     await api('/api/note?rel='+encodeURIComponent(rel),null,'DELETE');
     delete noteCache[id];
     delete pages[id];
     checkedSources.delete(rel);
-    closeTab(id);
+    closeTab(id,{silentUndo:true});
     if(typeof rvCurrentRel!=='undefined'&&rvCurrentRel===rel&&viewerPrev) closeRightViewer();
     await loadVault();
     renderTree();
     if(String(active).startsWith('note:')||openTabs.length) try{renderMain()}catch(e){}
-    toast(`🗑 Silindi: ${rel}`);
+    if(restorableText&&backupContent!==null){
+      pushAppUndo({
+        label:`"${rel.split('/').pop()}" dosyasını geri yükle`,
+        undo:async()=>{
+          noteCache[id]=await api('/api/note',{rel,content:backupContent});
+          await loadVault();
+          openPage(id);
+        },
+        redo:async()=>{
+          await api('/api/note?rel='+encodeURIComponent(rel),null,'DELETE');
+          delete noteCache[id];
+          delete pages[id];
+          closeTab(id,{silentUndo:true});
+          await loadVault();
+        }
+      });
+      toast(`🗑 Silindi: ${rel} (Ctrl+Z: Geri yükle)`);
+    }else{
+      toast(`🗑 Silindi: ${rel}`);
+    }
   }catch(e){ alert('Silinemedi: '+e.message); }
 }
 
@@ -1819,12 +2736,15 @@ function updateRightProps(){
     `;
   }else{
     const kObj=kasalarData.find(k=>k.key===currentKasa);
+    const spObj=getSpaceObj(currentSpace)||(kObj?getSpaceObj(kObj.space):null);
+    const visKasas=currentSpace==='all'?kasalarData:kasalarData.filter(k=>k.space===currentSpace);
     host.innerHTML=`
-      <div class="src" style="margin:0"><span>Görünüm</span><b class="mono">${pg(active).t}</b></div>
-      <div class="src" style="margin:0"><span>Aktif Kasa</span><b class="mono" style="color:var(--cu)">${kObj?kObj.title:'Tüm Kasalar'}</b></div>
-      <div class="src" style="margin:0"><span>Seçili Kaynak</span><b class="mono">${checkedSources.size} kaynak AI'a bağlı</b></div>
-      <div class="ph" style="padding:10px 0 2px"><span>Hızlı Kasa Geçişi</span></div>
-      ${kasalarData.map(k=>`<div class="ti" onclick="enterKasa('${k.key}','write')">${k.icon} ${k.title} <small style="margin-left:auto;color:var(--mut)">${k.counts.total}</small></div>`).join('')}
+      <div class="src" style="margin:0"><span>Görünüm</span><b class="mono">${escHtml(pg(active).t)}</b></div>
+      <div class="src" style="margin:0"><span>Çalışma Alanı</span><b class="mono">${spObj?`${escHtml(spObj.icon)} ${escHtml(spObj.title)}`:'Tüm Alanlar'}</b></div>
+      <div class="src" style="margin:0"><span>Aktif Kasa</span><b class="mono" style="color:var(--cu)">${kObj?escHtml(kObj.title):'Tüm Kasalar'}</b></div>
+      <div class="src" style="margin:0"><span>Seçili Kaynak</span><b class="mono">${getCheckedSources().length} kaynak AI'a bağlı</b></div>
+      <div class="ph" style="padding:10px 0 2px"><span>Hızlı Kasa Geçişi (${visKasas.length})</span></div>
+      ${visKasas.map(k=>`<div class="ti" onclick="enterKasa('${k.key}','write')">${escHtml(k.icon)} ${escHtml(k.title)} <small style="margin-left:auto;color:var(--mut)">${k.counts.total}</small></div>`).join('')}
     `;
   }
 }
@@ -2307,6 +3227,7 @@ async function renderVaultNote(m,id){
   notionState.noteId=id;
   notionState.baseDir=baseDir;
   notionState.blocks=parseNoteBlocks(n.content||'');
+  notionUndoInit(id,notionState.blocks);
 
   const bodyHtml=editMode
     ?`<div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line);font:12px var(--mono);color:var(--mut)">
@@ -2351,7 +3272,8 @@ async function renderVaultNote(m,id){
   </div>`;
   ensureNotionOverlays();
   if(!editMode){
-    renderNotionCanvasDOM();
+    _notionLoadingNote=true;
+    try{ renderNotionCanvasDOM(); }finally{ _notionLoadingNote=false; }
   }
   wireDrop();
   wireNoteImages(m,id);
@@ -2375,6 +3297,103 @@ const notionState={
   activeMathChip:null,
   openEditorSet:new Set()
 };
+
+const notionUndoStacks=new Map();
+let _notionUndoApplying=false;
+let _notionLoadingNote=false;
+let _notionSnapTimer=null;
+let lastNotionEditAt=0;
+
+function cloneNotionBlocks(blocks){
+  return JSON.parse(JSON.stringify(blocks||[]));
+}
+function notionFocusBlockIdx(){
+  const ae=document.activeElement;
+  const blk=ae&&ae.closest?ae.closest('.nblock'):null;
+  if(!blk) return null;
+  const n=Number(blk.dataset.bidx);
+  return Number.isFinite(n)?n:null;
+}
+function notionUndoInit(noteId,blocks){
+  if(!noteId) return;
+  const ser=serializeNoteBlocks(blocks||[]);
+  const cur=notionUndoStacks.get(noteId);
+  if(cur&&cur.stack.length&&cur.stack[cur.idx]&&cur.stack[cur.idx].ser===ser) return;
+  notionUndoStacks.set(noteId,{stack:[{blocks:cloneNotionBlocks(blocks),ser,focusIdx:null}],idx:0});
+}
+function notionRecordSnapshot(noteId=notionState.noteId,focusIdx=null){
+  if(!noteId||_notionUndoApplying||_notionLoadingNote) return;
+  if(_notionSnapTimer){ clearTimeout(_notionSnapTimer); _notionSnapTimer=null; }
+  const ser=serializeNoteBlocks(notionState.blocks||[]);
+  let st=notionUndoStacks.get(noteId);
+  if(!st){
+    st={stack:[{blocks:cloneNotionBlocks(notionState.blocks),ser,focusIdx}],idx:0};
+    notionUndoStacks.set(noteId,st);
+    return;
+  }
+  const cur=st.stack[st.idx];
+  if(cur&&cur.ser===ser) return;
+  st.stack=st.stack.slice(0,st.idx+1);
+  st.stack.push({blocks:cloneNotionBlocks(notionState.blocks),ser,focusIdx});
+  if(st.stack.length>60) st.stack.shift();
+  st.idx=st.stack.length-1;
+  lastNotionEditAt=Date.now();
+}
+function scheduleNotionUndoSnapshot(delay=340){
+  if(_notionUndoApplying||_notionLoadingNote||!notionState.noteId) return;
+  const nid=notionState.noteId;
+  if(_notionSnapTimer) clearTimeout(_notionSnapTimer);
+  _notionSnapTimer=setTimeout(()=>{
+    _notionSnapTimer=null;
+    if(notionState.noteId===nid) notionRecordSnapshot(nid,notionFocusBlockIdx());
+  },delay);
+}
+function notionUndo(){
+  const nid=notionState.noteId;
+  if(!nid||notionState.locked||editMode) return false;
+  syncAllNotionBlocksFromDOM();
+  let st=notionUndoStacks.get(nid);
+  if(!st||!st.stack.length) return false;
+  const liveSer=serializeNoteBlocks(notionState.blocks||[]);
+  if(st.stack[st.idx]&&st.stack[st.idx].ser!==liveSer){
+    st.stack=st.stack.slice(0,st.idx+1);
+    st.stack.push({blocks:cloneNotionBlocks(notionState.blocks),ser:liveSer,focusIdx:notionFocusBlockIdx()});
+    st.idx=st.stack.length-1;
+  }
+  if(st.idx<=0) return false;
+  st.idx--;
+  const snap=st.stack[st.idx];
+  _notionUndoApplying=true;
+  try{
+    notionState.blocks=cloneNotionBlocks(snap.blocks);
+    const fIdx=snap.focusIdx!==null?Math.min(snap.focusIdx,Math.max(0,notionState.blocks.length-1)):null;
+    renderNotionCanvasDOM(fIdx,true);
+    scheduleNotionAutoSave(nid);
+    toast('↶ Not düzenlemesi geri alındı');
+    return true;
+  }finally{
+    _notionUndoApplying=false;
+  }
+}
+function notionRedo(){
+  const nid=notionState.noteId;
+  if(!nid||notionState.locked||editMode) return false;
+  const st=notionUndoStacks.get(nid);
+  if(!st||st.idx>=st.stack.length-1) return false;
+  st.idx++;
+  const snap=st.stack[st.idx];
+  _notionUndoApplying=true;
+  try{
+    notionState.blocks=cloneNotionBlocks(snap.blocks);
+    const fIdx=snap.focusIdx!==null?Math.min(snap.focusIdx,Math.max(0,notionState.blocks.length-1)):null;
+    renderNotionCanvasDOM(fIdx,true);
+    scheduleNotionAutoSave(nid);
+    toast('↷ Not düzenlemesi ileri alındı');
+    return true;
+  }finally{
+    _notionUndoApplying=false;
+  }
+}
 
 const CALLOUT_TYPES={
   NOTE:{label:'BİLGİ',icon:'📘',title:'Kaynak ve Ders Bilgisi'},
@@ -2757,6 +3776,7 @@ function setSavePillState(state,text){
 function scheduleNotionAutoSave(noteId){
   const id=noteId||notionState.noteId;
   if(!id||!String(id).startsWith('note:')) return;
+  if(!_notionUndoApplying) scheduleNotionUndoSnapshot(320);
   setSavePillState('saving','● Kaydediliyor…');
   if(notionState.saveTimer) clearTimeout(notionState.saveTimer);
   notionState.saveTimer=setTimeout(()=>flushNotionSave(id,false),650);
@@ -2953,6 +3973,9 @@ function renderNotionCanvasDOM(focusIdx=null,caretAtEnd=true){
   wireNotionCanvasEvents(view);
   renderNotionMinimap();
   if(window.mermaid) runMermaid('#mdView .mermaid');
+  if(!_notionUndoApplying&&!_notionLoadingNote&&notionState.noteId){
+    notionRecordSnapshot(notionState.noteId,focusIdx!==null?focusIdx:notionFocusBlockIdx());
+  }
   if(focusIdx!==null&&focusIdx>=0&&focusIdx<notionState.blocks.length){
     focusNotionBlock(focusIdx,caretAtEnd);
   }
@@ -4763,8 +5786,7 @@ async function renderCal(m,fetchApi=true){
         <div class="gcal-sec">
           <div class="gcal-sec-hd"><span>DERS KASASI FİLTRESİ</span></div>
           <select class="gmodal-in" style="padding:5px 8px;font-size:12px" onchange="GCAL.kasaFilter=this.value;renderCalStageOnly()">
-            <option value="all" ${GCAL.kasaFilter==='all'?'selected':''}>❖ Tüm Ders Kasaları</option>
-            ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${GCAL.kasaFilter===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+            ${renderKasaGroupOptions(GCAL.kasaFilter==='all'?'':GCAL.kasaFilter,'❖ Tüm Ders Kasaları').replace('value=""','value="all"')}
           </select>
         </div>
 
@@ -5054,8 +6076,7 @@ function openCalModal(evId=null,defaultDate=null,defaultStart=null){
           <div class="gm-sub" id="gmNotifySub">Uygun · Varsayılan görünürlük · ${notifyVal}</div>
           <div id="gmKasaExpand" style="display:none;flex-wrap:wrap;gap:6px;margin-top:6px" onclick="event.stopPropagation()">
             <select class="gmodal-in" id="gmKasa" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmOwnerName').textContent='Cavit ÖZGEN'+(this.value?' · '+gcalKasaTitle(this.value):'')">
-              <option value="">Genel Akademik Takvim</option>
-              ${(window.kasalarData||[]).map(k=>`<option value="${k.key}" ${kasaVal===k.key?'selected':''}>${k.icon} ${k.title}</option>`).join('')}
+              ${renderKasaGroupOptions(kasaVal,'Genel Akademik Takvim')}
             </select>
             <select class="gmodal-in" id="gmNotify" style="flex:1;min-width:150px;font-size:12px" onchange="$('#gmNotifySub').textContent='Uygun · Varsayılan görünürlük · '+this.value">
               <option value="Bir gün önce şu saatte: 5pm bildir" ${notifyVal.includes('5pm')?'selected':''}>Bir gün önce: 5pm bildir</option>
@@ -5832,7 +6853,11 @@ function togglePane(side){
 function leftHeaderAct(){
   if(curMode==='ai'){ newSession(); return; }
   const allOpen=tree.every(g=>g.open);
-  tree.forEach(g=>{g.open=!allOpen;TREE_OPEN[g.rel||((g.id||'')+'|'+g.n)]=g.open;});
+  tree.forEach(g=>{
+    g.open=!allOpen;
+    const tk=g.spaceId?('space:'+g.spaceId):(g.rel||((g.id||'')+'|'+g.n));
+    TREE_OPEN[tk]=g.open;
+  });
   renderTree();
   saveSessionTabs();
 }
@@ -5919,6 +6944,7 @@ function layoutMode(m){
   if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
   syncPaneBtns();
   saveSessionTabs();
+  scheduleRecordNavState();
 }
 function setMode(m){
   if(app.classList.contains('zen')){
@@ -5965,6 +6991,16 @@ function cycleTab(dir){
   openPage(openTabs[next]);
 }
 document.addEventListener('keydown',e=>{
+  if(e.key==='BrowserBack'||(e.altKey&&!e.ctrlKey&&!e.metaKey&&e.key==='ArrowLeft')){
+    e.preventDefault();
+    navBack();
+    return;
+  }
+  if(e.key==='BrowserForward'||(e.altKey&&!e.ctrlKey&&!e.metaKey&&e.key==='ArrowRight')){
+    e.preventDefault();
+    navForward();
+    return;
+  }
   if(e.key==='Tab'&&e.ctrlKey){
     e.preventDefault();
     cycleTab(e.shiftKey?-1:1);
@@ -5998,6 +7034,40 @@ document.addEventListener('keydown',e=>{
     if(target)openPage(target);
     return;
   }
+  if(!(e.ctrlKey||e.metaKey)||e.altKey)return;
+  const lk=(e.key||'').toLowerCase();
+  if(lk==='z'||e.code==='KeyZ'||lk==='y'||e.code==='KeyY'){
+    if(e.target&&(['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName))) return;
+    const isRedo=(lk==='z'||e.code==='KeyZ')?e.shiftKey:!e.shiftKey;
+    if(e.target&&e.target.closest&&e.target.closest('#mdView')&&String(active).startsWith('note:')&&!editMode){
+      e.preventDefault();
+      e.stopPropagation();
+      const ok=isRedo?notionRedo():notionUndo();
+      if(!ok) toast(isRedo?'İleri alınacak not değişikliği yok':'Geri alınacak not değişikliği yok');
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    (async()=>{
+      let handled=false;
+      if(isRedo){
+        if(String(active).startsWith('note:')&&curMode==='write'&&!editMode&&lastNotionEditAt>lastAppActionAt){
+          handled=notionRedo()||await performAppRedo();
+        }else{
+          handled=await performAppRedo()||(String(active).startsWith('note:')&&!editMode&&notionRedo());
+        }
+      }else{
+        if(String(active).startsWith('note:')&&curMode==='write'&&!editMode&&lastNotionEditAt>lastAppActionAt){
+          handled=notionUndo()||await performAppUndo();
+        }else{
+          handled=await performAppUndo()||(String(active).startsWith('note:')&&!editMode&&notionUndo());
+        }
+      }
+      if(!handled) toast(isRedo?'İleri alınacak işlem yok':'Geri alınacak işlem yok');
+    })();
+    return;
+  }
+  if((lk==='t'||e.code==='KeyT')&&e.shiftKey){e.preventDefault();reopenLastClosedTab();return;}
   if(!e.ctrlKey)return;
   if((e.key==='s'||e.key==='S')&&String(active).startsWith('note:')){e.preventDefault();flushNotionSave(active,true);return;}
   if(e.target.isContentEditable&&e.target.closest&&e.target.closest('#mdView')){
@@ -6866,5 +7936,6 @@ function initMediaHub(){
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects();
 if(!restoreSessionTabs()) setMode('kasalar');
+initNavHistory();
 window.addEventListener('beforeunload',saveSessionTabs);
 loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
