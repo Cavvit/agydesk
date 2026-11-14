@@ -681,6 +681,7 @@ function restoreMainScroll(id){
   _pendingScrollRestore=target>0?{id,top:target,userScrolled:false}:null;
   m.scrollTop=target;
   syncNotionMinimapActive();
+  syncNotionFloatLock();
   if(target>0){
     const reapply=()=>{
       if(!_pendingScrollRestore||_pendingScrollRestore.id!==id||_pendingScrollRestore.userScrolled) return;
@@ -688,6 +689,7 @@ function restoreMainScroll(id){
       if(!curM||active!==id||!curM.querySelector('#doc')) return;
       curM.scrollTop=target;
       syncNotionMinimapActive();
+      syncNotionFloatLock();
     };
     requestAnimationFrame(reapply);
     setTimeout(reapply,120);
@@ -716,6 +718,7 @@ function initMainScrollTracking(){
           persistNoteScrolls(false);
         }
         syncNotionMinimapActive();
+        syncNotionFloatLock();
       }
     });
   },{passive:true});
@@ -3738,7 +3741,7 @@ async function renderVaultNote(m,id){
         <span>/</span>
         <span class="nc-cur">${p.t||n.rel.split('/').pop()}</span>
       </div>
-      <span class="notion-lock-pill ${notionState.locked?'locked':''}" onclick="toggleNotionLock('${id}')" title="Notion tarzı kilitle / düzenlemeyi aç">
+      <span class="notion-lock-pill ${notionState.locked?'locked':''}" id="notionLockPill" onclick="toggleNotionLock('${id}')" title="Notion tarzı kilitle / düzenlemeyi aç">
         ${notionState.locked?'🔒 Kilitli (Salt Okunur)':'🔓 Doğrudan Düzenleme Açık'}
       </span>
       <span class="notion-save-pill saved" id="notionSavePill" onclick="flushNotionSave('${id}',true)" style="cursor:pointer" title="Değişiklikler anında otomatik kaydedilir (Tıkla veya Ctrl+S: Şimdi kaydet)">✓ Kaydedildi</span>
@@ -5389,6 +5392,27 @@ function syncNotionMinimapActive(){
   }
   setMinimapActiveIdx(activeIdx);
 }
+function syncNotionFloatLock(){
+  const fl=$('#notionFloatLock'), m=$('#main'), doc=$('#doc'), pill=$('#notionLockPill');
+  const pdfStage=$('#pdfCacheStage');
+  if(!fl||!m||!doc||!pill||!String(active).startsWith('note:')||(pdfStage&&pdfStage.classList.contains('active'))){
+    if(fl) fl.style.display='none';
+    return;
+  }
+  const mRect=m.getBoundingClientRect();
+  const pRect=pill.getBoundingClientRect();
+  if(pRect.bottom>mRect.top+6){
+    fl.style.display='none';
+    return;
+  }
+  fl.style.display='inline-flex';
+  fl.classList.toggle('locked',!!notionState.locked);
+  fl.textContent=notionState.locked?'🔒':'🔓';
+  fl.title=notionState.locked
+    ?'Salt okunur (Düzenlemeyi açmak için tıkla)'
+    :'Düzenleme açık (Kilitlemek için tıkla)';
+}
+window.addEventListener('resize',()=>requestAnimationFrame(syncNotionFloatLock));
 
 function scrollToNotionBlock(idx){
   const el=$('#mdView')?.querySelector(`.nblock[data-bidx="${idx}"]`);
@@ -5504,6 +5528,7 @@ function renderBlankTab(m){
 function renderMain(){
   const m=$('#main');
   const mm=$('#notionMinimap'); if(mm) mm.style.display='none';
+  const fl=$('#notionFloatLock'); if(fl) fl.style.display='none';
   saveMainScroll();
   if(!active.startsWith('note:')) _mountedNoteScrollId=null;
   if(!isPdfTab(active)) deactivatePdfCache();
@@ -5516,6 +5541,7 @@ function renderMain(){
   else if(isAI(active)) renderAI(m);
   else renderSim(m);
   syncPdfFocusMode();
+  syncNotionFloatLock();
 }
 
 const SK={

@@ -961,6 +961,10 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .notion-lock-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:6px;font:500 11.5px var(--sans);border:1px solid color-mix(in srgb,var(--cu) 38%,transparent);background:var(--cu-d);color:var(--cu);cursor:pointer;transition:.14s;user-select:none}
 .notion-lock-pill:hover{border-color:var(--cu);filter:brightness(1.06)}
 .notion-lock-pill.locked{border-color:var(--line);background:var(--bg3);color:var(--mut)}
+.notion-float-lock{position:absolute;top:10px;left:10px;z-index:42;width:30px;height:30px;padding:0;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;font-size:14px;line-height:1;border:1px solid color-mix(in srgb,var(--cu) 42%,transparent);background:color-mix(in srgb,var(--cu-d) 82%,var(--bg2));color:var(--cu);backdrop-filter:blur(8px);box-shadow:0 4px 12px rgba(0,0,0,.18);cursor:pointer;opacity:.82;transition:opacity .15s,border-color .15s,background .15s,transform .12s;user-select:none}
+.notion-float-lock:hover{opacity:1;border-color:var(--cu);transform:scale(1.04)}
+.notion-float-lock.locked{border-color:var(--line);background:color-mix(in srgb,var(--bg2) 86%,transparent);color:var(--mut)}
+.notion-float-lock.locked:hover{border-color:var(--cu);color:var(--txt)}
 .doc.notion-doc.locked .notion-save-pill{display:none}
 .doc.notion-doc.locked .notion-edit-btn{opacity:.45}
 .doc.notion-doc.locked .drop{display:none}
@@ -1110,4 +1114,4 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .nm-link.lvl-2{padding-left:14px}
 .nm-link.lvl-3{padding-left:24px;font-size:11.5px}
 @media (max-width:1100px){.notion-minimap{display:none}}
-@media print{.notion-topbar,.nblock-gutter,.notion-tail,.notion-minimap,.notion-bubble,.notion-slash,.notion-math-pop,.n-table-bar,.n-mb-hint{display:none!important}.nblock{margin:0!important;padding:2px 0!important}.nblock-h1,.nblock-h2,.nblock-h3,.n-callout,.n-math-block,.n-table-wrap{break-inside:avoid}}
+@media print{.notion-topbar,.nblock-gutter,.notion-tail,.notion-minimap,.notion-float-lock,.notion-bubble,.notion-slash,.notion-math-pop,.n-table-bar,.n-mb-hint{display:none!important}.nblock{margin:0!important;padding:2px 0!important}.nblock-h1,.nblock-h2,.nblock-h3,.n-callout,.n-math-block,.n-table-wrap{break-inside:avoid}}
