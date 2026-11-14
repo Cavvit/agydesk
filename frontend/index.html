@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=notion7">
+<link rel="stylesheet" href="/styles.css?v=notion8">
 </head>
 <body>
 <div class="app" id="app">
@@ -76,7 +76,10 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
       </button>
     </div>
-    <div class="main" id="main"></div>
+    <div class="center-stage">
+      <div class="main" id="main"></div>
+      <div class="pdf-cache-stage" id="pdfCacheStage"></div>
+    </div>
     <div class="status"><span id="bgStat"><i class="dot"></i>Yönlendirici hazır</span><span id="stKasa">Kasa: Tüm Kasalar</span><span id="stHealth">Sağlayıcı kontrol ediliyor…</span><span style="margin-left:auto">Ctrl+B sol · Ctrl+J sağ</span></div>
   </section>
 
@@ -151,6 +154,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=notion7"></script>
+<script src="/app.js?v=notion8"></script>
 </body>
 </html>

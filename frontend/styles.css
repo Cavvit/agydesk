@@ -95,7 +95,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .pdf-zen-fab{display:none;position:fixed;top:12px;left:12px;z-index:95;align-items:center;gap:6px;padding:6px 13px;border-radius:999px;border:1px solid rgba(255,255,255,.26);background:rgba(16,18,20,.52);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:#f3f4f6;font:600 12px var(--sans);opacity:.44;cursor:pointer;box-shadow:0 4px 18px rgba(0,0,0,.35);transition:opacity .16s ease,background .16s ease,border-color .16s ease,transform .16s ease}
 .pdf-zen-fab:hover{opacity:.98;background:var(--bg2);border-color:var(--cu);color:var(--cu);transform:translateY(-1px)}
 .app.zen.pdf-zen .topbar,.app.zen.pdf-zen .status,.app.zen.pdf-zen .pdf-bar{display:none!important}
-.app.zen.pdf-zen .pdf-studio,.app.zen.pdf-zen .pdf-stage,.app.zen.pdf-zen .pdf-frame-wrap{height:100vh!important}
+.app.zen.pdf-zen .center-stage,.app.zen.pdf-zen .pdf-cache-stage,.app.zen.pdf-zen .pdf-tab-slot.active,.app.zen.pdf-zen .pdf-studio,.app.zen.pdf-zen .pdf-stage,.app.zen.pdf-zen .pdf-frame-wrap{height:100vh!important}
 .app.zen.pdf-zen .pdf-zen-fab{display:inline-flex}
 .rail{background:var(--bg);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:4px}
 .logo{width:28px;height:28px;border-radius:7px;display:grid;place-items:center;margin-bottom:12px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,.4);border:1px solid var(--line);transition:transform .15s,border-color .15s}
@@ -200,8 +200,13 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .top-clock .clk-d{color:var(--cu);font-size:11px;font-weight:600}
 .app.zen .top-clock{height:24px;margin-bottom:3px;font-size:11.5px}
 .center{display:flex;flex-direction:column;min-width:0;min-height:0;height:100vh;overflow:hidden;background:var(--bg2);position:relative}
+.center-stage{flex:1;min-height:0;position:relative;display:flex;flex-direction:column;overflow:hidden}
 .main{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative}
 .main:has(>.sc-wrap),.main:has(>.aiwrap),.main:has(>.gcal){overflow:hidden}
+.pdf-cache-stage{position:absolute;inset:0;visibility:hidden;pointer-events:none;z-index:0;overflow:hidden}
+.pdf-cache-stage.active{visibility:visible;pointer-events:auto;z-index:5;background:var(--bg2)}
+.pdf-tab-slot{position:absolute;inset:0;width:100%;height:100%;visibility:hidden;pointer-events:none;z-index:0;display:flex;flex-direction:column}
+.pdf-tab-slot.active{visibility:visible;pointer-events:auto;z-index:2}
 .doc{max-width:860px;margin:0 auto;padding:36px 32px 120px;color:var(--txt)}
 .doc h1{font-size:30px;letter-spacing:-.02em;line-height:1.2;margin-bottom:6px;color:var(--txt)}
 .meta{color:var(--mut);font:12px var(--mono);margin-bottom:24px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
@@ -789,8 +794,8 @@ body.fw-full .doc{max-width:none}
 @media print{
   @page{size:A4 portrait;margin:10mm}
   html,body{background:#fff!important;color:#111!important;overflow:visible!important;height:auto!important;font-size:10.5pt!important}
-  .rail,.left,.right,.topbar,.status,.drop,.resizer,.meta button,.cbox .ctool,.cbox .cdrag,.upop,.mpop,.kmodal-bg{display:none!important}
-  .app,.center,.main{display:block!important;height:auto!important;overflow:visible!important;background:#fff!important}
+  .rail,.left,.right,.topbar,.status,.drop,.resizer,.meta button,.cbox .ctool,.cbox .cdrag,.upop,.mpop,.kmodal-bg,.pdf-zen-fab,.pdf-cache-stage:not(.active){display:none!important}
+  .app,.center,.center-stage,.main{display:block!important;height:auto!important;overflow:visible!important;background:#fff!important}
   .doc{max-width:100%!important;padding:0!important;margin:0!important;column-count:2;column-gap:7mm}
   .doc h1{column-span:all;font-size:16pt!important;color:#000!important;border-bottom:1.5px solid #222;padding-bottom:4px;margin-bottom:8px}
   .doc .meta{column-span:all;color:#444!important;margin-bottom:10px}
@@ -867,8 +872,8 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .nblock.focused{background:color-mix(in srgb,var(--bg3) 58%,transparent)}
 .nblock.drag-over-top{box-shadow:inset 0 2px 0 0 var(--cu)}
 .nblock.drag-over-bot{box-shadow:inset 0 -2px 0 0 var(--cu)}
-.nblock-gutter{position:absolute;left:-44px;top:4px;width:40px;height:24px;display:flex;align-items:center;justify-content:flex-end;gap:2px;opacity:0;pointer-events:none;transition:opacity .12s ease;user-select:none;z-index:5}
-.nblock:hover .nblock-gutter,.nblock.focused .nblock-gutter{opacity:1;pointer-events:auto}
+.nblock-gutter{position:absolute;left:-50px;top:0;width:54px;min-height:28px;padding:3px 10px 3px 2px;display:flex;align-items:center;justify-content:flex-end;gap:2px;opacity:0;pointer-events:none;transition:opacity .12s ease;user-select:none;z-index:8}
+.nblock:hover .nblock-gutter,.nblock.focused .nblock-gutter,.nblock.gutter-open .nblock-gutter{opacity:1;pointer-events:auto}
 .notion-canvas.locked .nblock-gutter{display:none!important}
 .ng-btn{width:19px;height:22px;border-radius:5px;border:0;background:transparent;color:var(--mut);display:grid;place-items:center;font:600 13px/1 var(--mono);cursor:pointer;transition:.12s;padding:0}
 .ng-btn:hover{background:var(--bg3);color:var(--cu)}

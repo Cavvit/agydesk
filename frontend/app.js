@@ -571,6 +571,7 @@ async function loadVault(){
       if(valid.length!==openTabs.length){
         openTabs=valid.length?valid:['kasalar'];
         if(!openTabs.includes(active)) active=openTabs[0];
+        syncPdfSlotsWithTabs();
       }
     }
     Object.assign(WIKI_MAP,v.wikimap||{});
@@ -931,6 +932,7 @@ function openPage(id,forceTab=false,opts={}){
   if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
   else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
   else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
+  syncPdfSlotsWithTabs();
   renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
 }
 function closeTab(id){
@@ -940,6 +942,7 @@ function closeTab(id){
   if(!openTabs.length)openTabs=['kasalar'];
   if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
+  removePdfSlot(id);
   renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
 }
 const isAI=id=>id.startsWith('ai');
@@ -1835,7 +1838,37 @@ function scrollToHeading(text){
 /* ---------- Ana alan & PDF/Belge Stüdyosu ---------- */
 const pdfState={};
 const pdfInfoCache={};
+const pdfSlotMap=new Map();
 let _pdfNavSeq=0;
+function getPdfSlot(id){
+  return pdfSlotMap.get(id)||null;
+}
+function removePdfSlot(id){
+  const slot=pdfSlotMap.get(id);
+  if(slot){ slot.remove(); pdfSlotMap.delete(id); }
+}
+function syncPdfSlotsWithTabs(){
+  const keep=new Set(openTabs);
+  for(const [id,slot] of pdfSlotMap.entries()){
+    if(!keep.has(id)){ slot.remove(); pdfSlotMap.delete(id); }
+  }
+}
+function activatePdfCache(id){
+  const stage=$('#pdfCacheStage');
+  const m=$('#main');
+  if(stage) stage.classList.add('active');
+  if(m){ m.style.visibility='hidden'; m.style.pointerEvents='none'; }
+  for(const [k,slot] of pdfSlotMap.entries()){
+    slot.classList.toggle('active',k===id);
+  }
+}
+function deactivatePdfCache(){
+  const stage=$('#pdfCacheStage');
+  const m=$('#main');
+  if(stage) stage.classList.remove('active');
+  if(m){ m.style.visibility=''; m.style.pointerEvents=''; }
+  for(const slot of pdfSlotMap.values()) slot.classList.remove('active');
+}
 function getPdfState(id){
   if(!pdfState[id]){
     pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:localStorage.getItem('agydesk_pdf_filter')||'normal',drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
@@ -1850,18 +1883,20 @@ function buildPdfUrl(rel,st,bust=false){
 }
 function updatePdfFrame(id,reloadHash=false){
   const st=getPdfState(id);
-  const wrap=$('#pdfFrameWrap');
+  const slot=getPdfSlot(id);
+  const root=slot||document;
+  const wrap=slot?slot.querySelector('.pdf-frame-wrap'):$('#pdfFrameWrap');
   if(wrap){
     wrap.classList.toggle('night',st.filter==='night');
     wrap.classList.toggle('sepia',st.filter==='sepia');
   }
-  $$('.pdf-flt-btn').forEach(b=>b.classList.toggle('on',b.dataset.flt===st.filter));
-  $$('.pdf-zm-btn').forEach(b=>b.classList.toggle('on',b.dataset.zm===String(st.zoom)));
-  const pgIn=$('#pdfPgIn');
+  root.querySelectorAll('.pdf-flt-btn').forEach(b=>b.classList.toggle('on',b.dataset.flt===st.filter));
+  root.querySelectorAll('.pdf-zm-btn').forEach(b=>b.classList.toggle('on',b.dataset.zm===String(st.zoom)));
+  const pgIn=slot?slot.querySelector('.pg-in'):$('#pdfPgIn');
   if(pgIn&&document.activeElement!==pgIn) pgIn.value=st.page;
   if(reloadHash){
     const rel=id.slice(5);
-    const fr=$('#pdfMainFrame');
+    const fr=slot?slot.querySelector('iframe.pdf-main-frame'):$('#pdfMainFrame');
     if(fr){
       // Chromium/WebView2 PDFium ignores hash-only (#page= / #view=) updates on an existing iframe;
       // replacing the iframe with a fresh query-busted URL forces PDFium to jump to the target page & zoom.
@@ -1915,9 +1950,11 @@ function togglePdfDrawer(id,mode){
 }
 function renderPdfDrawer(id){
   const st=getPdfState(id);
-  const dr=$('#pdfDrawer');
+  const slot=getPdfSlot(id);
+  const root=slot||document;
+  const dr=slot?slot.querySelector('.pdf-side-drawer'):$('#pdfDrawer');
   if(!dr) return;
-  $$('.pdf-drw-btn').forEach(b=>b.classList.toggle('on',b.dataset.drw===st.drawer));
+  root.querySelectorAll('.pdf-drw-btn').forEach(b=>b.classList.toggle('on',b.dataset.drw===st.drawer));
   if(!st.drawer){
     dr.classList.remove('open');
     return;
@@ -1963,9 +2000,9 @@ function renderPdfDrawer(id){
       </div>
       <div class="pdf-drawer-body">
         <div style="font-size:11.5px;color:var(--mut)">PDF'i okurken çıkardığın formülleri, önemli noktaları veya soruları buraya not al (otomatik saklanır):</div>
-        <textarea class="pdf-scratch" id="pdfScratchArea" placeholder="# ${p.t} — Çalışma Notlarım\n\n- Kritik formül: $...$\n- Hoca vurgusu: ...">${(st.scratch||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+        <textarea class="pdf-scratch" placeholder="# ${p.t} — Çalışma Notlarım\n\n- Kritik formül: $...$\n- Hoca vurgusu: ...">${(st.scratch||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
       </div>`;
-    const ta=$('#pdfScratchArea');
+    const ta=dr.querySelector('.pdf-scratch');
     if(ta){
       ta.oninput=e=>{
         st.scratch=e.target.value;
@@ -2022,12 +2059,14 @@ function dockDocToRightAndReturn(id){
   openTabs=openTabs.filter(t=>t!==id);
   if(!openTabs.length) openTabs=[otherTab];
   active=openTabs[openTabs.length-1];
+  removePdfSlot(id);
   renderTabs(); renderTree(); renderMain();
   openRightViewer(rel,p.t);
   toast('📌 Belge sağ panele sabitlendi, sol/orta alanda notunla yan yana çalışabilirsin');
 }
 function printPdfFrame(rel){
-  const fr=$('#pdfMainFrame');
+  const slot=getPdfSlot(active);
+  const fr=(slot&&slot.querySelector('iframe.pdf-main-frame'))||$('#pdfMainFrame');
   if(fr&&fr.contentWindow){
     try{ fr.contentWindow.focus(); fr.contentWindow.print(); return; }catch(e){}
   }
@@ -2061,12 +2100,31 @@ async function renderVaultNote(m,id){
     const st=getPdfState(id);
     const isSrcChecked=checkedSources.has(rel);
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
-    m.innerHTML=`<div class="pdf-studio">
+    const stage=$('#pdfCacheStage');
+    let slot=getPdfSlot(id);
+    if(slot&&stage&&slot.parentElement===stage){
+      activatePdfCache(id);
+      const aiBtn=slot.querySelector('.pdf-ai-btn');
+      if(aiBtn){
+        aiBtn.style.borderColor=isSrcChecked?'var(--ok)':'';
+        aiBtn.style.color=isSrcChecked?'var(--ok)':'';
+        aiBtn.textContent=isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla';
+      }
+      updatePdfFrame(id,false);
+      updateRightProps();
+      return;
+    }
+    if(slot){ slot.remove(); pdfSlotMap.delete(id); }
+
+    slot=document.createElement('div');
+    slot.className='pdf-tab-slot active';
+    slot.dataset.pdfId=id;
+    slot.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
         <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}">
           <span>📄</span><b>${p.t}</b>
         </div>
-        <span class="pdf-badge" id="pdfMetaBadge">${st.totalPages?`${st.totalPages} sayfa`:'PDF Stüdyosu'}</span>
+        <span class="pdf-badge pdf-meta-badge">${st.totalPages?`${st.totalPages} sayfa`:'PDF Stüdyosu'}</span>
 
         <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
           <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')" title="Orijinal Beyaz Kağıt">☀ Orijinal</button>
@@ -2081,25 +2139,34 @@ async function renderVaultNote(m,id){
           <button class="pdf-drw-btn ${st.drawer==='scratch'?'on':''}" data-drw="scratch" onclick="togglePdfDrawer('${id}','scratch')" title="PDF okurken yan tarafta hızlı çalışma notu tut">✎ Not Tut</button>
         </div>
 
-        <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()" title="Bu PDF'i AI kaynaklarına bağla/çıkar">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
+        <button class="hb pdf-ai-btn" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()" title="Bu PDF'i AI kaynaklarına bağla/çıkar">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
         <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')" title="Bu PDF'i sağdaki AI asistanına özetlet">✨ AI Özetle</button>
         <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')" title="Bu PDF'ten A4 Sınav Föyü çıkar">▤ Sınav Föyü</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Bu PDF'i sağ panele sabitleyip not sekmene geri dön (Yan Yana Çalışma)">📌 Sağ Panele Al</button>
         <button class="hb" onclick="toggleZen()" title="Kenar panellerini gizle / Tam odak modu (Ctrl+.)">◐ Odak</button>
       </div>
       <div class="pdf-stage">
-        <div class="pdf-frame-wrap ${filtCls}" id="pdfFrameWrap">
-          <iframe id="pdfMainFrame" src="${buildPdfUrl(rel,st)}"></iframe>
+        <div class="pdf-frame-wrap ${filtCls}">
+          <iframe class="pdf-main-frame" src="${buildPdfUrl(rel,st)}"></iframe>
         </div>
-        <div class="pdf-side-drawer ${st.drawer?'open':''}" id="pdfDrawer"></div>
+        <div class="pdf-side-drawer ${st.drawer?'open':''}"></div>
       </div>
     </div>`;
+    if(stage){
+      stage.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+      activatePdfCache(id);
+    }else{
+      m.innerHTML='';
+      m.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+    }
     if(st.drawer) renderPdfDrawer(id);
     if(!pdfInfoCache[id]){
       api('/api/pdf_info?rel='+encodeURIComponent(rel)).then(info=>{
         pdfInfoCache[id]=info;
         st.totalPages=info.pages||0;
-        const b=$('#pdfMetaBadge');
+        const b=slot.querySelector('.pdf-meta-badge');
         if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
         if(st.drawer==='text') renderPdfDrawer(id);
         updateRightProps();
@@ -2107,7 +2174,7 @@ async function renderVaultNote(m,id){
     }else{
       const info=pdfInfoCache[id];
       st.totalPages=info.pages||0;
-      const b=$('#pdfMetaBadge');
+      const b=slot.querySelector('.pdf-meta-badge');
       if(b) b.textContent=`${info.pages||'?'} sayfa · ${info.size_kb} KB${info.scanned?' · Taranmış':''}`;
     }
     updateRightProps();
@@ -2922,6 +2989,23 @@ function getCaretTextOffset(el){
 }
 
 function wireNotionCanvasEvents(view){
+  let gutterHideTimer=null;
+  let hoveredBlk=null;
+  const clearGutterTimer=()=>{ if(gutterHideTimer){ clearTimeout(gutterHideTimer); gutterHideTimer=null; } };
+  view.onmouseover=e=>{
+    const blk=e.target.closest('.nblock');
+    if(!blk||!view.contains(blk)) return;
+    clearGutterTimer();
+    if(hoveredBlk&&hoveredBlk!==blk) hoveredBlk.classList.remove('gutter-open');
+    hoveredBlk=blk;
+    blk.classList.add('gutter-open');
+  };
+  view.onmouseleave=()=>{
+    clearGutterTimer();
+    gutterHideTimer=setTimeout(()=>{
+      if(hoveredBlk){ hoveredBlk.classList.remove('gutter-open'); hoveredBlk=null; }
+    },240);
+  };
   view.onfocusin=e=>{
     view.querySelectorAll('.nblock.focused').forEach(x=>x.classList.remove('focused'));
     const blk=e.target.closest('.nblock');
@@ -3835,6 +3919,7 @@ function renderBlankTab(m){
 }
 function renderMain(){
   const m=$('#main');
+  if(!isPdfTab(active)) deactivatePdfCache();
   if(active==='kasalar') renderKasalarHome(m);
   else if(isBlank(active)) renderBlankTab(m);
   else if(active.startsWith('note:')) renderVaultNote(m,active);
