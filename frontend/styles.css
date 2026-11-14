@@ -953,8 +953,8 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .nmp-prev{min-height:36px;padding:8px 10px;border-radius:7px;background:var(--bg2);border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;overflow-x:auto}
 
 /* Right-Edge Notion Outline Minimap (Like Notion Screenshot) */
-.notion-minimap{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:40;display:flex;flex-direction:column;align-items:flex-end;gap:7px;padding:10px 6px;border-radius:10px;transition:.18s}
-.app:not(.r-closed) .notion-minimap{right:calc(var(--rw, 360px) + 18px)}
+.notion-minimap{position:fixed;right:14px;top:50%;transform:translateY(-50%);z-index:40;display:flex;flex-direction:column;align-items:flex-end;gap:7px;padding:10px 6px;border-radius:10px;transition:right .18s ease}
+.app:not(.no-right):not(.zen) .notion-minimap{right:calc(var(--right, 340px) + 14px)}
 .nm-tick{height:2px;border-radius:2px;background:color-mix(in srgb,var(--mut) 45%,transparent);transition:.15s;cursor:pointer}
 .nm-tick.lvl-1{width:18px;height:2.5px;background:color-mix(in srgb,var(--txt) 65%,transparent)}
 .nm-tick.lvl-2{width:13px}
