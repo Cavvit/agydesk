@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -78,6 +79,88 @@ async def _local(prompt: str, image_paths: list[Path] | None = None) -> tuple[st
         return await _mock("local", prompt, "Ollama çalışmıyor (yerel model kapalı)")
 
 
+_AUTH_ERROR_MARKERS = (
+    "authentication failed",
+    "auth_required",
+    "unauthenticated",
+    "unauthorized",
+    "login required",
+    "not logged in",
+    "invalid_grant",
+    "token expired",
+)
+_AUTH_HINT_MARKERS = (
+    "accounts.google.com",
+    "oauth",
+    "open your browser",
+    "sign in",
+    "authenticate",
+    "authentication",
+    "login",
+)
+_URL_RE = re.compile(r"https://[^\s)\]'\",]+")
+
+
+def detect_auth_hint(line: str) -> str | None:
+    """Satırda tarayıcı girişi/OAuth ipucu varsa kullanıcıya anlaşılır adım mesajı döndürür."""
+    low = line.lower()
+    if not any(m in low for m in _AUTH_HINT_MARKERS):
+        return None
+    m = _URL_RE.search(line)
+    if m:
+        return f"🔑 Tarayıcıda oturum açılması bekleniyor: {m.group(0)} (girişi tamamla veya ■ Dur ile iptal et)"
+    return "🔑 Tarayıcıda Google oturumu açılması bekleniyor (Chrome penceresini tamamla veya ■ Dur ile iptal et)…"
+
+
+def is_auth_error(msg: str) -> bool:
+    """Hata metninin kimlik doğrulama / oturum hatası olup olmadığını döndürür."""
+    low = msg.lower()
+    return any(m in low for m in _AUTH_ERROR_MARKERS)
+
+
+def run_agy_login_sync() -> None:
+    """agy CLI için Chrome OAuth oturum açma akışını tetikler ve sonucunu bekler."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    res = subprocess.run(
+        [
+            AGY_BIN,
+            "-p",
+            "ok",
+            "--output-format",
+            "json",
+            "--model",
+            "gemini-4-hydrogen-low",
+            "--effort",
+            "low",
+            "--print-timeout",
+            "150s",
+            "--mode",
+            "accept-edits",
+        ],
+        cwd=str(WORKSPACE),
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=flags,
+    )
+    for line in (res.stdout or "").splitlines():
+        t = line.strip()
+        if t.startswith("{"):
+            try:
+                v = json.loads(t)
+                err = (v.get("error") or (v.get("result") or {}).get("error") or "").strip()
+                if err:
+                    raise RuntimeError(err)
+            except ValueError:
+                pass
+    if res.returncode == 0:
+        return
+    msg = (res.stderr or "").strip()
+    raise RuntimeError(msg or f"agy giriş çıkış kodu: {res.returncode}")
+
+
 def _mode_flags(mode: str) -> list[str]:
     if mode in ("r", "y"):
         return ["--dangerously-skip-permissions"]
@@ -116,6 +199,7 @@ def _run_agy_sync(
         text=True,
         encoding="utf-8",
         errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
     )
     _procs[session] = proc
 
@@ -125,17 +209,51 @@ def _run_agy_sync(
     final_resp: str | None = None
     agy_err: str | None = None
     tokens = 0
+    stderr_lines: list[str] = []
+    got_output = threading.Event()
+    done_ev = threading.Event()
+
+    def _read_stderr() -> None:
+        if proc.stderr is None:
+            return
+        for raw in proc.stderr:
+            t = raw.strip()
+            if not t:
+                continue
+            hint = detect_auth_hint(t)
+            if hint and on_step:
+                got_output.set()
+                on_step(hint)
+            if len(stderr_lines) >= 60:
+                stderr_lines.pop(0)
+            stderr_lines.append(t)
+
+    def _watchdog() -> None:
+        if not got_output.wait(timeout=12.0) and not done_ev.is_set() and on_step:
+            on_step("⏳ agy CLI bekleniyor — Chrome'da oturum açma ekranı açıldıysa girişi tamamla (veya ■ Dur ile iptal et)…")
+
+    se_thr = threading.Thread(target=_read_stderr, daemon=True)
+    wd_thr = threading.Thread(target=_watchdog, daemon=True)
+    se_thr.start()
+    wd_thr.start()
 
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.strip()
-            if not line or not line.startswith("{"):
+            if not line:
+                continue
+            if not line.startswith("{"):
+                hint = detect_auth_hint(line)
+                if hint and on_step:
+                    got_output.set()
+                    on_step(hint)
                 continue
             try:
                 ev = json.loads(line)
             except Exception:
                 continue
+            got_output.set()
             etype = ev.get("event")
             if etype == "init":
                 new_conv = ev.get("conversation_id") or new_conv
@@ -183,9 +301,13 @@ def _run_agy_sync(
 
         proc.wait(timeout=5)
     finally:
+        done_ev.set()
+        got_output.set()
         _procs.pop(session, None)
         if proc.poll() is None:
             proc.kill()
+        se_thr.join(timeout=1.5)
+        wd_thr.join(timeout=1.0)
 
     text = (final_resp if final_resp is not None else "".join(chunks)).strip()
     if not text and agy_err:
@@ -193,7 +315,7 @@ def _run_agy_sync(
     if not text and tool_logs:
         text = "✓ Tamamlanan işlemler:\n" + "\n".join(f"• {x}" for x in tool_logs[-8:])
     if not text:
-        err = (proc.stderr.read() if proc.stderr else "").strip()
+        err = "\n".join(stderr_lines).strip()
         if proc.returncode != 0 or err:
             raise RuntimeError(err or f"agy çıkış kodu: {proc.returncode}")
     return text, tokens, True, new_conv

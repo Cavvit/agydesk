@@ -64,7 +64,7 @@ def main() -> None:
         return
     browser = find_browser()
     if browser:
-        subprocess.Popen([browser, f"--app={URL}/?v={int(time.time())}", "--window-size=1500,920"])
+        subprocess.Popen([browser, f"--app={URL}/?v={int(time.time())}", "--window-size=1260,760"])
     else:
         os.startfile(URL)
 

@@ -6,8 +6,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.getenv("AIWS_DB", ROOT / "atolye.db"))
 WORKSPACE = Path(os.getenv("AIWS_WORKSPACE", ROOT))
-_DESKTOP_VAULT = Path.home() / "Desktop" / "Elektrik_Makinalari_Lab_Vault"
-VAULT_DIR = Path(os.getenv("AIWS_VAULT", _DESKTOP_VAULT if _DESKTOP_VAULT.exists() else (ROOT / "notes")))
+def _resolve_vault_dir() -> Path:
+    env_v = os.getenv("AIWS_VAULT", "").strip()
+    if env_v:
+        return Path(env_v)
+    desktop = Path.home() / "Desktop"
+    for name in ("AgyDesk_Belgeler", "Elektrik_Makinalari_Lab_Vault"):
+        p = desktop / name
+        if p.exists():
+            return p
+    return ROOT / "notes"
+
+
+VAULT_DIR = _resolve_vault_dir()
 
 def _resolve_agy_bin() -> str:
     from_env = os.getenv("AGY_BIN")

@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=spaces6">
+<link rel="stylesheet" href="/styles.css?v=gemini1">
 </head>
 <body>
 <div class="app" id="app">
@@ -125,16 +125,25 @@
       <div class="rview-head" style="justify-content:space-between;gap:6px">
         <span id="sideAiCtx" class="mono" style="font-size:11px;color:var(--cu);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">📚 Kasa kaynakları bağlı</span>
         <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
-          <select class="eff-sel" id="sideEffSel" onchange="setEffort(this.value)" title="Model düşünme derinliği (Effort)"></select>
           <button class="hb" id="sideAiStop" style="padding:2px 7px;font-size:11px;display:none" onclick="aiStop('side_ai')">■ Dur</button>
           <button class="hb" style="padding:2px 7px;font-size:11px" onclick="clearSideAi()" title="Sohbet geçmişini sıfırla">🧹</button>
         </div>
       </div>
-      <div style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px" id="chat">
-        <div class="msg">Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.</div>
+      <div style="flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:6px" id="chat">
+        <div class="msg-row a"><div class="msg">Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.</div></div>
       </div>
       <div class="chat-att-bar" id="sideAttach"></div>
-      <div class="inp"><button class="att-btn" id="sideImgBtn" type="button" onclick="pickChatImages('side_ai')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="chatIn" rows="1" placeholder="Seçili kaynaklara ve nota sor…"></textarea><button class="btn" id="send">Gönder</button></div>
+      <div class="gem-side-foot" id="sideGemFoot">
+        <div class="gem-box exp gem-compact" data-gem-sess="side_ai">
+          <textarea id="chatIn" rows="1" placeholder="AgyDesk'e sorun…"></textarea>
+          <button class="gem-ic gem-plus" type="button" title="Ekle: Görsel, Skill veya Bağlam" onclick="toggleGemPlusMenu(this,'side_ai','chatIn')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div class="gem-right">
+            <label class="gem-eff-pill" title="Model & Düşünme Derinliği (Effort)"><select class="eff-sel gem-eff" onchange="setEffort(this.value)"></select><svg class="gem-chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></label>
+            <button class="gem-ic gem-mic" type="button" title="Sesle yaz (Türkçe dikte)" onclick="toggleGemMic(this,'chatIn')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4M8 21h8"/></svg></button>
+            <button class="gem-send" id="send" type="button" title="Gönder (Enter)"><svg class="ic-up" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg><svg class="ic-stop" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div class="rbody" id="rb-skills"></div>
@@ -165,6 +174,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=spaces6"></script>
+<script src="/app.js?v=gemini2"></script>
 </body>
 </html>

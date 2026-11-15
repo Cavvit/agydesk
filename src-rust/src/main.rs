@@ -32,7 +32,10 @@ use std::{
     os::windows::process::CommandExt,
     path::Path,
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::broadcast;
@@ -44,11 +47,48 @@ use tower_http::{cors::CorsLayer, services::ServeDir, services::ServeFile};
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DETACHED_PROCESS: u32 = 0x00000008;
 
+/// Opt out of Windows 10/11 EcoQoS execution-speed throttling so WebView2 UI stays responsive on battery / silent mode.
+fn disable_windows_power_throttling() {
+    #[repr(C)]
+    struct ProcessPowerThrottlingState {
+        version: u32,
+        control_mask: u32,
+        state_mask: u32,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn SetProcessInformation(
+            hprocess: isize,
+            process_information_class: i32,
+            process_information: *const ProcessPowerThrottlingState,
+            process_information_size: u32,
+        ) -> i32;
+    }
+    const PROCESS_POWER_THROTTLING: i32 = 4;
+    const PROCESS_POWER_THROTTLING_CURRENT_VERSION: u32 = 1;
+    const PROCESS_POWER_THROTTLING_EXECUTION_SPEED: u32 = 0x1;
+    let state = ProcessPowerThrottlingState {
+        version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        control_mask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+        state_mask: 0,
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            GetCurrentProcess(),
+            PROCESS_POWER_THROTTLING,
+            &state as *const ProcessPowerThrottlingState,
+            std::mem::size_of::<ProcessPowerThrottlingState>() as u32,
+        );
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     tx: broadcast::Sender<Value>,
     tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     steps: Arc<Mutex<HashMap<String, String>>>,
+    auth_needed: Arc<AtomicBool>,
+    auth_running: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -72,6 +112,13 @@ impl AppState {
 
 fn ws_hint() -> String {
     let vd = VAULT_DIR.to_string_lossy();
+    let write_rule = if vault::is_split_vault() {
+        format!(
+            "Yeni not (.md) oluşturman istenirse {vd}\\AgyDesk_Notlar\\<Kasa>\\ altına, belge/görsel (.pdf, .docx, .pptx, .png vb.) oluşturman istenirse {vd}\\AgyDesk_Dokuman\\<Kasa>\\ altına yaz."
+        )
+    } else {
+        format!("Yeni not oluşturman istenirse doğrudan {vd} altındaki ilgili kasa klasörüne .md dosyası olarak yaz.")
+    };
     format!(
         "[Atölye Çalışma İstasyonu — Gerçek Obsidian Kasası ({vd}) sol panelde ve sekmelerde zaten bağlıdır. \
 Ders Klasörleri ve Ana İndeksler: \
@@ -80,7 +127,7 @@ Ders Klasörleri ve Ana İndeksler: \
 [[00_KSG_ANA_INDEKS]] (Kontrol Sistemlerine Giriş: [[01_Kontrol_Sistemlerine_Giris_ve_Temel_Kavramlar]], [[02_Laplace_Donusumu_ve_Transfer_Fonksiyonu_Modelleme]], [[03_Blok_Diyagramlari_Elemanlar_ve_Temel_Indirgeme_Kurallari]], [[04_Cok_Cevrimli_Sistemler_ve_Bozucu_Girisli_Blok_Indirgeme]], [[05_QUIZ_SORU_BANKASI_COZUMLU]], [[KSG_QUIZ_TEK_PARCA_TAM_NOT]]), \
 [[00_YUKSEK_GERILIM_ANA_INDEKS]] (Yüksek Gerilim Tekniği: [[01_YG_Giris_Trafo_Merkezi_ve_Temel_Elemanlar]], [[02_Ayiricilar_ve_Kesiciler_Manevra_Siralari]], [[03_Hatlar_Iletkenler_Direkler_Izolatorler_Kablolar_Baralar]], [[04_Olcme_Koruma_Kumanda_ve_Gerilim_Ayar_Elemanlari]], [[05_Desarj_Olaylari_Elektrot_Sistemleri_ve_Odev_Cozumleri]], [[06_QUIZ_SINIFLANDIRMA_VE_SIRALAMA_SORU_BANKASI]], [[YUKSEK_GERILIM_QUIZ_TEK_PARCA_TAM_NOT]]), \
 [[00_SECMELI_TASARIM_ANA_INDEKS]] (Seçmeli Tasarım: [[01_Termal_Kamera_Verileri_ve_Analizi_5N1K]], [[02_IHA_Goruntuleri_ile_Arazi_Analizi_5N1K]]). \
-ÖNEMLİ: Kullanıcı bir notu açmanı isterse disk taraması yapma veya frontend kodunu değiştirme; yalnızca yanıtında [[Dosya_Adi]] şeklinde yaz, arayüz o sekmeyi otomatik açar. Yeni not oluşturman istenirse doğrudan {vd} altındaki ilgili kasa klasörüne .md dosyası olarak yaz. \
+ÖNEMLİ: Kullanıcı bir notu açmanı isterse disk taraması yapma veya frontend kodunu değiştirme; yalnızca yanıtında [[Dosya_Adi]] şeklinde yaz, arayüz o sekmeyi otomatik açar. {write_rule} \
 GÖRSEL KURALLARI: Arayüz yanıtını markdown olarak çizer. Matematiği $...$ veya $$...$$ ile yaz (ör. $I_A$, $R_{{fe}}$). \
 ASCII sanat ÇİZME. Devre şemaları için şu hazır blokları kullan (blok içi boş kalabilir; arayüz gerçek direnç/bobin sembolleriyle çizer): ```sema trafo-esdeger``` (tam eşdeğer devre), ```sema trafo-bosta``` (boşta çalışma / demir kaybı), ```sema trafo-kisadevre``` (kısa devre / bakır kaybı), ```sema trafo-baglanti``` (tüm 3 fazlı Y/Δ grupları) veya ```sema trafo-baglanti-yy``` / ```-yd``` / ```-dy``` / ```-dd```, ```sema dc-sont``` (DC şönt motor). Kod bloklarında dili belirt (ör. ```c, ```python). \
 Diğer akış/blok şemalarını ```mermaid``` bloğu ile ver; düğüm etiketlerinde indis için alt çizgi kullanma, düz yaz (ör. IA, RF).]\n\n"
@@ -108,6 +155,8 @@ struct RunReq {
     sources: Vec<String>,
     #[serde(default)]
     active_note: Option<String>,
+    #[serde(default)]
+    force_provider: Option<String>,
 }
 
 fn default_mode() -> String {
@@ -282,7 +331,9 @@ async fn health_ep(State(st): State<AppState>) -> Json<Value> {
         "ollama": ollama,
         "git_checkpoints": checkpoints::available(&WORKSPACE),
         "vault": VAULT_DIR.to_string_lossy(),
-        "running": running
+        "running": running,
+        "auth_needed": st.auth_needed.load(Ordering::Relaxed),
+        "auth_running": st.auth_running.load(Ordering::Relaxed)
     }))
 }
 
@@ -589,8 +640,21 @@ async fn post_chat_ep(Json(r): Json<ChatMsgReq>) -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-async fn quota_ep() -> Json<Value> {
-    Json(json!(store::quota_status()))
+#[derive(Deserialize, Default)]
+struct QuotaQuery {
+    #[serde(default)]
+    refresh: Option<String>,
+}
+
+async fn quota_ep(Query(q): Query<QuotaQuery>) -> Json<Value> {
+    let force = matches!(
+        q.refresh.as_deref(),
+        Some("1") | Some("true") | Some("yes")
+    );
+    let rows = tokio::task::spawn_blocking(move || store::quota_status_with(true, force))
+        .await
+        .unwrap_or_default();
+    Json(json!(rows))
 }
 
 async fn get_log_ep() -> Json<Value> {
@@ -711,6 +775,9 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
 
     match res {
         Ok((text, tokens, real, new_conv)) => {
+            if dec.provider != "local" && real {
+                st.auth_needed.store(false, Ordering::Relaxed);
+            }
             if let Some(ref cid) = new_conv {
                 store::set_conv_id(&sess, Some(cid));
             }
@@ -726,6 +793,9 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
             if st.tx.receiver_count() == 0 {
                 store::add_chat_msg(&sess, "a", &text);
             }
+            let fresh_quota = tokio::task::spawn_blocking(|| store::quota_status_with(true, true))
+                .await
+                .unwrap_or_default();
             st.emit(
                 "done",
                 json!({
@@ -736,19 +806,31 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                     "conv_id": new_conv,
                     "route": dec,
                     "effort": used_effort,
-                    "quota": store::quota_status()
+                    "quota": fresh_quota
                 }),
             );
             st.emit("log", json!({}));
         }
         Err(e) => {
+            let auth_req = providers::is_auth_error(&e);
+            let ollama_ok = if auth_req {
+                st.auth_needed.store(true, Ordering::Relaxed);
+                providers::ollama_alive().await
+            } else {
+                false
+            };
             store::add_log(&sess, &format!("✗ Hata ({}): {}", dec.label, e), "w");
+            let fresh_quota = tokio::task::spawn_blocking(|| store::quota_status_with(true, true))
+                .await
+                .unwrap_or_default();
             st.emit(
                 "error",
                 json!({
                     "session": sess,
                     "error": e,
-                    "quota": store::quota_status()
+                    "code": if auth_req { "auth_required" } else { "provider_error" },
+                    "ollama_available": ollama_ok,
+                    "quota": fresh_quota
                 }),
             );
             st.emit("log", json!({}));
@@ -820,7 +902,19 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
         }
     }
 
-    let dec = router::route(&r.text, r.skill.as_deref(), !r.images.is_empty(), store::used_pct);
+    let dec = if r.force_provider.as_deref() == Some("local") {
+        router::Decision {
+            provider: "local".to_string(),
+            label: provider_spec("local").label.to_string(),
+            reason: "Kullanıcı yerel modele yönlendirdi".to_string(),
+            fallback: true,
+        }
+    } else {
+        if providers::agy_available() {
+            let _ = tokio::task::spawn_blocking(|| store::fetch_agy_usage(false)).await;
+        }
+        router::route(&r.text, r.skill.as_deref(), !r.images.is_empty(), store::used_pct)
+    };
     store::add_log(
         &r.session,
         &format!("İş başladı → {}: {}", dec.label, log_text),
@@ -942,6 +1036,42 @@ async fn undo_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Respo
     Json(json!({ "undone": cps.len() })).into_response()
 }
 
+async fn auth_login_ep(State(st): State<AppState>) -> Json<Value> {
+    if st.auth_running.swap(true, Ordering::SeqCst) {
+        return Json(json!({ "status": "running" }));
+    }
+    st.emit(
+        "auth",
+        json!({ "status": "pending", "message": "Chrome'da Google oturum açma penceresi açılıyor…" }),
+    );
+    store::add_log("auth", "🔑 agy CLI oturum açma başlatıldı", "");
+    st.emit("log", json!({}));
+
+    let st_c = st.clone();
+    tokio::spawn(async move {
+        let res = tokio::task::spawn_blocking(providers::run_agy_login_sync)
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|r| r);
+        st_c.auth_running.store(false, Ordering::SeqCst);
+        match res {
+            Ok(()) => {
+                st_c.auth_needed.store(false, Ordering::Relaxed);
+                store::add_log("auth", "✓ agy CLI oturumu doğrulandı", "ok");
+                st_c.emit("auth", json!({ "status": "ok" }));
+            }
+            Err(err) => {
+                st_c.auth_needed.store(true, Ordering::Relaxed);
+                store::add_log("auth", &format!("✗ Oturum açılamadı: {}", err), "w");
+                st_c.emit("auth", json!({ "status": "failed", "error": err }));
+            }
+        }
+        st_c.emit("log", json!({}));
+    });
+
+    Json(json!({ "status": "started" }))
+}
+
 async fn no_cache_mw(req: axum::extract::Request, next: Next) -> Response {
     let is_api = req.uri().path().starts_with("/api/");
     let mut resp = next.run(req).await;
@@ -969,15 +1099,84 @@ enum WinCmd {
     Close,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WinBounds {
+    w: f64,
+    h: f64,
+    x: f64,
+    y: f64,
+    max: bool,
+}
+
+fn load_win_bounds(sw: f64, sh: f64) -> WinBounds {
+    let def_w = (sw * 0.82).clamp(960.0, 1340.0).min((sw - 24.0).max(760.0));
+    let def_h = (sh * 0.82).clamp(620.0, 840.0).min((sh - 48.0).max(520.0));
+    let def_x = ((sw - def_w) / 2.0).max(12.0);
+    let def_y = ((sh - def_h) / 2.0).max(12.0);
+    let mut b = WinBounds {
+        w: def_w,
+        h: def_h,
+        x: def_x,
+        y: def_y,
+        max: false,
+    };
+
+    let state = store::get_ui_state();
+    let Some(raw) = state.get("win_bounds").and_then(|v| v.as_str()) else {
+        return b;
+    };
+    let Ok(v) = serde_json::from_str::<Value>(raw) else {
+        return b;
+    };
+    if let (Some(w), Some(h)) = (
+        v.get("w").and_then(|n| n.as_f64()),
+        v.get("h").and_then(|n| n.as_f64()),
+    ) {
+        if w.is_finite() && h.is_finite() {
+            b.w = w.clamp(760.0, (sw - 20.0).max(760.0));
+            b.h = h.clamp(520.0, (sh - 44.0).max(520.0));
+        }
+    }
+    if let (Some(x), Some(y)) = (
+        v.get("x").and_then(|n| n.as_f64()),
+        v.get("y").and_then(|n| n.as_f64()),
+    ) {
+        if x.is_finite() && y.is_finite() && x >= -40.0 && x <= sw - 180.0 && y >= 0.0 && y <= sh - 120.0 {
+            b.x = x;
+            b.y = y;
+        }
+    }
+    b.max = v.get("max").and_then(|m| m.as_bool()).unwrap_or(false);
+    b
+}
+
+fn save_win_bounds(b: &WinBounds) {
+    let mut map = serde_json::Map::new();
+    let val = json!({
+        "w": b.w.round(),
+        "h": b.h.round(),
+        "x": b.x.round(),
+        "y": b.y.round(),
+        "max": b.max
+    })
+    .to_string();
+    map.insert("win_bounds".to_string(), Value::String(val));
+    store::set_ui_state(&map);
+}
+
 fn run_native_window() {
     use tao::{
-        dpi::LogicalSize,
+        dpi::{LogicalPosition, LogicalSize},
         event::{Event as TaoEvent, WindowEvent},
         event_loop::{ControlFlow, EventLoopBuilder},
         platform::windows::WindowBuilderExtWindows,
         window::WindowBuilder,
     };
-    use wry::{WebContext, WebViewBuilder};
+    use wry::{WebContext, WebViewBuilder, WebViewBuilderExtWindows};
+
+    const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding";
+
+    store::init();
 
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -987,11 +1186,24 @@ fn run_native_window() {
 
     let event_loop = EventLoopBuilder::<WinCmd>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+
+    let (sw, sh) = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())
+        .map(|m| {
+            let s = m.size().to_logical::<f64>(m.scale_factor());
+            (s.width, s.height)
+        })
+        .unwrap_or((1536.0, 864.0));
+    let mut bounds = load_win_bounds(sw, sh);
+
     let window = WindowBuilder::new()
         .with_title("AgyDesk — EEM Çalışma İstasyonu")
         .with_decorations(false)
         .with_undecorated_shadow(true)
-        .with_inner_size(LogicalSize::new(1520.0, 930.0))
+        .with_inner_size(LogicalSize::new(bounds.w, bounds.h))
+        .with_position(LogicalPosition::new(bounds.x, bounds.y))
+        .with_maximized(bounds.max)
         .with_window_icon(load_window_icon())
         .build(&event_loop)
         .expect("Win32 penceresi oluşturulamadı");
@@ -1018,6 +1230,7 @@ fn run_native_window() {
     let mut web_context = WebContext::new(Some(primary_dir));
     let build_primary = WebViewBuilder::new(&window)
         .with_web_context(&mut web_context)
+        .with_additional_browser_args(WEBVIEW_ARGS)
         .with_url(&url)
         .with_devtools(true)
         .with_ipc_handler(make_ipc(proxy.clone()))
@@ -1031,6 +1244,7 @@ fn run_native_window() {
             let mut fb_ctx = WebContext::new(Some(fallback_dir));
             let wv = WebViewBuilder::new(&window)
                 .with_web_context(&mut fb_ctx)
+                .with_additional_browser_args(WEBVIEW_ARGS)
                 .with_url(&url)
                 .with_devtools(true)
                 .with_ipc_handler(make_ipc(proxy.clone()))
@@ -1052,9 +1266,14 @@ fn run_native_window() {
                     window.set_minimized(true);
                 }
                 WinCmd::ToggleMaximize => {
-                    window.set_maximized(!window.is_maximized());
+                    let next_max = !window.is_maximized();
+                    window.set_maximized(next_max);
+                    bounds.max = next_max;
+                    save_win_bounds(&bounds);
                 }
                 WinCmd::Close => {
+                    bounds.max = window.is_maximized();
+                    save_win_bounds(&bounds);
                     drop(webview_opt.take());
                     media::shutdown();
                     std::thread::spawn(|| {
@@ -1065,9 +1284,35 @@ fn run_native_window() {
                 }
             },
             TaoEvent::WindowEvent {
+                event: WindowEvent::Resized(sz),
+                ..
+            } => {
+                if !window.is_maximized() {
+                    let ls = sz.to_logical::<f64>(window.scale_factor());
+                    if ls.width >= 400.0 && ls.height >= 300.0 {
+                        bounds.w = ls.width;
+                        bounds.h = ls.height;
+                    }
+                }
+            }
+            TaoEvent::WindowEvent {
+                event: WindowEvent::Moved(pos),
+                ..
+            } => {
+                if !window.is_maximized() {
+                    let lp = pos.to_logical::<f64>(window.scale_factor());
+                    if lp.x > -10000.0 && lp.y > -10000.0 {
+                        bounds.x = lp.x;
+                        bounds.y = lp.y;
+                    }
+                }
+            }
+            TaoEvent::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
+                bounds.max = window.is_maximized();
+                save_win_bounds(&bounds);
                 drop(webview_opt.take());
                 media::shutdown();
                 std::thread::spawn(|| {
@@ -1096,18 +1341,24 @@ fn is_port_listening() -> bool {
 
 fn build_router() -> Router {
     store::init();
+    std::thread::spawn(|| {
+        let _ = store::fetch_agy_usage(true);
+    });
 
     let (tx, _rx) = broadcast::channel::<Value>(256);
     let state = AppState {
         tx,
         tasks: Arc::new(Mutex::new(HashMap::new())),
         steps: Arc::new(Mutex::new(HashMap::new())),
+        auth_needed: Arc::new(AtomicBool::new(false)),
+        auth_running: Arc::new(AtomicBool::new(false)),
     };
 
     let frontend_dir = ROOT.join("frontend");
     Router::new()
         .route("/api/health", get(health_ep))
         .route("/api/ping", get(ping_ep))
+        .route("/api/auth/login", post(auth_login_ep))
         .route("/api/ui_state", get(get_ui_state_ep).post(set_ui_state_ep))
         .route("/api/vault", get(get_vault_ep))
         .route("/api/vault/move", post(move_vault_item_ep))
@@ -1141,6 +1392,7 @@ fn build_router() -> Router {
 }
 
 fn main() {
+    disable_windows_power_throttling();
     let args: Vec<String> = std::env::args().collect();
     let daemon_only = args.iter().any(|a| a == "--daemon-only");
 

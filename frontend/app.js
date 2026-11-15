@@ -717,8 +717,8 @@ function initMainScrollTracking(){
           noteScrollMap[_mountedNoteScrollId]=top;
           persistNoteScrolls(false);
         }
-        syncNotionMinimapActive();
         syncNotionFloatLock();
+        syncNotionMinimapActive();
       }
     });
   },{passive:true});
@@ -743,7 +743,7 @@ function saveSessionTabs(){
     };
     const raw=JSON.stringify(payload);
     localStorage.setItem(TAB_STORE_KEY,raw);
-    persistUiState({[TAB_STORE_KEY]:raw},true);
+    persistUiState({[TAB_STORE_KEY]:raw},false);
   }catch(e){}
 }
 function restoreSessionTabs(){
@@ -1163,17 +1163,27 @@ async function loadVault(){
   }catch(e){ console.error('loadVault error:',e); }
 }
 
+let lastHealthData={agy:true,ollama:false,git_checkpoints:false,auth_needed:false,auth_running:false};
+function renderHealthBar(h){
+  const el=$('#stHealth');
+  if(!el||!h) return;
+  const parts=[];
+  if(h.auth_running){
+    parts.push('<span style="color:var(--cu);font-weight:600">🔑 Chrome girişi bekleniyor…</span>');
+  }else if(h.auth_needed){
+    parts.push('<a href="#" onclick="event.preventDefault();triggerAgyLogin()" style="color:var(--cu);font-weight:600;text-decoration:underline">🔑 agy oturumu kapalı (Giriş Yap)</a>');
+  }else if(h.agy){
+    parts.push('agy CLI: aktif');
+  }
+  if(h.ollama) parts.push('Ollama: aktif');
+  if(h.git_checkpoints) parts.push('Git Checkpoint: açık');
+  el.innerHTML=parts.length?parts.join(' · '):'Sağlayıcı hazır';
+}
 async function loadHealth(){
   try{
     const h=await api('/api/health');
-    const el=$('#stHealth');
-    if(el){
-      const parts=[];
-      if(h.agy) parts.push('agy CLI: aktif');
-      if(h.ollama) parts.push('Ollama: aktif');
-      if(h.git_checkpoints) parts.push('Git Checkpoint: açık');
-      el.textContent=parts.length?parts.join(' · '):'Sağlayıcı hazır';
-    }
+    lastHealthData=h;
+    renderHealthBar(h);
     if(h.running){
       Object.entries(h.running).forEach(([sid,st])=>{
         if(ai[sid]){ ai[sid].running=true; ai[sid].step=st; aiRefresh(sid); }
@@ -1533,6 +1543,7 @@ function renderTree(){
     const flags={isSpace,isRootKasa,isSubfolder,isVaultFile,isRootDocsBucket};
     const isDraggableItem=isRootKasa||isSubfolder||isVaultFile;
     d.className='ti'+(x.k?' folder':'')+(isSpace?' space-node':'')+(isRootKasa?' root-kasa':'')+(x.open?' open':'')+(x.id===active?' on':'');
+    if(x.id) d.dataset.treeId=x.id;
     if(isSpace&&x.accent) d.style.setProperty('--sp-acc',x.accent);
     if(isDraggableItem){
       d.draggable=true;
@@ -1823,6 +1834,16 @@ function newBlankTab(){
   openTabs.splice(i===-1?openTabs.length:i+1,0,id);
   openPage(id);
 }
+function syncTreeActiveHighlight(){
+  const root=$('#tree');
+  if(!root||!root.children.length){ renderTree(); return; }
+  root.querySelectorAll('.ti.on').forEach(el=>el.classList.remove('on'));
+  if(active){
+    root.querySelectorAll('.ti[data-tree-id]').forEach(el=>{
+      if(el.dataset.treeId===active) el.classList.add('on');
+    });
+  }
+}
 /* opts.replace: aktif sekmenin içeriğini değiştir (Obsidian tıklama) · opts.newTab: her zaman yeni sekme (orta tık) */
 function openPage(id,forceTab=false,opts={}){
   if(isAI(id)&&!ai[id])return;
@@ -1841,16 +1862,20 @@ function openPage(id,forceTab=false,opts={}){
     pruneUnlockedNotes();
   }
   active=id;
+  let kasaChanged=false;
   if(p&&p.kasa&&currentKasa!=='all'&&currentKasa!==p.kasa){
     currentKasa=p.kasa;
     const sel=$('#kasaSelect'); if(sel) sel.value=currentKasa;
     rebuildTreeAndSources();
+    kasaChanged=true;
   }
   if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
   else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
   else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
   syncPdfSlotsWithTabs();
-  renderTabs(); renderTree(); renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
+  renderTabs();
+  if(kasaChanged) renderTree(); else syncTreeActiveHighlight();
+  renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
   scheduleRecordNavState();
 }
 function closeTab(id,opts={}){
@@ -1861,6 +1886,7 @@ function closeTab(id,opts={}){
   openTabs=openTabs.filter(t=>t!==id);
   unlockedNotes.delete(id);
   pruneUnlockedNotes();
+  noteDomCache.delete(id);
   if(!openTabs.length)openTabs=['kasalar'];
   if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
@@ -1877,7 +1903,7 @@ function closeTab(id,opts={}){
       redo:async()=>{ closeTab(id,{silentUndo:true}); }
     });
   }
-  renderTabs();renderTree();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
+  renderTabs();syncTreeActiveHighlight();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
   scheduleRecordNavState();
 }
 const isAI=id=>id.startsWith('ai');
@@ -2064,9 +2090,249 @@ function renderSessions(){
     l.appendChild(d);
   });
 }
+const MSG_ICONS={
+  copy:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+  check:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  edit:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+  retry:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>',
+  note:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M12 18v-6M9 15h6"/></svg>',
+  pin:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1Z"/></svg>',
+  speak:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>',
+  print:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>'
+};
+function flashMsgBtn(btn){
+  if(!btn) return;
+  const old=btn.innerHTML;
+  btn.innerHTML=MSG_ICONS.check;
+  btn.classList.add('ok');
+  setTimeout(()=>{ if(btn.isConnected){ btn.innerHTML=old; btn.classList.remove('ok'); } },1400);
+}
+function extractMsgCleanHtml(m){
+  const d=document.createElement('div');
+  d.innerHTML=m&&m.h?m.h:'';
+  d.querySelectorAll('.route,.ctool,.cdrag,.emb-x,.msg-act,.sc-act').forEach(el=>el.remove());
+  return d;
+}
+function extractMsgText(sessId,idx){
+  const s=ai[sessId], m=s&&s.msgs&&s.msgs[idx];
+  if(!m) return '';
+  if(typeof m.raw==='string'&&m.raw.trim()) return m.raw.trim();
+  const d=extractMsgCleanHtml(m);
+  return (d.innerText||d.textContent||'').replace(/\n{3,}/g,'\n\n').trim();
+}
+function copyTextSafe(txt){
+  if(!txt) return Promise.reject();
+  if(navigator.clipboard&&navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+  const ta=document.createElement('textarea');
+  ta.value=txt; ta.style.cssText='position:fixed;left:-9999px;top:0';
+  document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); } finally{ ta.remove(); }
+  return Promise.resolve();
+}
+function copyChatMsg(sessId,idx,btn){
+  const txt=extractMsgText(sessId,idx);
+  if(!txt){ toast('Kopyalanacak metin bulunamadı'); return; }
+  copyTextSafe(txt).then(()=>flashMsgBtn(btn)).catch(()=>toast('Kopyalama başarısız'));
+}
+function activeInputForSession(sessId){
+  if(sessId==='side_ai') return (active==='studychat'?$('#scIn'):$('#chatIn'))||$('#chatIn')||$('#scIn');
+  return $('#aiInput');
+}
+function editChatMsg(sessId,idx){
+  const txt=extractMsgText(sessId,idx);
+  const inp=activeInputForSession(sessId);
+  if(!inp){ toast('Giriş kutusu bulunamadı'); return; }
+  inp.value=txt;
+  autoGrow(inp);
+  syncGemBoxState(inp);
+  inp.focus();
+  inp.setSelectionRange(inp.value.length,inp.value.length);
+}
+function resendChatMsg(sessId,idx){
+  const txt=extractMsgText(sessId,idx);
+  if(!txt) return;
+  aiSend(sessId,txt);
+}
+function regenChatMsg(sessId,idx){
+  const s=ai[sessId]; if(!s) return;
+  if(s.running||s.pending){ toast('Bu oturum şu an çalışıyor'); return; }
+  for(let j=idx-1;j>=0;j--){
+    if(s.msgs[j]&&s.msgs[j].w==='me'){
+      const pTxt=extractMsgText(sessId,j);
+      if(pTxt){ aiSend(sessId,pTxt,null,false,false,[],{skipUserMsg:true}); return; }
+    }
+  }
+  if(s.lastReq) retryLastAi(sessId,false);
+  else toast('Yeniden üretilecek önceki istem bulunamadı');
+}
+async function appendChatMsgToNote(sessId,idx,btn){
+  if(!String(active).startsWith('note:')){
+    toast('📝 Nota eklemek için önce ortada bir not aç');
+    return;
+  }
+  const raw=extractMsgText(sessId,idx);
+  if(!raw) return;
+  const rel=active.slice(5);
+  const n=noteCache[active];
+  if(!n){ toast('Aktif not önbellekte bulunamadı'); return; }
+  try{
+    noteCache[active]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
+    invalidateNoteDomCache(active);
+    renderMain();
+    flashMsgBtn(btn);
+    toast('💾 Yanıt açık nota eklendi ve kaydedildi',active);
+  }catch(e){ toast('⚠ Nota eklenemedi: '+e.message); }
+}
+function saveChatMsgToStudio(sessId,idx,btn){
+  const s=ai[sessId], m=s&&s.msgs&&s.msgs[idx];
+  if(!m) return;
+  const d=extractMsgCleanHtml(m);
+  const txt=extractMsgText(sessId,idx);
+  studioAdd((txt.split('\n')[0]||txt).slice(0,48)||'Not',txt,d.innerHTML);
+  flashMsgBtn(btn);
+  toast('📌 Studio notlarına kaydedildi');
+}
+let _speakingBtn=null;
+function speakChatMsg(sessId,idx,btn){
+  if(!('speechSynthesis' in window)){ toast('Sesli okuma bu tarayıcıda desteklenmiyor'); return; }
+  const wasOn=btn&&btn.classList.contains('on');
+  window.speechSynthesis.cancel();
+  if(_speakingBtn){ _speakingBtn.classList.remove('on'); _speakingBtn=null; }
+  if(wasOn) return;
+  const raw=extractMsgText(sessId,idx).replace(/```[\s\S]*?```/g,' kod bloğu ').replace(/[#*`>_~]/g,' ').trim();
+  if(!raw) return;
+  const u=new SpeechSynthesisUtterance(raw);
+  u.lang='tr-TR';
+  u.onend=u.onerror=()=>{ if(_speakingBtn){ _speakingBtn.classList.remove('on'); _speakingBtn=null; } };
+  if(btn){ btn.classList.add('on'); _speakingBtn=btn; }
+  window.speechSynthesis.speak(u);
+}
+function printChatMsg(sessId,idx){
+  const s=ai[sessId], m=s&&s.msgs&&s.msgs[idx];
+  if(!m) return;
+  const d=extractMsgCleanHtml(m);
+  const frame=document.createElement('iframe');
+  frame.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(frame);
+  const doc=frame.contentDocument||frame.contentWindow.document;
+  doc.open();
+  doc.write(`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><title>AgyDesk Çıktısı</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<style>@page{size:A4 portrait;margin:14mm}body{font:11pt/1.55 'Instrument Sans',system-ui,sans-serif;color:#111;background:#fff;margin:0}h1,h2,h3{margin:12px 0 6px;break-after:avoid}pre{background:#f5f5f5;border:1px solid #ddd;padding:10px;border-radius:6px;white-space:pre-wrap;font:9.5pt/1.45 Consolas,monospace}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}th{background:#f2f2f2}blockquote{border-left:3px solid #888;margin:8px 0;padding:4px 10px;color:#333}</style>
+</head><body>${d.innerHTML}</body></html>`);
+  doc.close();
+  setTimeout(()=>{ try{ frame.contentWindow.focus(); frame.contentWindow.print(); } finally{ setTimeout(()=>frame.remove(),1500); } },250);
+}
+function renderMsgRowHtml(sessId,x,i,isStudy){
+  const sid=escAttr(sessId);
+  const clsMe=isStudy?'sc-msg me':'msg me';
+  const clsAi=isStudy?'sc-msg a':'msg';
+  const rowBase=isStudy?'msg-row sc-row':'msg-row';
+  if(x.ap||x.authCard) return `<div class="${rowBase} a"><div class="${clsAi}">${x.h}</div></div>`;
+  if(x.w==='me'){
+    return `<div class="${rowBase} me" data-sess="${sid}" data-idx="${i}"><div class="${clsMe}">${x.h}</div><div class="msg-act"><button type="button" class="mact" onclick="copyChatMsg('${sid}',${i},this)" title="İstem metnini kopyala">${MSG_ICONS.copy}</button><button type="button" class="mact" onclick="editChatMsg('${sid}',${i})" title="Düzenlemek için kutuya al">${MSG_ICONS.edit}</button><button type="button" class="mact" onclick="resendChatMsg('${sid}',${i})" title="Bu istemi tekrar gönder">${MSG_ICONS.retry}</button></div></div>`;
+  }
+  return `<div class="${rowBase} a" data-sess="${sid}" data-idx="${i}"><div class="${clsAi}">${x.h}</div><div class="msg-act"><button type="button" class="mact" onclick="copyChatMsg('${sid}',${i},this)" title="Yanıtı kopyala">${MSG_ICONS.copy}</button><button type="button" class="mact" onclick="regenChatMsg('${sid}',${i})" title="Yanıtı yeniden üret">${MSG_ICONS.retry}</button><button type="button" class="mact" onclick="appendChatMsgToNote('${sid}',${i},this)" title="Açık olan nota ekle">${MSG_ICONS.note}</button><button type="button" class="mact" onclick="saveChatMsgToStudio('${sid}',${i},this)" title="Studio notlarına sabitle">${MSG_ICONS.pin}</button><button type="button" class="mact" onclick="speakChatMsg('${sid}',${i},this)" title="Sesli oku / durdur">${MSG_ICONS.speak}</button><button type="button" class="mact" onclick="printChatMsg('${sid}',${i})" title="A4 yazdır">${MSG_ICONS.print}</button></div></div>`;
+}
+function gemComposerHtml(opts){
+  const sid=escAttr(opts.sessId);
+  const cls='gem-box'+(opts.compact?' exp gem-compact':'');
+  return `<div class="gem-wrap"><div class="${cls}" data-gem-sess="${sid}">
+    <textarea id="${opts.inputId}" rows="1" placeholder="${escAttr(opts.placeholder||"AgyDesk'e sorun…")}"></textarea>
+    <button class="gem-ic gem-plus" type="button" title="Ekle: Görsel, Skill veya Bağlam" onclick="toggleGemPlusMenu(this,'${sid}','${opts.inputId}')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+    <div class="gem-right">
+      <label class="gem-eff-pill" title="Model & Düşünme Derinliği (Effort)"><select class="eff-sel gem-eff" onchange="setEffort(this.value)">${effortOptionsHtml()}</select><svg class="gem-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></label>
+      <button class="gem-ic gem-mic" type="button" title="Sesle yaz (Türkçe dikte)" onclick="toggleGemMic(this,'${opts.inputId}')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4M8 21h8"/></svg></button>
+      <button class="gem-send" id="${opts.sendId}" type="button" title="Gönder (Enter)"><svg class="ic-up" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg><svg class="ic-stop" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
+    </div>
+  </div>${opts.showDisclaimer?'<div class="gem-note">AgyDesk yerel not ve kaynaklarla çalışır · Ctrl+V görsel · / komut</div>':''}</div>`;
+}
+function syncGemBoxState(inputEl){
+  if(!inputEl) return;
+  const box=inputEl.closest('.gem-box'); if(!box) return;
+  const sid=box.dataset.gemSess, s=ai[sid];
+  const hasAtt=Boolean(s&&s.attachments&&s.attachments.length);
+  const val=inputEl.value||'';
+  const hasVal=val.trim().length>0||hasAtt;
+  const isCompact=box.classList.contains('gem-compact');
+  const isMulti=isCompact||hasVal||val.includes('\n')||inputEl.scrollHeight>42;
+  box.classList.toggle('has-val',hasVal);
+  box.classList.toggle('exp',isMulti);
+  const running=Boolean(s&&(s.running||s.pending));
+  box.classList.toggle('is-running',running);
+  const sendBtn=box.querySelector('.gem-send');
+  if(sendBtn) sendBtn.title=running?'Durdur':'Gönder (Enter)';
+}
+function syncAllGemBoxes(){
+  $$('.gem-box textarea').forEach(syncGemBoxState);
+}
+let _gemPlusMenu=null;
+function closeGemPlusMenu(){
+  if(_gemPlusMenu){ _gemPlusMenu.remove(); _gemPlusMenu=null; }
+}
+function toggleGemPlusMenu(btn,sessId,inputId){
+  if(_gemPlusMenu){ closeGemPlusMenu(); return; }
+  const menu=document.createElement('div');
+  menu.className='gem-plus-menu';
+  const hasNote=String(active).startsWith('note:');
+  menu.innerHTML=`
+    <button type="button" class="gem-pm-item" data-act="img">🖼 Görsel ekle</button>
+    <button type="button" class="gem-pm-item" data-act="slash">⚡ Skill / komut ekle (/)</button>
+    ${hasNote?'<button type="button" class="gem-pm-item" data-act="note">📄 Açık notu soruya bağla</button>':''}
+    <div class="gem-pm-sep"></div>
+    <button type="button" class="gem-pm-item" data-act="ozet">☰ Kaynakları özetle</button>
+    <button type="button" class="gem-pm-item" data-act="fisle">▤ A4 sınav föyü üret</button>
+  `;
+  document.body.appendChild(menu);
+  const r=btn.getBoundingClientRect();
+  const mh=menu.offsetHeight||180, mw=menu.offsetWidth||210;
+  menu.style.left=Math.max(8,Math.min(r.left,innerWidth-mw-8))+'px';
+  menu.style.top=Math.max(8,r.top-mh-8)+'px';
+  _gemPlusMenu=menu;
+  menu.onclick=e=>{
+    const it=e.target.closest('.gem-pm-item'); if(!it) return;
+    const act=it.dataset.act, inp=$('#'+inputId);
+    closeGemPlusMenu();
+    if(act==='img'){ pickChatImages(sessId); return; }
+    if(act==='slash'&&inp){ inp.value=(inp.value?inp.value+' ':'')+'/'; autoGrow(inp); syncGemBoxState(inp); inp.focus(); return; }
+    if(act==='note'&&inp&&hasNote){ const t=(noteCache[active]&&noteCache[active].title)||active.slice(5); inp.value=`"${t}" notuma göre: `+(inp.value||''); autoGrow(inp); syncGemBoxState(inp); inp.focus(); return; }
+    if((act==='ozet'||act==='fisle')&&SK[act]){ aiSend(sessId,SK[act].prompt||('/'+act),act); }
+  };
+  setTimeout(()=>{
+    const onDoc=ev=>{ if(!menu.contains(ev.target)&&ev.target!==btn){ closeGemPlusMenu(); document.removeEventListener('mousedown',onDoc); } };
+    document.addEventListener('mousedown',onDoc);
+  },0);
+}
+let _gemRec=null, _gemRecBtn=null;
+function toggleGemMic(btn,inputId){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){ toast('🎙 Bu tarayıcı sesli dikteyi desteklemiyor'); return; }
+  if(_gemRec){
+    try{ _gemRec.stop(); }catch(e){}
+    return;
+  }
+  const inp=$('#'+inputId); if(!inp) return;
+  const rec=new SR();
+  rec.lang='tr-TR'; rec.continuous=false; rec.interimResults=false;
+  _gemRec=rec; _gemRecBtn=btn;
+  btn.classList.add('recording');
+  rec.onresult=e=>{
+    const transcript=[...e.results].map(r=>r[0]&&r[0].transcript||'').join(' ').trim();
+    if(transcript){
+      inp.value=(inp.value?inp.value.trimEnd()+' ':'')+transcript;
+      autoGrow(inp); syncGemBoxState(inp); inp.focus();
+    }
+  };
+  rec.onerror=ev=>{ if(ev.error!=='aborted') toast('🎙 Mikrofon hatası: '+ev.error); };
+  rec.onend=()=>{
+    if(_gemRecBtn) _gemRecBtn.classList.remove('recording');
+    _gemRec=null; _gemRecBtn=null;
+  };
+  try{ rec.start(); }catch(e){ btn.classList.remove('recording'); _gemRec=null; _gemRecBtn=null; }
+}
 function aiBody(id){
   const s=ai[id];
-  return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map(x=>`<div class="msg ${x.w==='me'?'me':''}">${x.h}</div>`).join('')+
+  return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+
     (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
 }
 function renderSideAi(){
@@ -2076,6 +2342,7 @@ function renderSideAi(){
   c.scrollTop=c.scrollHeight;
   const stBtn=$('#sideAiStop');
   if(stBtn) stBtn.style.display=(s.running||s.pending)?'inline-flex':'none';
+  syncAllGemBoxes();
   runMermaid('#chat .mermaid');
   renderStudyChatBody();
 }
@@ -2147,6 +2414,7 @@ function renderChatAttachments(sessionId){
   }else if(active===sessionId){
     const c=$('#aiAttach'); if(c) c.innerHTML=html;
   }
+  syncAllGemBoxes();
 }
 function wireChatDrop(el,getSessionId,onSkill){
   if(!el) return;
@@ -2177,18 +2445,29 @@ function wireChatDrop(el,getSessionId,onSkill){
     }
   });
 }
+let _lastMermaidTheme='';
 function runMermaid(sel,force=false){
   if(!window.mermaid)return;
+  const els=$$(sel);
+  if(!els.length)return;
   const mTheme=(typeof curTheme!=='undefined'&&(curTheme==='eink'||curTheme==='sepia'||curTheme==='mono-light'))?'neutral':'dark';
-  $$(sel).forEach(el=>{
+  els.forEach(el=>{
     if(!el.dataset.msrc) el.dataset.msrc=el.textContent;
     else if(force){ el.removeAttribute('data-processed'); el.textContent=el.dataset.msrc; }
   });
-  try{ mermaid.initialize({startOnLoad:false,theme:mTheme}); mermaid.run({querySelector:sel}); }catch(e){}
+  try{
+    if(_lastMermaidTheme!==mTheme){
+      mermaid.initialize({startOnLoad:false,theme:mTheme});
+      _lastMermaidTheme=mTheme;
+    }
+    const p=mermaid.run({querySelector:sel});
+    if(p&&typeof p.catch==='function') p.catch(()=>{});
+  }catch(e){}
 }
 function aiRefresh(id){
   if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
   if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);c.scrollTop=c.scrollHeight;aiHead(id);runMermaid('#aichat .mermaid');}
+  syncAllGemBoxes();
   renderTabs(); renderSessions();
 }
 /* ---------- İzin modları ---------- */
@@ -2213,7 +2492,7 @@ const EFFORTS=[
 let curEffort=localStorage.getItem('agydesk_effort')||'low';
 if(!EFFORTS.some(e=>e.id===curEffort)) curEffort='low';
 function effortOptionsHtml(){
-  return EFFORTS.map(e=>`<option value="${e.id}" title="${e.tip}"${e.id===curEffort?' selected':''}>${e.label}</option>`).join('');
+  return EFFORTS.map(e=>`<option value="${e.id}" title="${e.tip}"${e.id===curEffort?' selected':''}>Hydrogen · ${e.label}</option>`).join('');
 }
 function effortSelectHtml(){
   return `<select class="eff-sel" onchange="setEffort(this.value)" title="Model düşünme derinliği (Effort)">${effortOptionsHtml()}</select>`;
@@ -2236,7 +2515,6 @@ function aiHead(id){
   const h=$('#aihead'); if(!h)return; const s=ai[id];
   h.innerHTML=`<div class="seg">${Object.entries(MODES).map(([k,m])=>`<button class="${s.mode===k?'on '+k:''}" onclick="setMode2('${id}','${k}')" title="${m.d}">${m.i} ${m.n}</button>`).join('')}</div>
    <span class="mdesc">${MODES[s.mode].d}</span><span style="flex:1"></span>
-   ${effortSelectHtml()}
    <button class="hb" ${s.checkpoints?'':'disabled'} onclick="aiUndo('${id}')">↶ Geri al (${s.checkpoints})</button>
    <button class="hb stop" ${s.running||s.pending?'':'disabled'} onclick="aiStop('${id}')">■ Dur</button>`;
 }
@@ -2256,30 +2534,50 @@ function renderAI(m){
   const s=ai[active]; s.unread=false;
   m.scrollTop=0;
   m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
-   <div class="aiin" id="aidrop"><div class="col"><div class="aihint">⬇ Skill kartını veya görseli buraya bırak · Ctrl+V yapıştır · / ile komut</div>
+   <div class="aiin" id="aidrop"><div class="col">
    <div class="chat-att-bar ai-att-bar" id="aiAttach"></div>
-   <div class="inp"><button class="att-btn" id="aiImgBtn" type="button" onclick="pickChatImages('${active}')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="aiInput" rows="1" placeholder="Bu oturuma bir görev ver…"></textarea><button class="btn" id="aiSend">Gönder</button></div></div></div></div>`;
+   ${gemComposerHtml({sessId:active,inputId:'aiInput',sendId:'aiSend',placeholder:"AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   aiHead(active);
   const inp=$('#aiInput'),go=()=>{
-    const cur=ai[active], v=inp.value;
+    const cur=ai[active];
+    if(cur&&(cur.running||cur.pending)){ aiStop(active); return; }
+    const v=inp.value;
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length))return;
-    inp.value='';autoGrow(inp);aiSend(active,v);
+    inp.value='';autoGrow(inp);syncGemBoxState(inp);aiSend(active,v);
   };
-  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>autoGrow(inp); inp.focus();
+  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{autoGrow(inp);syncGemBoxState(inp);}; inp.focus();
   wireChatDrop($('#aidrop'),()=>active,k=>{if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
   wireChatDrop($('#aichat'),()=>active);
   renderChatAttachments(active);
+  syncAllGemBoxes();
   const c=$('#aichat'); c.scrollTop=c.scrollHeight; renderSessions(); renderTabs(); runMermaid('#aichat .mermaid');
 }
-async function aiSend(id,text,skill,ok,resume,explicitImgs){
+async function triggerAgyLogin(){
+  try{
+    const r=await api('/api/auth/login',{});
+    lastHealthData.auth_running=true;
+    renderHealthBar(lastHealthData);
+    toast(r.status==='running'?'🔑 Giriş penceresi zaten açık, Chrome’u tamamla':'🔑 Chrome’da Google girişi başlatılıyor…');
+  }catch(e){ toast('⚠ Giriş başlatılamadı: '+e.message); }
+}
+function retryLastAi(id,forceLocal){
+  const s=ai[id]; if(!s||!s.lastReq) return;
+  if(s.running||s.pending){ toast('Bu oturum şu an meşgul'); return; }
+  s.msgs=s.msgs.filter(m=>!m.authCard);
+  const req=s.lastReq;
+  aiSend(id,req.text,req.skill,false,false,req.images||[],{skipUserMsg:true,force_provider:forceLocal?'local':null});
+}
+async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
   const s=ai[id]; if(!s) return;
+  const skipUser=Boolean(extraOpts&&extraOpts.skipUserMsg);
   const rawText=String(text||'').trim();
   if(!skill&&rawText.startsWith('/')){const k=rawText.slice(1).split(' ')[0]; if(SK[k])skill=k;}
   if(skill&&SK[skill]&&(SK[skill].kind==='cmd'||SK[skill].kind==='mode')){s.msgs.push({w:'me',h:'/'+skill});aiInstant(id,skill);return;}
   if(s.running||s.pending){s.msgs.push({w:'a',h:'Bu oturum meşgul veya onay bekliyor. Onayla ya da ■ Dur butonuna bas.'});aiRefresh(id);return;}
-  const imgs=ok?(explicitImgs||[]):[...(s.attachments||[])];
+  const imgs=(ok||skipUser)?(explicitImgs||[]):[...(s.attachments||[])];
   if(!rawText&&!imgs.length) return;
-  if(!ok){
+  s.lastReq={text:rawText,skill:skill||null,images:imgs};
+  if(!ok&&!skipUser){
     s.attachments=[];
     renderChatAttachments(id);
     const escTxt=rawText.replace(/</g,'&lt;').replace(/\n/g,'<br>');
@@ -2290,7 +2588,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs){
       return `<img class="chat-img" src="${su}" alt="${sn}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede aç" data-rel="${sr}" data-name="${sn}" onclick="openRightViewer(this.dataset.rel,this.dataset.name)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.name)">`;
     }).join('')}</div>`:'';
     const msgHtml=imgHtml+(escTxt?`<div>${escTxt}</div>`:'');
-    s.msgs.push({w:'me',h:msgHtml});
+    s.msgs.push({w:'me',h:msgHtml,raw:rawText});
     api('/api/chats',{session:id,w:'me',h:msgHtml}).catch(()=>{});
   }
   if(id!=='side_ai'&&s.title.startsWith('AI Oturumu')){
@@ -2310,7 +2608,8 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs){
       allow:s.allow,
       approved:!!ok,
       sources:getCheckedSources(),
-      active_note:actNote
+      active_note:actNote,
+      force_provider:(extraOpts&&extraOpts.force_provider)||null
     });
   }catch(e){ s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
   if(res.status==='approval'){
@@ -2336,7 +2635,7 @@ function startEvents(){
       const badge=d.real?(r.provider==='local'?'':'<span class="chip c">agy CLI</span>'):'<span class="chip">Yerel</span>';
       const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
       const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span>${effChip}<span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
-      s.msgs.push({w:'a',h});
+      s.msgs.push({w:'a',h,raw:d.reply});
       if(d.session==='side_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(d.session==='side_ai' && $('#outs')){
@@ -2349,7 +2648,26 @@ function startEvents(){
       aiRefresh(d.session);
       loadVault();
     }
-    else if(d.event==='error'&&s){ s.running=false; if(d.quota)applyQuota(d.quota); s.msgs.push({w:'a',h:'⚠ Sağlayıcı hatası: '+String(d.error).replace(/</g,'&lt;')}); aiRefresh(d.session); }
+    else if(d.event==='auth'){
+      lastHealthData.auth_running=d.status==='pending';
+      lastHealthData.auth_needed=d.status==='failed';
+      renderHealthBar(lastHealthData);
+      if(d.status==='ok'){ toast('✓ agy oturumu açıldı — soruyu tekrar gönderebilirsin'); }
+      else if(d.status==='failed'){ toast('⚠ Oturum açılamadı: '+(d.error||'Zaman aşımı')); }
+    }
+    else if(d.event==='error'&&s){
+      s.running=false; if(d.quota)applyQuota(d.quota);
+      const errEsc=String(d.error).replace(/</g,'&lt;');
+      if(d.code==='auth_required'){
+        lastHealthData.auth_needed=true; renderHealthBar(lastHealthData);
+        const sidAttr=escAttr(d.session);
+        const locBtn=d.ollama_available?`<button class="hb" onclick="retryLastAi('${sidAttr}',true)">⚡ Yerel Ollama ile Yanıtla</button>`:'';
+        s.msgs.push({w:'a',authCard:true,h:`<div class="appr"><b>🔑 Google / agy Oturumu Gerekli</b><div>Tarayıcıdaki oturum açma tamamlanmadı veya süresi doldu:<br><code>${errEsc}</code></div><div class="ab" style="margin-top:8px;flex-wrap:wrap"><button class="btn" onclick="triggerAgyLogin()">🔑 Chrome'da Oturum Aç</button><button class="hb" onclick="retryLastAi('${sidAttr}',false)">↻ Tekrar Gönder</button>${locBtn}</div></div>`});
+      }else{
+        s.msgs.push({w:'a',h:'⚠ Sağlayıcı hatası: '+errEsc});
+      }
+      aiRefresh(d.session);
+    }
     else if(d.event==='log'){ loadLog(); }
   };
   es.onerror=()=>{ setTimeout(()=>{ loadChats(); loadVault(); loadHealth(); }, 2500); };
@@ -2362,6 +2680,7 @@ async function appendReplyToNote(btn){
   if(!n) return;
   try{
     noteCache[active]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
+    invalidateNoteDomCache(active);
     renderMain();
     toast('💾 Yanıt nota eklendi ve kaydedildi',active);
   }catch(e){ alert('Nota eklenemedi: '+e.message); }
@@ -3130,6 +3449,7 @@ async function deleteActiveNote(id){
   try{
     await api('/api/note?rel='+encodeURIComponent(rel),null,'DELETE');
     delete noteCache[id];
+    invalidateNoteDomCache(id);
     delete pages[id];
     checkedSources.delete(rel);
     closeTab(id,{silentUndo:true});
@@ -3236,7 +3556,12 @@ function scrollToHeading(text){
 const pdfState={};
 const pdfInfoCache={};
 const pdfSlotMap=new Map();
+const noteDomCache=new Map();
+const NOTE_DOM_CACHE_LIMIT=14;
 let _pdfNavSeq=0;
+function invalidateNoteDomCache(id){
+  if(id) noteDomCache.delete(id);
+}
 function getPdfSlot(id){
   return pdfSlotMap.get(id)||null;
 }
@@ -3248,6 +3573,9 @@ function syncPdfSlotsWithTabs(){
   const keep=new Set(openTabs);
   for(const [id,slot] of pdfSlotMap.entries()){
     if(!keep.has(id)){ slot.remove(); pdfSlotMap.delete(id); }
+  }
+  for(const id of noteDomCache.keys()){
+    if(!keep.has(id)) noteDomCache.delete(id);
   }
 }
 function activatePdfCache(id){
@@ -3715,6 +4043,20 @@ async function renderVaultNote(m,id){
   notionState.baseDir=baseDir;
   notionState.locked=!unlockedNotes.has(id);
   if(notionState.locked) editMode=false;
+  const cachedDom=noteDomCache.get(id);
+  if(!editMode&&cachedDom&&cachedDom.content===(n.content||'')&&cachedDom.locked===!!notionState.locked){
+    noteDomCache.delete(id);
+    notionState.blocks=cachedDom.blocks;
+    notionUndoInit(id,notionState.blocks);
+    m.replaceChildren(cachedDom.node);
+    ensureNotionOverlays();
+    renderNotionMinimap();
+    _mountedNoteScrollId=id;
+    restoreMainScroll(id);
+    wireDrop();
+    wireNoteImages(m,id);
+    return;
+  }
   notionState.blocks=parseNoteBlocks(n.content||'');
   notionUndoInit(id,notionState.blocks);
 
@@ -4268,7 +4610,7 @@ function setSavePillState(state,text){
 function scheduleNotionAutoSave(noteId){
   const id=noteId||notionState.noteId;
   if(!id||!String(id).startsWith('note:')) return;
-  if(!_notionUndoApplying) scheduleNotionUndoSnapshot(320);
+  if(!_notionUndoApplying) scheduleNotionUndoSnapshot(650);
   setSavePillState('saving','● Kaydediliyor…');
   if(notionState.saveTimer) clearTimeout(notionState.saveTimer);
   notionState.saveTimer=setTimeout(()=>flushNotionSave(id,false),650);
@@ -4282,6 +4624,7 @@ function scheduleRawMdAutoSave(id){
     if(!ed||!noteCache[id]) return;
     const rel=id.slice(5);
     noteCache[id].content=ed.value;
+  invalidateNoteDomCache(id);
     api('/api/note',{rel,content:ed.value}).then(saved=>{
       noteCache[id]=saved;
       setSavePillState('saved','✓ Kaydedildi');
@@ -4307,9 +4650,11 @@ async function flushNotionSave(noteId,manual=false){
     md=serializeNoteBlocks(notionState.blocks);
   }
   if(noteCache[id]) noteCache[id].content=md;
+  invalidateNoteDomCache(id);
   setSavePillState('saving','● Kaydediliyor…');
   try{
     noteCache[id]=await api('/api/note',{rel,content:md});
+  invalidateNoteDomCache(id);
     setSavePillState('saved','✓ Kaydedildi');
     updateRightProps();
     renderNotionMinimap();
@@ -4386,7 +4731,7 @@ function renderSingleBlockInnerHTML(b,idx,olSeq){
   if(b.type==='mermaid'){
     const isOpen=notionState.openEditorSet.has(b.id);
     return `${gutter}<div class="cbox" style="margin:8px 0">
-      <div class="ctool" style="opacity:1;pointer-events:auto;transform:none">
+      <div class="ctool">
         <span class="clang">◈ Mermaid Diyagramı</span>
         <span class="csep"></span>
         <button type="button" onclick="toggleBlockSubEditor('${b.id}',event)">✎ ${isOpen?'Kapat':'Diyagram Kodu'}</button>
@@ -4600,10 +4945,9 @@ function wireNotionCanvasEvents(view){
       }
 
       // 2) Live inline $math$ conversion when closing $ is typed
-      const mdNow=editableDomToInlineMd(t);
       const inlineMathMatch=rawTxt.match(/\$([^$\n]{1,80})\$\s$/);
       if(inlineMathMatch){
-        b.text=mdNow;
+        b.text=editableDomToInlineMd(t);
         renderNotionCanvasDOM(idx,true);
         scheduleNotionAutoSave();
         return;
@@ -4761,6 +5105,7 @@ function wireNotionCanvasEvents(view){
 async function toggleNotionLock(id){
   if(notionState.locked){
     unlockedNotes.add(id);
+  invalidateNoteDomCache(id);
     notionState.locked=false;
     renderMain();
     toast('🔓 Doğrudan Notion düzenleme açıldı',id);
@@ -5206,22 +5551,29 @@ function applySlashCommand(cmdId,keepText=false){
 }
 
 /* ---------- Bubble Toolbar & Inline Formatting ---------- */
+let _selBubbleRaf=0;
 document.addEventListener('selectionchange',()=>{
   const bb=$('#notionBubble'); if(!bb) return;
   if(notionState.locked||editMode){ bb.classList.remove('show'); return; }
   const sel=window.getSelection();
-  if(!sel||sel.isCollapsed||!sel.toString().trim()){ bb.classList.remove('show'); return; }
-  const anchor=sel.anchorNode?(sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement):null;
-  if(!anchor||!anchor.closest||!anchor.closest('#mdView')){ bb.classList.remove('show'); return; }
-  const r=sel.getRangeAt(0).getBoundingClientRect();
-  if(!r.width&&!r.height){ bb.classList.remove('show'); return; }
-  const selEl=$('#nbTurnSel');
-  if(selEl) selEl.value='';
-  bb.classList.add('show');
-  const x=Math.max(12,Math.min(window.innerWidth-390,r.left+r.width/2-180));
-  const y=Math.max(10,r.top-42);
-  bb.style.left=x+'px';
-  bb.style.top=y+'px';
+  if(!sel||sel.isCollapsed){ bb.classList.remove('show'); return; }
+  if(_selBubbleRaf) return;
+  _selBubbleRaf=requestAnimationFrame(()=>{
+    _selBubbleRaf=0;
+    const s=window.getSelection();
+    if(!s||s.isCollapsed||!s.toString().trim()){ bb.classList.remove('show'); return; }
+    const anchor=s.anchorNode?(s.anchorNode.nodeType===1?s.anchorNode:s.anchorNode.parentElement):null;
+    if(!anchor||!anchor.closest||!anchor.closest('#mdView')){ bb.classList.remove('show'); return; }
+    const r=s.getRangeAt(0).getBoundingClientRect();
+    if(!r.width&&!r.height){ bb.classList.remove('show'); return; }
+    const selEl=$('#nbTurnSel');
+    if(selEl) selEl.value='';
+    bb.classList.add('show');
+    const x=Math.max(12,Math.min(window.innerWidth-390,r.left+r.width/2-180));
+    const y=Math.max(10,r.top-42);
+    bb.style.left=x+'px';
+    bb.style.top=y+'px';
+  });
 });
 
 function notionFormat(cmd){
@@ -5332,8 +5684,25 @@ document.addEventListener('mousedown',e=>{
 });
 
 /* ---------- Right-Edge Notion Outline Minimap ---------- */
+let _mmEntries=[];
+let _mmActiveIdx=-999;
+let _floatLockSig='';
+function buildMinimapEntries(){
+  const mm=$('#notionMinimap'), view=$('#mdView');
+  if(!mm||!view){ _mmEntries=[]; return; }
+  const ticks=[...mm.querySelectorAll('.nm-tick')];
+  const links=new Map();
+  mm.querySelectorAll('.nm-link').forEach(l=>links.set(Number(l.dataset.bidx),l));
+  const blks=new Map();
+  view.querySelectorAll('.nblock[data-bidx]').forEach(b=>blks.set(Number(b.dataset.bidx),b));
+  _mmEntries=ticks.map(t=>{
+    const bidx=Number(t.dataset.bidx);
+    return {bidx,tick:t,link:links.get(bidx)||null,blk:blks.get(bidx)||null};
+  });
+}
 function renderNotionMinimap(){
   const mm=$('#notionMinimap'); if(!mm) return;
+  _mmActiveIdx=-999;
   const headings=[];
   notionState.blocks.forEach((b,idx)=>{
     if(b.type==='h1'||b.type==='h2'||b.type==='h3'){
@@ -5342,20 +5711,25 @@ function renderNotionMinimap(){
       if(clean) headings.push({idx,lvl,text:clean});
     }
   });
-  if(headings.length<2){ mm.style.display='none'; return; }
+  if(headings.length<2){ mm.style.display='none'; _mmEntries=[]; return; }
   mm.style.display='flex';
   mm.innerHTML=headings.map(h=>`<div class="nm-tick lvl-${h.lvl}" data-bidx="${h.idx}" onclick="scrollToNotionBlock(${h.idx})" title="${escAttr(h.text)}"></div>`).join('')+
     `<div class="nm-card">
       <div class="nm-head">İçindekiler (${headings.length} başlık)</div>
       ${headings.map(h=>`<div class="nm-link lvl-${h.lvl}" data-bidx="${h.idx}" onclick="scrollToNotionBlock(${h.idx})">${escHtml(h.text)}</div>`).join('')}
     </div>`;
-  syncNotionMinimapActive();
+  buildMinimapEntries();
+  requestAnimationFrame(()=>{ syncNotionMinimapActive(); });
 }
 
 function setMinimapActiveIdx(idx){
-  document.querySelectorAll('#notionMinimap .nm-tick, #notionMinimap .nm-link').forEach(x=>{
-    x.classList.toggle('on',Number(x.dataset.bidx)===idx);
-  });
+  if(idx===_mmActiveIdx) return;
+  for(const ent of _mmEntries){
+    const on=ent.bidx===idx;
+    if(ent.tick) ent.tick.classList.toggle('on',on);
+    if(ent.link) ent.link.classList.toggle('on',on);
+  }
+  _mmActiveIdx=idx;
 }
 
 function syncNotionMinimapActive(){
@@ -5368,25 +5742,21 @@ function syncNotionMinimapActive(){
     }
     _mmClickLock=null;
   }
-  const ticks=[...mm.querySelectorAll('.nm-tick')];
-  if(!ticks.length) return;
+  if(!_mmEntries.length||(_mmEntries[0].blk&&!_mmEntries[0].blk.isConnected)) buildMinimapEntries();
+  if(!_mmEntries.length) return;
   const scRect=sc.getBoundingClientRect();
   const threshold=scRect.top+96;
   const atBottom=(sc.scrollTop+sc.clientHeight)>=sc.scrollHeight-6;
-  let activeIdx=Number(ticks[0].dataset.bidx);
+  let activeIdx=_mmEntries[0].bidx;
   if(atBottom){
-    for(const t of ticks){
-      const bidx=Number(t.dataset.bidx);
-      const blk=view.querySelector(`.nblock[data-bidx="${bidx}"]`);
-      if(!blk) continue;
-      if(blk.getBoundingClientRect().top<=scRect.bottom-24) activeIdx=bidx;
+    const botLimit=scRect.bottom-24;
+    for(const ent of _mmEntries){
+      if(ent.blk&&ent.blk.getBoundingClientRect().top<=botLimit) activeIdx=ent.bidx;
     }
   }else{
-    for(const t of ticks){
-      const bidx=Number(t.dataset.bidx);
-      const blk=view.querySelector(`.nblock[data-bidx="${bidx}"]`);
-      if(!blk) continue;
-      if(blk.getBoundingClientRect().top<=threshold) activeIdx=bidx;
+    for(const ent of _mmEntries){
+      if(!ent.blk) continue;
+      if(ent.blk.getBoundingClientRect().top<=threshold) activeIdx=ent.bidx;
       else break;
     }
   }
@@ -5396,15 +5766,18 @@ function syncNotionFloatLock(){
   const fl=$('#notionFloatLock'), m=$('#main'), doc=$('#doc'), pill=$('#notionLockPill');
   const pdfStage=$('#pdfCacheStage');
   if(!fl||!m||!doc||!pill||!String(active).startsWith('note:')||(pdfStage&&pdfStage.classList.contains('active'))){
-    if(fl) fl.style.display='none';
+    if(fl&&_floatLockSig!=='hide'){ fl.style.display='none'; _floatLockSig='hide'; }
     return;
   }
   const mRect=m.getBoundingClientRect();
   const pRect=pill.getBoundingClientRect();
   if(pRect.bottom>mRect.top+6){
-    fl.style.display='none';
+    if(_floatLockSig!=='hide'){ fl.style.display='none'; _floatLockSig='hide'; }
     return;
   }
+  const sig='show|'+(notionState.locked?'1':'0');
+  if(sig===_floatLockSig) return;
+  _floatLockSig=sig;
   fl.style.display='inline-flex';
   fl.classList.toggle('locked',!!notionState.locked);
   fl.textContent=notionState.locked?'🔒':'🔓';
@@ -5451,6 +5824,7 @@ async function dropImagesToNote(id,files){
       embeds.forEach(em=>notionState.blocks.push({id:nextBlkId(),type:'embed',raw:em}));
       const md=serializeNoteBlocks(notionState.blocks);
       noteCache[id]=await api('/api/note',{rel,content:md});
+  invalidateNoteDomCache(id);
       await loadVault(); renderMain();
       toast(`📎 ${embeds.length} dosya nota blok olarak eklendi`,id);
     }
@@ -5509,6 +5883,7 @@ async function saveActiveNote(id){
   try{
     const content=ed?ed.value:(syncAllNotionBlocksFromDOM(),serializeNoteBlocks(notionState.blocks));
     noteCache[id]=await api('/api/note',{rel,content});
+  invalidateNoteDomCache(id);
     editMode=false;
     await loadVault();
     toast('💾 Not kaydedildi: '+rel, id);
@@ -5525,18 +5900,48 @@ function renderBlankTab(m){
       <span style="${lk}" onclick="closeTab(active)">Sekmeyi kapat (Ctrl+W)</span>
     </div></div>`;
 }
+function stashActiveNoteDom(m){
+  const prevId=_mountedNoteScrollId;
+  if(!prevId||!m) return;
+  if(prevId===active){
+    noteDomCache.delete(active);
+    return;
+  }
+  if(editMode||notionState.saveTimer||notionState.noteId!==prevId) return;
+  const cachedNote=noteCache[prevId];
+  if(!cachedNote) return;
+  const docEl=m.querySelector('#doc');
+  if(!docEl||!docEl.querySelector('#mdView')) return;
+  docEl.remove();
+  noteDomCache.delete(prevId);
+  noteDomCache.set(prevId,{
+    node:docEl,
+    content:cachedNote.content||'',
+    locked:!!notionState.locked,
+    blocks:notionState.blocks,
+    baseDir:notionState.baseDir
+  });
+  while(noteDomCache.size>NOTE_DOM_CACHE_LIMIT){
+    const oldest=noteDomCache.keys().next().value;
+    noteDomCache.delete(oldest);
+  }
+}
 function renderMain(){
   const m=$('#main');
   const mm=$('#notionMinimap'); if(mm) mm.style.display='none';
   const fl=$('#notionFloatLock'); if(fl) fl.style.display='none';
   saveMainScroll();
-  if(!active.startsWith('note:')) _mountedNoteScrollId=null;
+  stashActiveNoteDom(m);
+  if(!active.startsWith('note:')){
+    _mountedNoteScrollId=null;
+    m.ondragover=null; m.ondragleave=null; m.ondrop=null;
+  }
   if(!isPdfTab(active)) deactivatePdfCache();
   if(active==='kasalar') renderKasalarHome(m);
   else if(isBlank(active)) renderBlankTab(m);
   else if(active.startsWith('note:')) renderVaultNote(m,active);
   else if(active==='studychat') renderStudyChat(m);
-  else if(active==='cal') renderCal(m);
+  else if(active==='cal') renderCal(m,!calLoaded);
   else if(active==='trafo') renderTrafoLab(m);
   else if(isAI(active)) renderAI(m);
   else renderSim(m);
@@ -6274,7 +6679,7 @@ function renderSemesterStage(){
 
 async function renderCal(m,fetchApi=true){
   if(!m) m=$('#main');
-  if(fetchApi) await loadCalEvents(false);
+  if(fetchApi&&!calLoaded) await loadCalEvents(false);
   if(!GCAL.miniMonth) GCAL.miniMonth=gcalFromISO(GCAL.cursor);
   if(typeof renderTabs==='function') renderTabs();
 
@@ -7364,19 +7769,22 @@ function studioSend(q){
 }
 function renderStudyChat(m){
   m.scrollTop=0;
-  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span>${effortSelectHtml()}<button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
-    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="chat-att-bar sc-att-bar" id="scAttach"></div><div class="sc-box"><button class="sc-att" id="scImgBtn" type="button" onclick="pickChatImages('side_ai')" title="Sohbete resim ekle (veya Ctrl+V yapıştır / sürükle-bırak)">🖼</button><textarea id="scIn" rows="1" placeholder="Kaynaklarına bir şey sor…"></textarea><span class="sc-n" id="scN"></span><button class="sc-go" id="scGo" title="Gönder">➤</button></div></div></div>`;
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="chat-att-bar sc-att-bar" id="scAttach"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'side_ai',inputId:'scIn',sendId:'scGo',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   const i=$('#scIn'), go=()=>{
+    const cur=ai.side_ai;
+    if(cur&&(cur.running||cur.pending)){ aiStop('side_ai'); return; }
     const v=i.value;
-    if(!v.trim()&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length)) return;
-    i.value=''; autoGrow(i); studioSend(v);
+    if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length)) return;
+    i.value=''; autoGrow(i); syncGemBoxState(i); studioSend(v);
   };
   $('#scGo').onclick=go;
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
-  i.oninput=()=>autoGrow(i);
+  i.oninput=()=>{ autoGrow(i); syncGemBoxState(i); };
   wireChatDrop(m.querySelector('.sc-wrap'),()=>'side_ai');
   renderChatAttachments('side_ai');
+  syncAllGemBoxes();
   updateSideAiCtx(); renderStudyChatBody(); i.focus();
 }
 function renderStudyChatBody(){
@@ -7391,7 +7799,7 @@ function renderStudyChatBody(){
   if(!msgs.length&&!s.running){
     h=`<div class="sc-hero"><div class="big">Kaynaklarınla sohbet</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
   }else{
-    h=msgs.map(({x,i})=>x.w==='me'?`<div class="sc-msg me">${x.h}</div>`:`<div class="sc-msg a">${x.h}<div class="sc-act"><button onclick="studioSaveMsg(${i})">📌 Nota kaydet</button></div></div>`).join('');
+    h=msgs.map(({x,i})=>renderMsgRowHtml('side_ai',x,i,true)).join('');
     if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
@@ -7402,6 +7810,7 @@ function renderStudyChatBody(){
   const st=$('#scStop'); if(st) st.style.display=(s.running||s.pending)?'inline-flex':'none';
   const ch=$('#scChips');
   if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
+  syncAllGemBoxes();
   runMermaid('#scChat .mermaid');
 }
 /* ---------- Sohbet / yönlendirici (Sağ Panel Gerçek AI) ---------- */
@@ -7411,12 +7820,14 @@ function chat(who,html){
 }
 function autoGrow(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight+2,Math.round(innerHeight*0.5))+'px'}
 function send(){
+  const cur=ai.side_ai;
+  if(cur&&(cur.running||cur.pending)){ aiStop('side_ai'); return; }
   const i=$('#chatIn'),q=i.value.trim();
-  if(!q&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length))return;
-  i.value='';autoGrow(i);
+  if(!q&&!(cur&&cur.attachments&&cur.attachments.length))return;
+  i.value='';autoGrow(i);syncGemBoxState(i);
   aiSend('side_ai',q);
 }
-$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>autoGrow(e.target);
+$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>{autoGrow(e.target);syncGemBoxState(e.target);};
 wireChatDrop($('#rb-ai'),()=>'side_ai');
 
 /* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
@@ -7727,6 +8138,7 @@ document.addEventListener('keydown',e=>{
 /* ---------- Skill kütüphanesi (komut / mod / yetenek / araç) ---------- */
 const mk=(h,prompt,r,kind)=>({h,prompt,r,kind});
 Object.assign(SK,{
+ usage:mk('/usage','Canlı agy CLI kota ve kullanım durumunu göster.',['komut','agy /usage','anında'],'cmd'),
  compact:mk('/compact','Bağlamı sıkıştır.',['komut','token tasarrufu','anında'],'cmd'),
  clear:mk('/clear','Oturumu temizle.',['komut','—','anında'],'cmd'),
  caveman:mk('Caveman','mod',['mod','−%65 token','anında'],'mode'),
@@ -7747,7 +8159,7 @@ Object.assign(SK,{
 });
 const GROUPS=[
  ['Mühendislik & Ders Araçları',[['ozet','≡','Aktif notu & kaynakları özetle',''],['fisle','▤','A4 iki sütun sınav föyü hazırla',''],['spice','∿','Devre analizi & SPICE netlist',''],['teardown','⬡','Sistem & kayıp mekanizması analizi',''],['whisper','◉','Ham metni ders notuna yapılandır',''],['pcb','▣','Donanım & şema blok taslağı','']]],
- ['Komutlar',[['compact','⇲','Bağlamı sıkıştır','cmd'],['clear','⌫','Oturumu temizle','cmd'],['plan','☰','Adım adım çalışma planı',''],['goal','◎','Uzun hedef modu',''],['boost','⚡','Derin matematiksel analiz','']]],
+ ['Komutlar',[['usage','◔','Canlı agy /usage kotası','cmd'],['compact','⇲','Bağlamı sıkıştır','cmd'],['clear','⌫','Oturumu temizle','cmd'],['plan','☰','Adım adım çalışma planı',''],['goal','◎','Uzun hedef modu',''],['boost','⚡','Derin matematiksel analiz','']]],
  ['Modlar',[['caveman','🪨','Kısa, token tasarruflu yanıt','mode'],['caveman-commit','↳','Commit mesajı',''],['caveman-review','✓','Kısa inceleme','']]],
  ['Yetenekler',[['graphify','⌘','Kavram grafı çıkar',''],['investigate-first','?','Önce teşhis',''],['surgical-patch','✂','Dar yama',''],['safe-refactor','⟳','Güvenli refactor',''],['lean-build','▢','Sade geliştirme',''],['verify-and-stop','■','Doğrula ve dur',''],['llm-council','☷','Çok perspektifli karar','']]]
 ];
@@ -7781,6 +8193,22 @@ buildSkills();
 function aiInstant(id,k){
   const s=ai[id];
   if(k==='clear'){ api('/api/clear',{session:id}).catch(()=>{}); s.msgs=[{w:'a',h:'🧹 Oturum temizlendi. agy konuşma bağlamı sıfırlandı.'}]; s.attachments=[]; renderChatAttachments(id); }
+  else if(k==='usage'){
+    s.msgs.push({w:'a',h:'⏳ <code>agy -p "/usage"</code> üzerinden canlı kota sorgulanıyor…'});
+    aiRefresh(id);
+    loadQuota(true).then(()=>{
+      const rowsHtml=quota.map(q=>q.u===null
+        ?`<tr><td style="padding:4px 6px"><b>${q.n}</b></td><td style="padding:4px 6px"><span class="chip l">∞ Sınırsız</span></td><td style="padding:4px 6px">${q.reset}</td></tr>`
+        :`<tr><td style="padding:4px 6px"><b>${q.n}</b></td><td style="padding:4px 6px"><span class="chip ${q.u>=100?'':(q.u>85?'':'c')}">${q.u>=100?'%0 · Tükendi':'%'+(100-q.u)+' kaldı'}</span></td><td style="padding:4px 6px">${q.reset}</td></tr>`
+      ).join('');
+      const msgObj=s.msgs[s.msgs.length-1];
+      const h=`<b>📊 Canlı Antigravity (<code>/usage</code>) Kota Durumu</b><table style="width:100%;margin-top:8px;border-collapse:collapse;font:12px var(--mono)"><thead><tr style="border-bottom:1px solid var(--line);color:var(--mut);text-align:left"><th style="padding:4px 6px">Model</th><th style="padding:4px 6px">Kalan Hak</th><th style="padding:4px 6px">Pencere &amp; Yenilenme</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="route"><span class="chip c">agy /usage</span><span>Canlı sunucu kotası senkronize edildi</span></div>`;
+      if(msgObj) msgObj.h=h; else s.msgs.push({w:'a',h});
+      api('/api/chats',{session:id,w:'a',h}).catch(()=>{});
+      aiRefresh(id);
+    });
+    return;
+  }
   else if(k==='compact'){
     const mine=s.msgs.filter(m=>m.w==='me').map(m=>m.h).slice(-3).join(' · ');
     s.msgs=[{w:'a',h:`🗜 Bağlam sıkıştırıldı. Özet: ${mine||'(henüz içerik yok)'} <div class="route"><span class="chip l">yerel özetleyici</span><span>~%70 token tasarruf</span></div>`}];
@@ -7793,10 +8221,10 @@ function aiInstant(id,k){
 
 /* ---------- Kullanım & kalan haklar ---------- */
 let quota=[{n:'Yükleniyor…',u:0,reset:''}];
-const fmtReset=q=>q.cloud?(q.used_pct>=100?`Tükendi · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:(q.count?`${q.count}/${q.limit} istek · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:`0/${q.limit} istek`)):`sınırsız · ${q.count} istek`;
-function applyQuota(rows){ quota=rows.map(q=>({n:q.label,u:q.used_pct,reset:fmtReset(q)})); renderUsage(); }
-async function loadQuota(){ try{ applyQuota(await api('/api/quota')); return true; }catch(e){ return false; } }
-async function refreshQuota(ev){ ev&&ev.stopPropagation(); const b=$('#urefresh'); if(b){b.disabled=true;b.textContent='⟳ …';} const ok=await loadQuota(); const b2=$('#urefresh'); if(b2){b2.disabled=false;b2.textContent=ok?'✓ Güncellendi':'⚠ Hata';setTimeout(()=>{const b3=$('#urefresh');if(b3)b3.textContent='⟳ Yenile';},1500);} }
+const fmtReset=q=>q.detail?q.detail:(q.cloud?(q.used_pct>=100?`Tükendi · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:(q.count?`${q.count}/${q.limit} istek · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:`0/${q.limit} istek`)):`sınırsız · ${q.count} istek`);
+function applyQuota(rows){ quota=rows.map(q=>({n:q.label,u:q.used_pct,reset:fmtReset(q),group:q.group||q.id,source:q.source||''})); renderUsage(); }
+async function loadQuota(force=false){ try{ applyQuota(await api(force?'/api/quota?refresh=1':'/api/quota')); return true; }catch(e){ return false; } }
+async function refreshQuota(ev){ ev&&ev.stopPropagation(); const b=$('#urefresh'); if(b){b.disabled=true;b.textContent='⟳ …';} const ok=await loadQuota(true); const b2=$('#urefresh'); if(b2){b2.disabled=false;b2.textContent=ok?'✓ Güncellendi':'⚠ Hata';setTimeout(()=>{const b3=$('#urefresh');if(b3)b3.textContent='⟳ Yenile';},1500);} }
 function useQuota(){}
 function quotaRows(){
   return quota.map(q=>q.u===null
@@ -7804,11 +8232,13 @@ function quotaRows(){
    :`<div class="qrow"><div class="l"><span>${q.n}</span><b style="${q.u>=100?'color:var(--cu)':''}">${q.u>=100?'Tükendi':'%'+(100-q.u)+' kaldı'}</b></div><div class="bar ${q.u>85?'w':''}"><i style="width:${q.u}%"></i></div><small>${q.reset}</small></div>`).join('');
 }
 function renderUsage(){
-  const cloud=quota.filter(q=>q.u!==null);
+  const cloud=[]; const seenGroups=new Set();
+  quota.forEach(q=>{ if(q.u!==null){ const gk=q.group||q.n; if(!seenGroups.has(gk)){ seenGroups.add(gk); cloud.push(q); } } });
   const left=cloud.length?Math.round(cloud.reduce((a,q)=>a+(100-q.u),0)/cloud.length):100;
   $('#uring').style.setProperty('--p',left); $('#uringTxt').textContent=left+'%';
-  $('#upop').innerHTML=`<h4><span>AI kullanımı</span><button class="urefresh" id="urefresh" title="Kotaları yenile" onclick="refreshQuota(event)">⟳ Yenile</button></h4>${quotaRows()}
-   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele (Hydrogen / Argon / Yerel) devredilir.</div>`;
+  const liveTag=quota.some(q=>q.source==='agy_cli')?' <span class="chip c" style="font-size:9.5px;padding:1px 5px;text-transform:none">agy /usage</span>':'';
+  $('#upop').innerHTML=`<h4><span>AI kullanımı${liveTag}</span><button class="urefresh" id="urefresh" title="agy /usage ile kotaları yenile" onclick="refreshQuota(event)">⟳ Yenile</button></h4>${quotaRows()}
+   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotalar doğrudan <code>agy -p "/usage"</code> üzerinden çekilir. Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele devredilir.</div>`;
   const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
 }
 (()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
@@ -7839,6 +8269,7 @@ function applyTheme(themeId, persist=true) {
   document.body.setAttribute('data-theme', curTheme);
   document.documentElement.style.colorScheme = t.cat === 'light' ? 'light' : 'dark';
   if (persist) persistUiState({ agydesk_theme: curTheme }, true);
+  noteDomCache.clear();
   renderThemePop();
   if (active === 'sim' || active === 'trafo') renderMain();
   else if (active === 'cal') renderCal($('#main'), false);
@@ -8409,14 +8840,26 @@ async function mediaCmd(action){
   setTimeout(refreshMediaNow,240);
 }
 
+let _lastRailPlat='';
+let _lastRailTip='';
 function renderMediaRail(){
   const btn=$('#mediaBtn'); if(!btn)return;
-  btn.innerHTML=mediaIcon(mediaState.platform);
-  btn.classList.toggle('playing',mediaState.playing);
-  btn.classList.toggle('active',mediaPinned||$('#mpop')?.classList.contains('show'));
-  btn.dataset.tip=mediaState.source==='idle'
+  const plat=mediaState.platform||'idle';
+  if(plat!==_lastRailPlat){
+    btn.innerHTML=mediaIcon(plat);
+    _lastRailPlat=plat;
+  }
+  const isPlaying=!!mediaState.playing;
+  const isActive=!!(mediaPinned||$('#mpop')?.classList.contains('show'));
+  if(btn.classList.contains('playing')!==isPlaying) btn.classList.toggle('playing',isPlaying);
+  if(btn.classList.contains('active')!==isActive) btn.classList.toggle('active',isActive);
+  const tip=mediaState.source==='idle'
     ?'Medya Kumandası (Çalan yok)'
     :`${mediaState.playing?'▶':'❚❚'} ${mediaState.title}${mediaState.artist?' — '+mediaState.artist:''} (${mediaState.platformLabel})`;
+  if(tip!==_lastRailTip){
+    btn.dataset.tip=tip;
+    _lastRailTip=tip;
+  }
 }
 
 let mediaSeeking=false;
@@ -8472,6 +8915,7 @@ setInterval(()=>{
   if(cur) cur.textContent=fmtMediaTime(pos);
 },1000);
 
+let _lastMediaPopSig='';
 function renderMediaPop(){
   const pop=$('#mpop'); if(!pop)return;
   if(mediaSeeking&&pop.classList.contains('show'))return;
@@ -8481,6 +8925,18 @@ function renderMediaPop(){
   const hasSp=spConnected();
   const s=mediaState;
   const players=s.players||[];
+  const dur=Number(s.durMs)||0;
+  const pos=dur>0?liveMediaPosMs():0;
+  const pct=dur>0?Math.max(0,Math.min(100,(pos/dur)*100)):(s.pct||0);
+  const sig=[s.activeKey,s.platform,s.title,s.artist,s.thumb?s.thumb.slice(0,48):'',s.playing?1:0,dur>0?dur:0,players.length,mediaShowSetup?1:0,hasSp?1:0].join('|');
+  if(sig===_lastMediaPopSig&&pop.firstElementChild){
+    const el=$('#mpopSeek'), cur=$('#mpopCurTime');
+    if(el){ el.value=pos; el.style.setProperty('--p',pct.toFixed(1)+'%'); }
+    if(cur) cur.textContent=fmtMediaTime(pos);
+    return;
+  }
+  _lastMediaPopSig=sig;
+
   const multi=players.length>1;
   const curIdx=players.findIndex(p=>p.key===s.activeKey);
   const nextPl=multi?players[(curIdx+1)%players.length]:null;
@@ -8489,9 +8945,6 @@ function renderMediaPop(){
     :'Başka aktif medya oynatıcı yok';
   const artHtml=s.thumb?`<img src="${escAttr(s.thumb)}" alt="">`:mediaIcon(s.platform);
 
-  const dur=Number(s.durMs)||0;
-  const pos=dur>0?liveMediaPosMs():0;
-  const pct=dur>0?Math.max(0,Math.min(100,(pos/dur)*100)):(s.pct||0);
   const seekHtml=dur>0?`
     <div class="mpop-seek-wrap">
       <input type="range" id="mpopSeek" class="mpop-seek" min="0" max="${dur}" step="1000" value="${pos}" style="--p:${pct.toFixed(1)}%" oninput="onMediaSeekInput(this.value)" onchange="mediaSeek(this.value)" title="İstediğin saniyeye/dakikaya sürükle">
@@ -8543,10 +8996,19 @@ function renderMediaUI(){
   if($('#mpop')?.classList.contains('show'))renderMediaPop();
 }
 
+let _mediaRefreshInFlight=null;
 async function refreshMediaNow(){
-  await Promise.all([pollPcMedia(),pollSpotifyConnect()]);
-  recomputeMediaState();
-  renderMediaUI();
+  if(_mediaRefreshInFlight) return _mediaRefreshInFlight;
+  _mediaRefreshInFlight=(async()=>{
+    try{
+      await Promise.all([pollPcMedia(),pollSpotifyConnect()]);
+      recomputeMediaState();
+      renderMediaUI();
+    }finally{
+      _mediaRefreshInFlight=null;
+    }
+  })();
+  return _mediaRefreshInFlight;
 }
 
 function openMediaPop(pin=false){
@@ -8598,8 +9060,18 @@ function initMediaHub(){
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'&&pop.classList.contains('show'))closeMediaPop(true);
   });
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshMediaNow();});
-  setInterval(()=>{if(!document.hidden)refreshMediaNow();},2500);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshMediaNow();scheduleMediaPoll();}});
+  let _mediaPollTimer=null;
+  function scheduleMediaPoll(){
+    if(_mediaPollTimer) clearTimeout(_mediaPollTimer);
+    if(document.hidden) return;
+    const ms=pop.classList.contains('show')?2500:(mediaState.playing?5000:8000);
+    _mediaPollTimer=setTimeout(async()=>{
+      if(!document.hidden) await refreshMediaNow();
+      scheduleMediaPoll();
+    },ms);
+  }
+  scheduleMediaPoll();
 }
 
 async function hydrateUiState(){
@@ -8667,7 +9139,7 @@ async function hydrateUiState(){
 
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects(); syncAllGemBoxes();
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');

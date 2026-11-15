@@ -56,12 +56,17 @@ pub static WORKSPACE: Lazy<PathBuf> = Lazy::new(|| {
 
 pub static VAULT_DIR: Lazy<PathBuf> = Lazy::new(|| {
     if let Ok(v) = env::var("AIWS_VAULT") {
-        return PathBuf::from(v);
+        if !v.trim().is_empty() {
+            return PathBuf::from(v);
+        }
     }
     if let Ok(up) = env::var("USERPROFILE") {
-        let desktop_vault = Path::new(&up).join("Desktop").join("Elektrik_Makinalari_Lab_Vault");
-        if desktop_vault.exists() {
-            return desktop_vault;
+        let desktop = Path::new(&up).join("Desktop");
+        for name in ["AgyDesk_Belgeler", "Elektrik_Makinalari_Lab_Vault"] {
+            let p = desktop.join(name);
+            if p.exists() {
+                return p;
+            }
         }
     }
     ROOT.join("notes")

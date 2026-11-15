@@ -285,15 +285,19 @@ fn load_spaces_cfg() -> SpacesCfg {
     cfg
 }
 
-fn sort_entries_with_order(entries: &mut [PathBuf], order_names: Option<&Vec<String>>, dirs_last: bool) {
-    let rank: HashMap<&str, usize> = match order_names {
+fn order_rank_map(order_names: Option<&Vec<String>>) -> HashMap<&str, usize> {
+    match order_names {
         Some(list) if !list.is_empty() => list
             .iter()
             .enumerate()
             .map(|(i, s)| (s.as_str(), i))
             .collect(),
         _ => HashMap::new(),
-    };
+    }
+}
+
+fn sort_entries_with_order(entries: &mut [PathBuf], order_names: Option<&Vec<String>>, dirs_last: bool) {
+    let rank = order_rank_map(order_names);
     entries.sort_by(|a, b| {
         let an = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let bn = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -307,6 +311,24 @@ fn sort_entries_with_order(entries: &mut [PathBuf], order_names: Option<&Vec<Str
                 let da = if dirs_last { a.is_dir() } else { false };
                 let db = if dirs_last { b.is_dir() } else { false };
                 da.cmp(&db).then_with(|| an.to_lowercase().cmp(&bn.to_lowercase()))
+            }
+        }
+    });
+}
+
+fn sort_named_items<T>(items: &mut Vec<(String, bool, T)>, order_names: Option<&Vec<String>>, dirs_last: bool) {
+    let rank = order_rank_map(order_names);
+    items.sort_by(|a, b| {
+        let ra = rank.get(a.0.as_str()).copied();
+        let rb = rank.get(b.0.as_str()).copied();
+        match (ra, rb) {
+            (Some(ia), Some(ib)) => ia.cmp(&ib),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => {
+                let da = if dirs_last { a.1 } else { false };
+                let db = if dirs_last { b.1 } else { false };
+                da.cmp(&db).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase()))
             }
         }
     });
@@ -426,23 +448,101 @@ fn ext_lower(p: &Path) -> String {
         .unwrap_or_default()
 }
 
+pub const NOTLAR_DIR: &str = "AgyDesk_Notlar";
+pub const DOKUMAN_DIR: &str = "AgyDesk_Dokuman";
+
+pub fn is_split_vault() -> bool {
+    VAULT_DIR.join(NOTLAR_DIR).is_dir() || VAULT_DIR.join(DOKUMAN_DIR).is_dir()
+}
+
+fn strip_split_prefix(clean: &str) -> &str {
+    if let Some(rest) = clean.strip_prefix(&format!("{}/", NOTLAR_DIR)) {
+        return rest;
+    }
+    if clean == NOTLAR_DIR {
+        return "";
+    }
+    if let Some(rest) = clean.strip_prefix(&format!("{}/", DOKUMAN_DIR)) {
+        return rest;
+    }
+    if clean == DOKUMAN_DIR {
+        return "";
+    }
+    clean
+}
+
+fn split_bucket_for_rel(clean: &str) -> &'static str {
+    if clean.to_lowercase().ends_with(".md") {
+        NOTLAR_DIR
+    } else {
+        DOKUMAN_DIR
+    }
+}
+
+fn join_rel_parts(base: &Path, clean: &str) -> PathBuf {
+    let mut p = base.to_path_buf();
+    for seg in clean.split('/').filter(|s| !s.is_empty()) {
+        p.push(seg);
+    }
+    p
+}
+
 pub fn safe_path(rel: &str) -> Result<PathBuf, String> {
     let clean = rel.replace('\\', "/").trim_start_matches('/').to_string();
     if clean.contains("..") {
         return Err("Geçersiz dosya yolu".to_string());
     }
-    let mut p = VAULT_DIR.clone();
-    for seg in clean.split('/').filter(|s| !s.is_empty()) {
-        p.push(seg);
+    if !is_split_vault() || clean.is_empty() || clean.starts_with('.') {
+        return Ok(join_rel_parts(&VAULT_DIR, &clean));
     }
-    Ok(p)
+    let direct = join_rel_parts(&VAULT_DIR, &clean);
+    if direct.exists() {
+        return Ok(direct);
+    }
+    let stripped = strip_split_prefix(&clean);
+    if stripped.is_empty() {
+        return Ok(direct);
+    }
+    let primary_bucket = split_bucket_for_rel(stripped);
+    let other_bucket = if primary_bucket == NOTLAR_DIR {
+        DOKUMAN_DIR
+    } else {
+        NOTLAR_DIR
+    };
+    let primary = join_rel_parts(&VAULT_DIR.join(primary_bucket), stripped);
+    if primary.exists() {
+        return Ok(primary);
+    }
+    let secondary = join_rel_parts(&VAULT_DIR.join(other_bucket), stripped);
+    if secondary.exists() {
+        return Ok(secondary);
+    }
+    Ok(primary)
+}
+
+fn split_target_dir(clean_dir_rel: &str, for_md: bool) -> Result<PathBuf, String> {
+    if clean_dir_rel.contains("..") {
+        return Err("Geçersiz dosya yolu".to_string());
+    }
+    let stripped = strip_split_prefix(clean_dir_rel.trim_matches('/'));
+    if !is_split_vault() {
+        return Ok(join_rel_parts(&VAULT_DIR, stripped));
+    }
+    let bucket = if for_md { NOTLAR_DIR } else { DOKUMAN_DIR };
+    Ok(join_rel_parts(&VAULT_DIR.join(bucket), stripped))
 }
 
 fn rel_posix(p: &Path) -> String {
-    p.strip_prefix(&*VAULT_DIR)
+    let raw = p
+        .strip_prefix(&*VAULT_DIR)
         .unwrap_or(p)
         .to_string_lossy()
-        .replace('\\', "/")
+        .replace('\\', "/");
+    if is_split_vault() {
+        strip_split_prefix(&raw).to_string()
+    } else {
+        raw
+    }
 }
 
 struct ScanDirCtx<'a> {
@@ -462,31 +562,60 @@ struct ScanDirCtx<'a> {
     md_links_raw: &'a mut HashMap<String, Vec<String>>,
 }
 
-fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_>) -> Vec<Value> {
+fn scan_dirs_merged(
+    dirs: &[PathBuf],
+    cur_rel: &str,
+    is_asset_bucket: bool,
+    ctx: &mut ScanDirCtx<'_>,
+) -> Vec<Value> {
     let mut items: Vec<Value> = Vec::new();
-    let mut entries: Vec<PathBuf> = fs::read_dir(cur_dir)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .collect();
-    let cur_rel = rel_posix(cur_dir);
-    sort_entries_with_order(&mut entries, ctx.cfg.tree_order.get(&cur_rel), true);
+    let mut dir_groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut merged: Vec<(String, bool, Option<PathBuf>)> = Vec::new();
 
-    for f in entries {
-        let fname = f.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        if fname.starts_with('.') {
-            continue;
+    for cur_dir in dirs {
+        for entry in fs::read_dir(cur_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+        {
+            let fname = entry
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if fname.is_empty() || fname.starts_with('.') {
+                continue;
+            }
+            if entry.is_dir() {
+                let is_new = !dir_groups.contains_key(&fname);
+                dir_groups.entry(fname.clone()).or_default().push(entry);
+                if is_new {
+                    merged.push((fname, true, None));
+                }
+            } else {
+                merged.push((fname, false, Some(entry)));
+            }
         }
-        if f.is_dir() {
+    }
+
+    sort_named_items(&mut merged, ctx.cfg.tree_order.get(cur_rel), true);
+
+    for (fname, is_dir, file_opt) in merged {
+        if is_dir {
+            let sub_dirs = dir_groups.remove(&fname).unwrap_or_default();
             let special_bucket = fname == "_gorseller" || fname == "_ekler" || fname == "assets";
-            let sub_kids = scan_dir_items(&f, is_asset_bucket || special_bucket, ctx);
+            let sub_rel = if cur_rel.is_empty() {
+                fname.clone()
+            } else {
+                format!("{}/{}", cur_rel, fname)
+            };
+            let sub_kids = scan_dirs_merged(&sub_dirs, &sub_rel, is_asset_bucket || special_bucket, ctx);
             if special_bucket && sub_kids.is_empty() {
                 continue;
             }
-            let sub_rel = rel_posix(&f);
-            let mt = mtime_of(&f);
+            let mt = sub_dirs.iter().map(|d| mtime_of(d)).fold(0.0_f64, f64::max);
             if mt > *ctx.latest_mtime {
                 *ctx.latest_mtime = mt;
             }
@@ -515,6 +644,10 @@ fn scan_dir_items(cur_dir: &Path, is_asset_bucket: bool, ctx: &mut ScanDirCtx<'_
             }));
             continue;
         }
+
+        let Some(f) = file_opt else {
+            continue;
+        };
 
         let ext = ext_lower(&f);
         if ext != ".md" && ext != ".html" && !is_asset_ext(&ext) {
@@ -671,29 +804,43 @@ pub fn scan_vault() -> Value {
     let mut sources: Vec<Value> = Vec::new();
     let mut md_links_raw: HashMap<String, Vec<String>> = HashMap::new();
 
-    let mut folders: Vec<PathBuf> = fs::read_dir(&*VAULT_DIR)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_dir()
-                && !p
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    .starts_with('.')
-        })
-        .collect();
-    sort_entries_with_order(&mut folders, cfg.tree_order.get("__kasas__"), false);
+    let split = is_split_vault();
+    let mut kasa_groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    let mut kasa_keys: Vec<(String, bool, ())> = Vec::new();
+    let kasa_roots: Vec<PathBuf> = if split {
+        [VAULT_DIR.join(NOTLAR_DIR), VAULT_DIR.join(DOKUMAN_DIR)]
+            .into_iter()
+            .filter(|p| p.is_dir())
+            .collect()
+    } else {
+        vec![VAULT_DIR.clone()]
+    };
+    for root_dir in &kasa_roots {
+        for p in fs::read_dir(root_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+        {
+            let nm = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if nm.is_empty() || nm.starts_with('.') || !p.is_dir() {
+                continue;
+            }
+            if !split && (nm == NOTLAR_DIR || nm == DOKUMAN_DIR) {
+                continue;
+            }
+            let is_new = !kasa_groups.contains_key(&nm);
+            kasa_groups.entry(nm.clone()).or_default().push(p);
+            if is_new {
+                kasa_keys.push((nm, true, ()));
+            }
+        }
+    }
+    sort_named_items(&mut kasa_keys, cfg.tree_order.get("__kasas__"), false);
 
-    for (idx, d) in folders.iter().enumerate() {
-        let f_key = d
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+    for (idx, (f_key, _, _)) in kasa_keys.into_iter().enumerate() {
+        let kasa_dirs = kasa_groups.remove(&f_key).unwrap_or_default();
         let meta = folder_meta_for(&f_key, Some(&cfg));
         let f_label = meta.label.clone();
         let space_id = resolve_kasa_space(&f_key, &cfg);
@@ -701,7 +848,7 @@ pub fn scan_vault() -> Value {
         let mut n_notes = 0usize;
         let mut n_docs = 0usize;
         let mut n_imgs = 0usize;
-        let mut latest_mtime = mtime_of(d);
+        let mut latest_mtime = kasa_dirs.iter().map(|d| mtime_of(d)).fold(0.0_f64, f64::max);
         let mut preview_items: Vec<Value> = Vec::new();
         let mut index_id: Option<String> = None;
 
@@ -721,7 +868,7 @@ pub fn scan_vault() -> Value {
             sources: &mut sources,
             md_links_raw: &mut md_links_raw,
         };
-        let kids = scan_dir_items(d, false, &mut ctx);
+        let kids = scan_dirs_merged(&kasa_dirs, &f_key, false, &mut ctx);
 
         let fallback_idx = index_id.or_else(|| {
             kids.iter()
@@ -758,21 +905,30 @@ pub fn scan_vault() -> Value {
     }
 
     // Kök dizindeki tekil belgeler (örn. 00_LAB_ORTAK_TAKVIM.md)
-    let mut root_files: Vec<PathBuf> = fs::read_dir(&*VAULT_DIR)
-        .ok()
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
+    let mut root_file_dirs: Vec<PathBuf> = kasa_roots;
+    if split {
+        root_file_dirs.push(VAULT_DIR.clone());
+    }
+    let mut root_files: Vec<PathBuf> = Vec::new();
+    for rdir in root_file_dirs {
+        for p in fs::read_dir(&rdir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+        {
+            if p.is_file()
                 && !p
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .starts_with('.')
-        })
-        .collect();
+            {
+                root_files.push(p);
+            }
+        }
+    }
     sort_entries_with_order(&mut root_files, cfg.tree_order.get("__root_docs__"), false);
     for f in root_files {
         let ext = ext_lower(&f);
@@ -969,7 +1125,8 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
     let cfg = load_spaces_cfg();
     let ext = ext_lower(&p);
     let clean_rel = rel.replace('\\', "/");
-    let parts: Vec<&str> = clean_rel.trim_start_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    let virt_rel = strip_split_prefix(clean_rel.trim_matches('/'));
+    let parts: Vec<&str> = virt_rel.split('/').filter(|s| !s.is_empty()).collect();
     let f_key = if parts.len() > 1 {
         parts[0].to_string()
     } else {
@@ -1078,8 +1235,13 @@ pub fn create_kasa(
         return Err("Kasa adı boş olamaz".to_string());
     }
     let folder_key = slugify(clean_title);
-    let d = safe_path(&folder_key)?;
-    fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    if is_split_vault() {
+        fs::create_dir_all(split_target_dir(&folder_key, true)?).map_err(|e| e.to_string())?;
+        fs::create_dir_all(split_target_dir(&folder_key, false)?).map_err(|e| e.to_string())?;
+    } else {
+        let d = safe_path(&folder_key)?;
+        fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    }
 
     let clean_tag = if tag.trim().is_empty() {
         "Çalışma Kasası".to_string()
@@ -1348,24 +1510,46 @@ pub fn create_folder(parent_rel: &str, name: &str) -> Result<Value, String> {
     if clean_name.is_empty() {
         return Err("Klasör adı boş olamaz".to_string());
     }
-    let parent_clean = parent_rel.replace('\\', "/").trim_matches('/').to_string();
+    let raw_parent = parent_rel.replace('\\', "/").trim_matches('/').to_string();
+    let parent_clean = strip_split_prefix(&raw_parent).to_string();
     if parent_clean.is_empty() {
         return Err("Üst kasa/klasör belirtilmedi".to_string());
     }
-    let parent_path = safe_path(&parent_clean)?;
-    if !parent_path.exists() || !parent_path.is_dir() {
+    let parent_exists = if is_split_vault() {
+        split_target_dir(&parent_clean, true)?.is_dir()
+            || split_target_dir(&parent_clean, false)?.is_dir()
+    } else {
+        let pp = safe_path(&parent_clean)?;
+        pp.exists() && pp.is_dir()
+    };
+    if !parent_exists {
         return Err(format!("Üst klasör bulunamadı: {}", parent_clean));
     }
     let slug = slugify(clean_name);
     let mut rel = format!("{}/{}", parent_clean, slug);
-    let mut d = safe_path(&rel)?;
+    let exists_rel = |r: &str| -> Result<bool, String> {
+        if is_split_vault() {
+            Ok(split_target_dir(r, true)?.exists() || split_target_dir(r, false)?.exists())
+        } else {
+            Ok(safe_path(r)?.exists())
+        }
+    };
     let mut n = 2;
-    while d.exists() {
+    while exists_rel(&rel)? {
         rel = format!("{}/{}_{}", parent_clean, slug, n);
-        d = safe_path(&rel)?;
         n += 1;
     }
-    fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+    let d = if is_split_vault() {
+        let dn = split_target_dir(&rel, true)?;
+        let dd = split_target_dir(&rel, false)?;
+        fs::create_dir_all(&dn).map_err(|e| e.to_string())?;
+        fs::create_dir_all(&dd).map_err(|e| e.to_string())?;
+        dn
+    } else {
+        let dp = safe_path(&rel)?;
+        fs::create_dir_all(&dp).map_err(|e| e.to_string())?;
+        dp
+    };
     let dir_name = d.file_name().and_then(|s| s.to_str()).unwrap_or(&slug).to_string();
     if let Ok(mut guard) = CUSTOM_FOLDERS.lock() {
         guard.insert(
@@ -1485,37 +1669,187 @@ fn migrate_tree_order_keys(tree_order: &mut HashMap<String, Vec<String>>, old_re
     *tree_order = updated;
 }
 
-fn sorted_dir_names(dir: &Path, order_names: Option<&Vec<String>>, dirs_last: bool, only_dirs: bool, only_files: bool) -> Vec<String> {
-    let mut entries: Vec<PathBuf> = fs::read_dir(dir)
-        .ok()
+fn sorted_dir_names_rel(
+    parent_rel: &str,
+    order_names: Option<&Vec<String>>,
+    dirs_last: bool,
+    only_dirs: bool,
+    only_files: bool,
+) -> Vec<String> {
+    if !is_split_vault() {
+        let dir = if parent_rel.is_empty() {
+            VAULT_DIR.clone()
+        } else {
+            match safe_path(parent_rel) {
+                Ok(p) => p,
+                Err(_) => return vec![],
+            }
+        };
+        let mut items: Vec<(String, bool, ())> = fs::read_dir(&dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter_map(|p| {
+                let nm = p.file_name().and_then(|n| n.to_str())?.to_string();
+                if nm.starts_with('.') {
+                    return None;
+                }
+                let is_dir = p.is_dir();
+                if only_dirs && !is_dir {
+                    return None;
+                }
+                if only_files && is_dir {
+                    return None;
+                }
+                Some((nm, is_dir, ()))
+            })
+            .collect();
+        sort_named_items(&mut items, order_names, dirs_last);
+        return items.into_iter().map(|(nm, _, _)| nm).collect();
+    }
+
+    let mut dirs_to_scan = Vec::new();
+    let clean_p = strip_split_prefix(parent_rel);
+    for bucket in [NOTLAR_DIR, DOKUMAN_DIR] {
+        let d = join_rel_parts(&VAULT_DIR.join(bucket), clean_p);
+        if d.exists() && d.is_dir() {
+            dirs_to_scan.push((d, false));
+        }
+    }
+    if clean_p.is_empty() {
+        dirs_to_scan.push((VAULT_DIR.clone(), true));
+    }
+
+    let mut by_name: HashMap<String, bool> = HashMap::new();
+    for (dir, skip_buckets) in dirs_to_scan {
+        if let Ok(rd) = fs::read_dir(&dir) {
+            for ent in rd.flatten() {
+                let p = ent.path();
+                let nm = match p.file_name().and_then(|n| n.to_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+                if nm.starts_with('.') {
+                    continue;
+                }
+                if skip_buckets && (nm == NOTLAR_DIR || nm == DOKUMAN_DIR) {
+                    continue;
+                }
+                let is_dir = p.is_dir();
+                if only_dirs && !is_dir {
+                    continue;
+                }
+                if only_files && is_dir {
+                    continue;
+                }
+                by_name
+                    .entry(nm)
+                    .and_modify(|prev| *prev = *prev || is_dir)
+                    .or_insert(is_dir);
+            }
+        }
+    }
+    let mut items: Vec<(String, bool, ())> = by_name
         .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            let nm = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if nm.starts_with('.') {
-                return false;
-            }
-            if only_dirs && !p.is_dir() {
-                return false;
-            }
-            if only_files && !p.is_file() {
-                return false;
-            }
-            true
-        })
+        .map(|(nm, is_dir)| (nm, is_dir, ()))
         .collect();
-    sort_entries_with_order(&mut entries, order_names, dirs_last);
-    entries
-        .into_iter()
-        .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
-        .collect()
+    sort_named_items(&mut items, order_names, dirs_last);
+    items.into_iter().map(|(nm, _, _)| nm).collect()
+}
+
+fn check_target_dir_exists(parent_rel: &str) -> bool {
+    if parent_rel.is_empty() {
+        return true;
+    }
+    if is_split_vault() {
+        let clean = strip_split_prefix(parent_rel);
+        for bucket in [NOTLAR_DIR, DOKUMAN_DIR] {
+            let d = join_rel_parts(&VAULT_DIR.join(bucket), clean);
+            if d.exists() && d.is_dir() {
+                return true;
+            }
+        }
+        false
+    } else {
+        safe_path(parent_rel)
+            .map(|p| p.exists() && p.is_dir())
+            .unwrap_or(false)
+    }
+}
+
+fn perform_vault_move(
+    clean_src: &str,
+    src: &Path,
+    src_name: &str,
+    src_is_dir: bool,
+    new_parent_rel: &str,
+) -> Result<String, String> {
+    let new_rel = if new_parent_rel.is_empty() {
+        src_name.to_string()
+    } else {
+        format!("{}/{}", new_parent_rel, src_name)
+    };
+    if is_split_vault() {
+        if src_is_dir {
+            let clean_old = strip_split_prefix(clean_src);
+            let mut moved_any = false;
+            let pairs = [
+                (
+                    join_rel_parts(&VAULT_DIR.join(NOTLAR_DIR), clean_old),
+                    join_rel_parts(&VAULT_DIR.join(NOTLAR_DIR), &new_rel),
+                ),
+                (
+                    join_rel_parts(&VAULT_DIR.join(DOKUMAN_DIR), clean_old),
+                    join_rel_parts(&VAULT_DIR.join(DOKUMAN_DIR), &new_rel),
+                ),
+            ];
+            for (s, d) in &pairs {
+                if s.exists() && d.exists() {
+                    return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
+                }
+            }
+            for (s, d) in &pairs {
+                if s.exists() {
+                    if let Some(p) = d.parent() {
+                        fs::create_dir_all(p).map_err(|e| format!("Taşıma hatası: {}", e))?;
+                    }
+                    fs::rename(s, d).map_err(|e| format!("Taşıma hatası: {}", e))?;
+                    moved_any = true;
+                }
+            }
+            if !moved_any {
+                return Err(format!("Öğe bulunamadı: {}", clean_src));
+            }
+        } else {
+            let for_md = src_name.to_lowercase().ends_with(".md");
+            let dst_dir = split_target_dir(new_parent_rel, for_md)?;
+            fs::create_dir_all(&dst_dir).map_err(|e| format!("Taşıma hatası: {}", e))?;
+            let dst = dst_dir.join(src_name);
+            if dst.exists() {
+                return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
+            }
+            fs::rename(src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
+        }
+    } else {
+        let dst_dir = if new_parent_rel.is_empty() {
+            VAULT_DIR.clone()
+        } else {
+            safe_path(new_parent_rel)?
+        };
+        let dst = dst_dir.join(src_name);
+        if dst.exists() {
+            return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
+        }
+        fs::rename(src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
+    }
+    Ok(new_rel)
 }
 
 pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Value, String> {
-    let clean_src = clean_rel_str(src_rel);
-    let clean_target = clean_rel_str(target_rel);
+    let clean_src = strip_split_prefix(&clean_rel_str(src_rel)).to_string();
+    let clean_target = strip_split_prefix(&clean_rel_str(target_rel)).to_string();
     let pos = if position.trim().is_empty() {
         "into".to_string()
     } else {
@@ -1550,19 +1884,14 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
             return Err("Çalışma kasası başka bir klasörün içine taşınamaz".to_string());
         }
         let is_root_target = clean_target.is_empty() || clean_target == "_root_docs";
-        let dst_dir = if is_root_target {
-            VAULT_DIR.clone()
-        } else {
-            safe_path(&clean_target)?
-        };
-        if !dst_dir.exists() || !dst_dir.is_dir() {
-            return Err(format!("Hedef klasör bulunamadı: {}", clean_target));
-        }
         let new_parent_rel = if is_root_target {
             String::new()
         } else {
             clean_target.clone()
         };
+        if !check_target_dir_exists(&new_parent_rel) {
+            return Err(format!("Hedef klasör bulunamadı: {}", clean_target));
+        }
         if src_is_dir && (new_parent_rel == clean_src || new_parent_rel.starts_with(&format!("{}/", clean_src))) {
             return Err("Klasör kendi içine veya alt klasörüne taşınamaz".to_string());
         }
@@ -1581,16 +1910,7 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
                 "already_here": true
             }));
         }
-        let dst = dst_dir.join(&src_name);
-        if dst.exists() {
-            return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
-        }
-        fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
-        let new_rel = if new_parent_rel.is_empty() {
-            src_name.clone()
-        } else {
-            format!("{}/{}", new_parent_rel, src_name)
-        };
+        let new_rel = perform_vault_move(&clean_src, &src, &src_name, src_is_dir, &new_parent_rel)?;
         mirror_move_path(&clean_src, &new_rel);
 
         let old_key = if old_parent_rel.is_empty() {
@@ -1666,8 +1986,8 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         if src_sp != ref_sp {
             cfg.assignments.insert(clean_src.clone(), ref_sp);
         }
-        let mut names = sorted_dir_names(
-            &VAULT_DIR,
+        let mut names = sorted_dir_names_rel(
+            "",
             cfg.tree_order.get("__kasas__"),
             false,
             true,
@@ -1706,20 +2026,15 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
             if src_is_dir {
                 return Err("Klasör kök belge alanına taşınamaz".to_string());
             }
-            let dst = VAULT_DIR.join(&src_name);
-            if dst.exists() {
-                return Err(format!("Ortak belgelerde '{}' zaten mevcut", src_name));
-            }
-            fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
-            new_rel = src_name.clone();
+            new_rel = perform_vault_move(&clean_src, &src, &src_name, false, "")?;
             mirror_move_path(&clean_src, &new_rel);
             if let Some(list) = cfg.tree_order.get_mut(&old_parent_rel) {
                 list.retain(|n| n != &src_name);
             }
             moved = true;
         }
-        let mut names = sorted_dir_names(
-            &VAULT_DIR,
+        let mut names = sorted_dir_names_rel(
+            "",
             cfg.tree_order.get("__root_docs__"),
             false,
             false,
@@ -1752,7 +2067,6 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         .rsplit_once('/')
         .map(|(p, _)| p.to_string())
         .unwrap_or_default();
-    let dst_dir = safe_path(&target_parent_rel)?;
     let mut moved = false;
     let mut new_rel = clean_src.clone();
 
@@ -1763,12 +2077,7 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         {
             return Err("Klasör kendi içine veya alt klasörüne taşınamaz".to_string());
         }
-        let dst = dst_dir.join(&src_name);
-        if dst.exists() {
-            return Err(format!("Hedef klasörde '{}' zaten mevcut", src_name));
-        }
-        fs::rename(&src, &dst).map_err(|e| format!("Taşıma hatası: {}", e))?;
-        new_rel = format!("{}/{}", target_parent_rel, src_name);
+        new_rel = perform_vault_move(&clean_src, &src, &src_name, src_is_dir, &target_parent_rel)?;
         mirror_move_path(&clean_src, &new_rel);
         let old_key = if old_parent_rel.is_empty() {
             "__root_docs__".to_string()
@@ -1784,8 +2093,8 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         moved = true;
     }
 
-    let mut names = sorted_dir_names(
-        &dst_dir,
+    let mut names = sorted_dir_names_rel(
+        &target_parent_rel,
         cfg.tree_order.get(&target_parent_rel),
         true,
         false,
@@ -2380,28 +2689,33 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
         unique_timestamped_path(&d, &stem, &ext)
     } else {
         let mut is_dir_target = false;
-        let base = if !note_rel.trim().is_empty() {
-            let clean_nr = note_rel.strip_prefix("note:").unwrap_or(note_rel);
-            let p_nr = safe_path(clean_nr)?;
-            if p_nr.is_dir() {
-                is_dir_target = true;
-                p_nr
+        let base_rel = if !note_rel.trim().is_empty() {
+            let clean_nr = clean_rel_str(note_rel.strip_prefix("note:").unwrap_or(note_rel));
+            let virt_nr = strip_split_prefix(&clean_nr);
+            if let Ok(p_nr) = safe_path(virt_nr) {
+                if p_nr.is_dir() {
+                    is_dir_target = true;
+                    virt_nr.to_string()
+                } else {
+                    virt_nr
+                        .rsplit_once('/')
+                        .map(|(p, _)| p.to_string())
+                        .unwrap_or_default()
+                }
             } else {
-                p_nr.parent()
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| VAULT_DIR.clone())
+                String::new()
             }
         } else {
-            VAULT_DIR.clone()
+            String::new()
         };
 
-        let base_name = base
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let base_name = base_rel.rsplit('/').next().unwrap_or(base_rel.as_str());
         let is_bucket_dir = is_dir_target
             && (base_name == "_gorseller" || base_name == "_ekler" || base_name == "assets");
-        if ((ext == ".md" || ext == ".html" || is_doc_ext(&ext)) && is_dir_target) || is_bucket_dir {
+        let for_md = ext.eq_ignore_ascii_case(".md");
+        if ((for_md || ext == ".html" || is_doc_ext(&ext)) && is_dir_target) || is_bucket_dir {
+            let base = split_target_dir(&base_rel, for_md)?;
+            fs::create_dir_all(&base).map_err(|e| e.to_string())?;
             let mut t = base.join(format!("{}{}", stem, ext));
             let mut n = 1;
             while t.exists() {
@@ -2410,7 +2724,12 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
             }
             t
         } else {
-            let d = base.join("_gorseller");
+            let bucket_rel = if base_rel.is_empty() {
+                "_gorseller".to_string()
+            } else {
+                format!("{}/_gorseller", base_rel)
+            };
+            let d = split_target_dir(&bucket_rel, for_md)?;
             fs::create_dir_all(&d).map_err(|e| e.to_string())?;
             unique_timestamped_path(&d, &stem, &ext)
         }
@@ -2494,5 +2813,27 @@ mod tests {
         assert_eq!(meta.accent, "#79c0ff");
         assert_eq!(meta.tag, "RF");
         assert_eq!(meta.desc, "Özel açıklama");
+    }
+
+    #[test]
+    fn split_vault_prefix_and_bucket_routing() {
+        assert_eq!(strip_split_prefix("AgyDesk_Notlar/Mikrodalga/not.md"), "Mikrodalga/not.md");
+        assert_eq!(strip_split_prefix("AgyDesk_Dokuman/Mikrodalga/slayt.pdf"), "Mikrodalga/slayt.pdf");
+        assert_eq!(strip_split_prefix("AgyDesk_Notlar"), "");
+        assert_eq!(strip_split_prefix("Mikrodalga/not.md"), "Mikrodalga/not.md");
+
+        assert_eq!(split_bucket_for_rel("Mikrodalga/not.md"), NOTLAR_DIR);
+        assert_eq!(split_bucket_for_rel("Mikrodalga/not.MD"), NOTLAR_DIR);
+        assert_eq!(split_bucket_for_rel("Mikrodalga/slayt.pdf"), DOKUMAN_DIR);
+        assert_eq!(split_bucket_for_rel("Mikrodalga/_gorseller/ekran.png"), DOKUMAN_DIR);
+
+        let mut items = vec![
+            ("alt_klasor".to_string(), true, ()),
+            ("b.pdf".to_string(), false, ()),
+            ("a.md".to_string(), false, ()),
+        ];
+        sort_named_items(&mut items, None, true);
+        let names: Vec<String> = items.into_iter().map(|(n, _, _)| n).collect();
+        assert_eq!(names, vec!["a.md", "b.pdf", "alt_klasor"]);
     }
 }

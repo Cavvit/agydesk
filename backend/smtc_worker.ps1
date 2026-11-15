@@ -121,6 +121,7 @@ function Detect-Platform($appId, $title, $artist, $winTitles) {
     if ($a -match 'applemusic|itunes') { return @('apple', 'Apple Music') }
     $isBrowser = ($a -match 'chrome|msedge|edge|firefox|brave|opera|vivaldi')
     if ($isBrowser) {
+        if ($null -eq $winTitles) { $winTitles = [WinTitleHelper]::VisibleTitles() }
         $tLow = ($title + '').ToLowerInvariant()
         foreach ($wt in $winTitles) {
             $wLow = $wt.ToLowerInvariant()
@@ -149,7 +150,7 @@ function Detect-Platform($appId, $title, $artist, $winTitles) {
 function Get-StatusObj($targetApp) {
     $sessions = $mgr.GetSessions()
     $cur = $mgr.GetCurrentSession()
-    $winTitles = [WinTitleHelper]::VisibleTitles()
+    $winTitles = $null
     $list = @()
     $best = $null
     $bestIsPlaying = $false

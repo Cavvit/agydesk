@@ -503,6 +503,149 @@ def test_vault_move_and_reorder(tmp_path, monkeypatch):
     assert kasa_order.index("Katihal_Elektronigi") < kasa_order.index("Difransiyel_Denklemler")
 
 
+def test_auth_hint_and_error_detection():
+    from backend import providers
+    assert providers.is_auth_error("authentication failed or timed out") is True
+    assert providers.is_auth_error("Error: INVALID_GRANT") is True
+    assert providers.is_auth_error("RESOURCE_EXHAUSTED quota") is False
+    hint = providers.detect_auth_hint("Sign in at https://accounts.google.com/o/oauth2/auth?x=1")
+    assert hint is not None and "https://accounts.google.com/o/oauth2/auth?x=1" in hint
+    assert providers.detect_auth_hint("regular log line") is None
+
+
+def test_health_exposes_auth_flags_and_force_local(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main, store
+
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "t.db")
+    store.init()
+
+    async def fake_ollama():
+        return False
+
+    async def fake_complete(*args, **kwargs):
+        return ("yerel yanıt", 5, False, None)
+
+    monkeypatch.setattr(main.providers, "ollama_alive", fake_ollama)
+    monkeypatch.setattr(main.providers, "complete", fake_complete)
+    client = TestClient(main.app)
+
+    h = client.get("/api/health").json()
+    assert "auth_needed" in h and isinstance(h["auth_needed"], bool)
+    assert "auth_running" in h and isinstance(h["auth_running"], bool)
+
+    r = client.post("/api/run", json={"session": "test_force_loc", "text": "karmaşık mimari", "force_provider": "local"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["route"]["provider"] == "local"
+    assert body["route"]["fallback"] is True
+
+
+def test_split_vault_notlar_and_dokuman(tmp_path, monkeypatch):
+    from backend import vault
+
+    split_root = tmp_path / "AgyDesk_Belgeler"
+    (split_root / "AgyDesk_Notlar" / "Mikrodalga").mkdir(parents=True)
+    (split_root / "AgyDesk_Dokuman" / "Mikrodalga").mkdir(parents=True)
+    (split_root / "AgyDesk_Notlar" / "Kontrol").mkdir(parents=True)
+    (split_root / "AgyDesk_Dokuman" / "Kontrol").mkdir(parents=True)
+
+    monkeypatch.setattr(vault, "VAULT_DIR", split_root)
+    monkeypatch.setattr(vault, "ROOT", tmp_path)
+
+    # Not (.md) AgyDesk_Notlar altına gider, PDF/görsel AgyDesk_Dokuman altına gider
+    created = vault.create_note("Mikrodalga", "Smith Abağı", "# Smith Abağı\nNot")
+    assert created["rel"] == "Mikrodalga/Smith_Abagi.md"
+    assert (split_root / "AgyDesk_Notlar" / "Mikrodalga" / "Smith_Abagi.md").exists()
+    assert not (split_root / "AgyDesk_Dokuman" / "Mikrodalga" / "Smith_Abagi.md").exists()
+
+    pdf_res = vault.save_asset("Mikrodalga", "slayt.pdf", b"%PDF-1.4\n...")
+    assert pdf_res["rel"] == "Mikrodalga/slayt.pdf"
+    assert (split_root / "AgyDesk_Dokuman" / "Mikrodalga" / "slayt.pdf").exists()
+
+    img_res = vault.save_asset("Mikrodalga/Smith_Abagi.md", "ekran.png", b"\x89PNG\r\n\x1a\n")
+    assert img_res["rel"].startswith("Mikrodalga/_gorseller/")
+    assert (split_root / "AgyDesk_Dokuman" / img_res["rel"]).exists()
+
+    # scan_vault her iki klasörü sanal hiyerarşide birleştirir
+    tree = vault.scan_vault()
+    k_mikro = next(k for k in tree["kasalar"] if k["key"] == "Mikrodalga")
+    assert k_mikro["counts"]["notes"] == 1
+    assert k_mikro["counts"]["docs"] == 1
+    assert k_mikro["counts"]["images"] == 1
+    assert "note:Mikrodalga/Smith_Abagi.md" in tree["pages"]
+    assert "note:Mikrodalga/slayt.pdf" in tree["pages"]
+
+    # Fiziksel önekli yollarla da okuma çalışır
+    r_pref = vault.read_note("AgyDesk_Notlar/Mikrodalga/Smith_Abagi.md")
+    assert r_pref["rel"] == "Mikrodalga/Smith_Abagi.md"
+    assert "Smith Abağı" in r_pref["content"]
+
+    # move_item .md'yi Notlar altında, .pdf'yi Dokuman altında taşır
+    mv_md = vault.move_item("Mikrodalga/Smith_Abagi.md", "Kontrol", "into")
+    assert mv_md["new_rel"] == "Kontrol/Smith_Abagi.md"
+    assert (split_root / "AgyDesk_Notlar" / "Kontrol" / "Smith_Abagi.md").exists()
+
+    mv_pdf = vault.move_item("Mikrodalga/slayt.pdf", "Kontrol", "into")
+    assert mv_pdf["new_rel"] == "Kontrol/slayt.pdf"
+    assert (split_root / "AgyDesk_Dokuman" / "Kontrol" / "slayt.pdf").exists()
+
+    vault.delete_note("Kontrol/Smith_Abagi.md")
+    assert not (split_root / "AgyDesk_Notlar" / "Kontrol" / "Smith_Abagi.md").exists()
+
+
+def test_parse_agy_usage_json_and_quota():
+    import json
+    from backend import store
+
+    sample = json.dumps({
+        "status": "SUCCESS",
+        "command": {
+            "name": "usage",
+            "data": {
+                "groups": [
+                    {
+                        "name": "Gemini Models",
+                        "description": "Models within this group: Gemini 4 Hydrogen, Gemini 3.8 Flash",
+                        "buckets": [
+                            {"id": "gemini-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.66, "reset_time": "2026-11-20T22:51:49Z"},
+                            {"id": "gemini-5h", "name": "Five Hour Limit Remaining", "window": "5h", "remaining_fraction": 0.65, "reset_time": "2026-11-15T13:20:49Z"},
+                        ],
+                    },
+                    {
+                        "name": "Claude and GPT models",
+                        "description": "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5",
+                        "buckets": [
+                            {"id": "3p-weekly", "name": "Weekly Limit Remaining", "window": "weekly", "remaining_fraction": 0.0, "reset_time": "2026-11-17T07:42:49Z"},
+                            {"id": "3p-5h", "name": "Five Hour Limit Remaining", "window": "5h", "disabled": True, "remaining_fraction": 1.0},
+                        ],
+                    },
+                    {
+                        "name": "Gemini 4 Argon",
+                        "description": "Separate Argon quota",
+                        "buckets": [
+                            {"id": "gemini-argon-wtu-weekly", "name": "Gemini 4 Argon Weekly Limit", "window": "weekly", "remaining_fraction": 0.74, "reset_time": "2026-11-20T23:13:24Z"},
+                        ],
+                    },
+                ]
+            },
+        },
+    })
+    parsed = store.parse_agy_usage_json(sample, now_ts=1794745200.0)
+    assert parsed is not None
+    assert parsed["gemini-hydrogen"]["remaining_pct"] == 65
+    assert parsed["gemini-hydrogen"]["used_pct"] == 35
+    assert "Haftalık: %66" in parsed["gemini-hydrogen"]["detail"]
+    assert "5 sa: %65" in parsed["gemini-hydrogen"]["detail"]
+    assert parsed["gemini-argon"]["remaining_pct"] == 74
+    assert parsed["gemini-argon"]["used_pct"] == 26
+    assert parsed["claude-opus"]["used_pct"] == 100
+    assert parsed["claude-sonnet"]["used_pct"] == 100
+
+
+
+
+
 
 
 
