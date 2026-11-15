@@ -736,6 +736,7 @@ function saveSessionTabs(){
       currentKasa,
       treeOpen:{...TREE_OPEN},
       noLeft:app?app.classList.contains('no-left'):false,
+      writeNoLeft:typeof writeNoLeft==='boolean'?writeNoLeft:false,
       noRight:app?app.classList.contains('no-right'):false,
       leftW:typeof leftW==='number'?leftW:248,
       rightW:typeof rightW==='number'?rightW:340,
@@ -775,6 +776,7 @@ function restoreSessionTabs(){
     openTabs=cleaned;
     active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
     const targetMode=saved.curMode||(active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write'))));
+    writeNoLeft=typeof saved.writeNoLeft==='boolean'?saved.writeNoLeft:(targetMode==='write'&&typeof saved.noLeft==='boolean'?saved.noLeft:false);
     layoutMode(targetMode);
     if(typeof saved.noLeft==='boolean') app.classList.toggle('no-left',saved.noLeft);
     if(typeof saved.noRight==='boolean') app.classList.toggle('no-right',saved.noRight);
@@ -1871,7 +1873,9 @@ function openPage(id,forceTab=false,opts={}){
   }
   if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
   else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
-  else if(id!=='kasalar'&&!isAI(id)&&curMode==='kasalar') layoutMode('write');
+  else if(id==='cal'&&curMode==='ai') layoutMode('plan');
+  else if(id==='studychat'&&curMode==='ai') layoutMode('study');
+  else if(id!=='kasalar'&&!isAI(id)&&(curMode==='kasalar'||curMode==='ai')) layoutMode('write');
   syncPdfSlotsWithTabs();
   renderTabs();
   if(kasaChanged) renderTree(); else syncTreeActiveHighlight();
@@ -2247,6 +2251,18 @@ function gemComposerHtml(opts){
     </div>
   </div>${opts.showDisclaimer?'<div class="gem-note">AgyDesk yerel not ve kaynaklarla çalışır · Ctrl+V görsel · / komut</div>':''}</div>`;
 }
+let _gemMeasureCtx=null;
+function measureGemTextWidth(inputEl,text){
+  if(!text) return 0;
+  if(!_gemMeasureCtx){
+    const c=document.createElement('canvas');
+    _gemMeasureCtx=c.getContext('2d');
+  }
+  if(!_gemMeasureCtx) return text.length*8;
+  const cs=getComputedStyle(inputEl);
+  _gemMeasureCtx.font=`${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  return _gemMeasureCtx.measureText(text).width;
+}
 function syncGemBoxState(inputEl){
   if(!inputEl) return;
   const box=inputEl.closest('.gem-box'); if(!box) return;
@@ -2255,9 +2271,21 @@ function syncGemBoxState(inputEl){
   const val=inputEl.value||'';
   const hasVal=val.trim().length>0||hasAtt;
   const isCompact=box.classList.contains('gem-compact');
-  const isMulti=isCompact||hasVal||val.includes('\n')||inputEl.scrollHeight>42;
+  const wasExp=box.classList.contains('exp');
+  let isMulti=isCompact||val.includes('\n');
+  if(!isMulti&&val.length>0){
+    const plusEl=box.querySelector('.gem-plus');
+    const rightEl=box.querySelector('.gem-right');
+    const singleAvailW=wasExp
+      ? Math.max(80,box.clientWidth-20-(plusEl?plusEl.offsetWidth:34)-(rightEl?rightEl.offsetWidth:180)-12-8)
+      : Math.max(80,inputEl.clientWidth-8);
+    const textW=measureGemTextWidth(inputEl,val);
+    const threshold=wasExp?singleAvailW-36:singleAvailW-24;
+    isMulti=textW>=threshold||(!wasExp&&inputEl.scrollHeight>42);
+  }
   box.classList.toggle('has-val',hasVal);
   box.classList.toggle('exp',isMulti);
+  if(wasExp!==isMulti) autoGrow(inputEl);
   const running=Boolean(s&&(s.running||s.pending));
   box.classList.toggle('is-running',running);
   const sendBtn=box.querySelector('.gem-send');
@@ -5766,17 +5794,17 @@ function syncNotionFloatLock(){
   const fl=$('#notionFloatLock'), m=$('#main'), doc=$('#doc'), pill=$('#notionLockPill');
   const pdfStage=$('#pdfCacheStage');
   if(!fl||!m||!doc||!pill||!String(active).startsWith('note:')||(pdfStage&&pdfStage.classList.contains('active'))){
-    if(fl&&_floatLockSig!=='hide'){ fl.style.display='none'; _floatLockSig='hide'; }
+    if(fl&&(_floatLockSig!=='hide'||fl.style.display!=='none')){ fl.style.display='none'; _floatLockSig='hide'; }
     return;
   }
   const mRect=m.getBoundingClientRect();
   const pRect=pill.getBoundingClientRect();
   if(pRect.bottom>mRect.top+6){
-    if(_floatLockSig!=='hide'){ fl.style.display='none'; _floatLockSig='hide'; }
+    if(_floatLockSig!=='hide'||fl.style.display!=='none'){ fl.style.display='none'; _floatLockSig='hide'; }
     return;
   }
   const sig='show|'+(notionState.locked?'1':'0');
-  if(sig===_floatLockSig) return;
+  if(sig===_floatLockSig&&fl.style.display==='inline-flex') return;
   _floatLockSig=sig;
   fl.style.display='inline-flex';
   fl.classList.toggle('locked',!!notionState.locked);
@@ -5929,7 +5957,7 @@ function stashActiveNoteDom(m){
 function renderMain(){
   const m=$('#main');
   const mm=$('#notionMinimap'); if(mm) mm.style.display='none';
-  const fl=$('#notionFloatLock'); if(fl) fl.style.display='none';
+  const fl=$('#notionFloatLock'); if(fl){ fl.style.display='none'; _floatLockSig='hide'; }
   saveMainScroll();
   stashActiveNoteDom(m);
   if(!active.startsWith('note:')){
@@ -6014,7 +6042,7 @@ const GCAL={
   kasaFilter:'all',
   kinds:{exam:true,lab:true,task:true,study:true,lecture:true,event:true},
   editingId:null,
-  pomo:{sec:25*60,total:25*60,running:false,timer:null,mode:'25 dk Odak',taskTitle:'Yüksek Gerilim & Kontrol Vize Hazırlığı'}
+  pomo:{sec:25*60,total:25*60,running:false,timer:null,endAt:null,mode:'25 dk Odak',taskTitle:'',customTitle:false}
 };
 
 function gcalPad(n){ return String(n).padStart(2,'0'); }
@@ -6490,6 +6518,7 @@ function renderDayStage(){
   const p=GCAL.pomo;
   const pct=Math.round((p.sec/Math.max(1,p.total))*100);
   const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+  const pomoLabel=gcalGetPomoLabel();
 
   // O günkü ders kasalarına ait notları bul
   const activeKasas=new Set(dayEvs.map(e=>e.kasa).filter(Boolean));
@@ -6508,16 +6537,18 @@ function renderDayStage(){
 
       <!-- Pomodoro Odak Sayacı -->
       <div class="gpomo">
-        <div class="gpomo-ring" id="gpomoRing" style="--pp:${pct}">
+        <div class="gpomo-ring" id="gpomoRing" style="--pp:${pct}" onpointerdown="gcalPomoDialDown(event)" title="Halkadan tutup sürükleyerek süreyi ayarla">
+          <span class="gpomo-knob" id="gpomoKnob"></span>
           <span class="gpomo-time" id="gpomoTime">${mm}:${ss}</span>
         </div>
         <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:6px">
-          <div style="font:600 11px var(--mono);color:var(--cu)">⏱ POMODORO ÇALIŞMA SAYACI · ${p.mode}</div>
-          <div style="font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${p.taskTitle}">🎯 ${p.taskTitle}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px">
+          <div id="gpomoMode" style="font:600 11px var(--mono);color:var(--cu)">⏱ POMODORO ÇALIŞMA SAYACI · ${p.mode}</div>
+          <div style="font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:6px;min-width:0"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${pomoLabel}">🎯 ${pomoLabel}</span>${p.customTitle?`<button class="gcal-icbtn" title="Aktif kasaya dön" onclick="gcalClearPomoCustom()" style="font-size:11px;padding:0 5px">↺</button>`:''}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:2px;align-items:center">
             <button class="gcal-btn ${p.running?'on':''}" onclick="gcalPomoToggle()">${p.running?'⏸ Duraklat':'▶ Başlat'}</button>
             <button class="gcal-btn" onclick="gcalPomoReset(25,'25 dk Odak')">25 dk</button>
             <button class="gcal-btn" onclick="gcalPomoReset(50,'50 dk Derin')">50 dk</button>
+            <button class="gcal-btn" onclick="gcalPomoReset(90,'90 dk Blok')">90 dk</button>
             <button class="gcal-btn" onclick="gcalPomoReset(5,'5 dk Mola')">Mola</button>
           </div>
         </div>
@@ -7389,6 +7420,222 @@ function gcalExportICS(){
   toast('📲 AgyCal .ics takvim dosyası indirildi (Google/Apple Takvim ile uyumlu)');
 }
 
+const GCAL_POMO_KEY='agydesk_pomo_state';
+let _pomoAudioCtx=null;
+function gcalWarmPomoAudio(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC) return null;
+    if(!_pomoAudioCtx) _pomoAudioCtx=new AC();
+    if(_pomoAudioCtx.state==='suspended') _pomoAudioCtx.resume().catch(()=>{});
+    return _pomoAudioCtx;
+  }catch(e){ return null; }
+}
+function gcalPlayPomoBell(){
+  const ctx=gcalWarmPomoAudio();
+  if(!ctx) return;
+  const play=()=>{
+    try{
+      const notes=[523.25,659.25,783.99,1046.5];
+      [0,1.05,2.1].forEach(round=>{
+        notes.forEach((freq,idx)=>{
+          const t0=ctx.currentTime+round+idx*0.14;
+          const osc=ctx.createOscillator();
+          const osc2=ctx.createOscillator();
+          const gain=ctx.createGain();
+          osc.type='triangle';
+          osc.frequency.setValueAtTime(freq,t0);
+          osc2.type='sine';
+          osc2.frequency.setValueAtTime(freq*2,t0);
+          const g2=ctx.createGain();
+          g2.gain.setValueAtTime(0.18,t0);
+          gain.gain.setValueAtTime(0.0001,t0);
+          gain.gain.exponentialRampToValueAtTime(0.32,t0+0.025);
+          gain.gain.exponentialRampToValueAtTime(0.0001,t0+0.58);
+          osc.connect(gain);
+          osc2.connect(g2);
+          g2.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(t0);
+          osc2.start(t0);
+          osc.stop(t0+0.6);
+          osc2.stop(t0+0.6);
+        });
+      });
+    }catch(e){}
+  };
+  if(ctx.state==='suspended') ctx.resume().then(play).catch(()=>{});
+  else play();
+}
+function gcalShowPomoBanner(taskTitle,mode){
+  document.querySelectorAll('.pomo-done-banner').forEach(el=>el.remove());
+  const isBreak=/mola/i.test(mode||'');
+  const nextMins=isBreak?25:5;
+  const nextMode=isBreak?'25 dk Odak':'5 dk Mola';
+  const b=document.createElement('div');
+  b.className='pomo-done-banner';
+  b.innerHTML=`<div class="pomo-done-ic">⏱</div>
+    <div class="pomo-done-body">
+      <div class="pomo-done-title">Pomodoro Süresi Bitti!</div>
+      <div class="pomo-done-sub"></div>
+    </div>
+    <div class="pomo-done-act">
+      <button class="pomo-done-btn" type="button">${nextMode}</button>
+      <button class="pomo-done-close" type="button" title="Kapat">✕</button>
+    </div>`;
+  b.querySelector('.pomo-done-sub').textContent=`${mode||'Odak'} · ${taskTitle||'Odak Oturumu'}`;
+  const close=()=>b.remove();
+  b.querySelector('.pomo-done-close').onclick=close;
+  b.querySelector('.pomo-done-btn').onclick=()=>{
+    close();
+    gcalPomoReset(nextMins,nextMode);
+    gcalPomoToggle();
+  };
+  document.body.appendChild(b);
+  setTimeout(()=>{ if(b.isConnected) b.remove(); },18000);
+}
+function gcalNotifyPomoDone(taskTitle,mode){
+  gcalPlayPomoBell();
+  gcalShowPomoBanner(taskTitle,mode);
+  try{
+    if('Notification' in window&&Notification.permission==='granted'){
+      const n=new Notification('⏱ Pomodoro Süresi Bitti!',{
+        body:`${mode} · ${taskTitle}`,
+        tag:'agydesk-pomo-done',
+        renotify:true
+      });
+      n.onclick=()=>{ window.focus(); n.close(); };
+      setTimeout(()=>n.close(),18000);
+    }
+  }catch(e){}
+  const origTitle=document.title;
+  let ticks=0;
+  let flash=null;
+  const stopFlash=()=>{
+    if(flash){ clearInterval(flash); flash=null; }
+    document.title=origTitle;
+    window.removeEventListener('focus',stopFlash);
+  };
+  window.addEventListener('focus',stopFlash,{once:true});
+  flash=setInterval(()=>{
+    document.title=ticks%2===0?'🔔 Süre Bitti! · AgyDesk':'⏱ Mola Zamanı · AgyDesk';
+    if(++ticks>=14) stopFlash();
+  },850);
+}
+function gcalGetDetectedKasa(){
+  try{
+    if(!Array.isArray(kasalarData)||!kasalarData.length) return null;
+    if(typeof currentKasa!=='undefined'&&currentKasa&&currentKasa!=='all'){
+      const k=kasalarData.find(x=>x.key===currentKasa);
+      if(k) return k;
+    }
+    if(typeof active!=='undefined'&&typeof pages!=='undefined'&&pages[active]&&pages[active].kasa){
+      const k=kasalarData.find(x=>x.key===pages[active].kasa);
+      if(k) return k;
+    }
+    if(typeof openTabs!=='undefined'&&Array.isArray(openTabs)&&typeof pages!=='undefined'){
+      for(let i=openTabs.length-1;i>=0;i--){
+        const tid=openTabs[i];
+        if(String(tid).startsWith('note:')&&pages[tid]&&pages[tid].kasa){
+          const k=kasalarData.find(x=>x.key===pages[tid].kasa);
+          if(k) return k;
+        }
+      }
+    }
+  }catch(e){}
+  return null;
+}
+function gcalGetActiveKasaTitle(){
+  const p=GCAL.pomo;
+  const det=gcalGetDetectedKasa();
+  const isBreak=/mola/i.test(p.mode||'');
+  if(det&&det.title){
+    if(isBreak) return `${det.title} · Kısa Mola`;
+    return /çalışma(sı)?$/i.test(det.title.trim())?det.title:`${det.title} Çalışması`;
+  }
+  if(isBreak) return 'Kısa Mola · Zihnini Dinlendir';
+  if(/90/.test(p.mode||'')) return 'Tam Akış · Derin Blok';
+  if(/50/.test(p.mode||'')) return 'Derin Odak Seansı';
+  return 'Odaklanma Zamanı';
+}
+function gcalGetPomoLabel(){
+  const p=GCAL.pomo;
+  if(p.customTitle&&p.taskTitle) return p.taskTitle;
+  return gcalGetActiveKasaTitle();
+}
+function gcalClearPomoCustom(){
+  GCAL.pomo.customTitle=false;
+  GCAL.pomo.taskTitle='';
+  gcalSavePomo();
+  if($('#main .gcal')) renderCal($('#main'),false);
+}
+function gcalSavePomo(){
+  try{
+    const p=GCAL.pomo;
+    localStorage.setItem(GCAL_POMO_KEY,JSON.stringify({
+      sec:p.sec,
+      total:p.total,
+      running:p.running,
+      endAt:p.endAt||null,
+      mode:p.mode,
+      taskTitle:p.taskTitle,
+      customTitle:!!p.customTitle
+    }));
+  }catch(e){}
+}
+function gcalStartPomoInterval(){
+  const p=GCAL.pomo;
+  if(p.timer) clearInterval(p.timer);
+  p.timer=setInterval(()=>{
+    const rem=p.endAt?Math.max(0,Math.ceil((p.endAt-Date.now())/1000)):Math.max(0,p.sec-1);
+    p.sec=rem;
+    gcalUpdatePomoDom();
+    if(rem<=0){
+      clearInterval(p.timer); p.timer=null; p.running=false; p.endAt=null;
+      gcalSavePomo();
+      gcalNotifyPomoDone(gcalGetPomoLabel(),p.mode);
+      renderTabs();
+      if($('#main .gcal')) renderCal($('#main'),false);
+    }
+  },1000);
+}
+function initGcalPomo(){
+  try{
+    const raw=localStorage.getItem(GCAL_POMO_KEY);
+    if(!raw) return;
+    const st=JSON.parse(raw);
+    if(!st||typeof st!=='object') return;
+    const p=GCAL.pomo;
+    if(Number.isFinite(st.total)&&st.total>0) p.total=st.total;
+    if(typeof st.mode==='string'&&st.mode) p.mode=st.mode;
+    if(st.customTitle===true&&typeof st.taskTitle==='string'&&st.taskTitle){
+      p.taskTitle=st.taskTitle;
+      p.customTitle=true;
+    }else{
+      p.taskTitle='';
+      p.customTitle=false;
+    }
+    if(st.running&&Number.isFinite(st.endAt)){
+      const rem=Math.max(0,Math.ceil((st.endAt-Date.now())/1000));
+      if(rem>0){
+        p.sec=rem;
+        p.running=true;
+        p.endAt=st.endAt;
+        gcalStartPomoInterval();
+      }else{
+        p.sec=0;
+        p.running=false;
+        p.endAt=null;
+        gcalSavePomo();
+        setTimeout(()=>gcalNotifyPomoDone(gcalGetPomoLabel(),p.mode),400);
+      }
+    }else if(Number.isFinite(st.sec)&&st.sec>=0){
+      p.sec=st.sec;
+      p.running=false;
+      p.endAt=null;
+    }
+  }catch(e){}
+}
 function gcalUpdatePomoDom(){
   const p=GCAL.pomo;
   const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
@@ -7401,29 +7648,72 @@ function gcalUpdatePomoDom(){
 function gcalPomoToggle(){
   const p=GCAL.pomo;
   if(p.running){
-    clearInterval(p.timer); p.timer=null; p.running=false;
+    if(p.endAt) p.sec=Math.max(0,Math.ceil((p.endAt-Date.now())/1000));
+    clearInterval(p.timer); p.timer=null; p.running=false; p.endAt=null;
   }else{
+    gcalWarmPomoAudio();
+    if('Notification' in window&&Notification.permission==='default'){
+      Notification.requestPermission().catch(()=>{});
+    }
+    if(p.sec<=0) p.sec=p.total;
     p.running=true;
-    p.timer=setInterval(()=>{
-      if(p.sec>0){ p.sec--; gcalUpdatePomoDom(); }
-      else{
-        clearInterval(p.timer); p.timer=null; p.running=false;
-        toast(`🔔 Pomodoro tamamlandı: ${p.taskTitle}! Harika iş çıkardın.`);
-        renderCal($('#main'),false);
-      }
-    },1000);
+    p.endAt=Date.now()+p.sec*1000;
+    gcalStartPomoInterval();
   }
-  renderCal($('#main'),false);
+  gcalSavePomo();
+  renderTabs();
+  if($('#main .gcal')) renderCal($('#main'),false);
 }
 function gcalPomoReset(mins,modeName){
   const p=GCAL.pomo;
   if(p.timer) clearInterval(p.timer);
-  p.running=false; p.timer=null;
-  p.total=mins*60; p.sec=mins*60; p.mode=modeName;
-  renderCal($('#main'),false);
+  const totalSec=Math.max(1,Math.round(mins*60));
+  p.running=false; p.timer=null; p.endAt=null;
+  p.total=totalSec; p.sec=totalSec; p.mode=modeName;
+  gcalSavePomo();
+  renderTabs();
+  if($('#main .gcal')) renderCal($('#main'),false);
+}
+function gcalPomoDialDown(e){
+  const ring=$('#gpomoRing');
+  if(!ring) return;
+  e.preventDefault();
+  ring.classList.add('dragging');
+  const p=GCAL.pomo;
+  const maxMins=Math.max(1,Math.round(p.total/60));
+  let lastDeg=(p.sec/Math.max(1,p.total))*360;
+  const applyPointer=ev=>{
+    const r=ring.getBoundingClientRect();
+    const dx=ev.clientX-(r.left+r.width/2);
+    const dy=ev.clientY-(r.top+r.height/2);
+    let deg=Math.atan2(dx,-dy)*(180/Math.PI);
+    if(deg<0) deg+=360;
+    if(lastDeg>270&&deg<90) deg=360;
+    else if(lastDeg<90&&deg>270) deg=0;
+    lastDeg=deg;
+    const mins=Math.max(1,Math.min(maxMins,Math.round((deg/360)*maxMins)));
+    p.sec=mins*60;
+    if(p.running) p.endAt=Date.now()+p.sec*1000;
+    p.mode=`${mins} dk Odak`;
+    const mEl=$('#gpomoMode'); if(mEl) mEl.textContent=`⏱ POMODORO ÇALIŞMA SAYACI · ${p.mode}`;
+    gcalUpdatePomoDom();
+  };
+  applyPointer(e);
+  const onMove=ev=>applyPointer(ev);
+  const onUp=()=>{
+    ring.classList.remove('dragging');
+    window.removeEventListener('pointermove',onMove);
+    window.removeEventListener('pointerup',onUp);
+    window.removeEventListener('pointercancel',onUp);
+    gcalSavePomo();
+  };
+  window.addEventListener('pointermove',onMove);
+  window.addEventListener('pointerup',onUp);
+  window.addEventListener('pointercancel',onUp);
 }
 function gcalStartPomoFor(title){
   GCAL.pomo.taskTitle=title;
+  GCAL.pomo.customTitle=true;
   GCAL.view='day';
   gcalPomoReset(25,'25 dk Odak');
   gcalPomoToggle();
@@ -7847,9 +8137,14 @@ function togglePane(side){
     return;
   }
   app.classList.toggle(side==='left'?'no-left':'no-right');
+  if(side==='left'&&curMode==='write') writeNoLeft=app.classList.contains('no-left');
   syncPaneBtns();
   syncPdfFocusMode();
   saveSessionTabs();
+  if(side==='right'&&!app.classList.contains('no-right')){
+    if(curMode!=='study'&&!$('#rb-ai.on')) rtab('ai');
+    requestAnimationFrame(()=>{ const inp=$('#chatIn'); if(inp&&$('#rb-ai.on')) inp.focus(); });
+  }
 }
 function leftHeaderAct(){
   if(curMode==='ai'){ newSession(); return; }
@@ -7967,7 +8262,9 @@ function winAct(cmd){
 
 /* ---------- Modlar ---------- */
 let curMode='kasalar';
+let writeNoLeft=false;
 function layoutMode(m){
+  const prevMode=curMode;
   curMode=m;
   $$('.rbtn[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   const logo=$('.rail .logo');
@@ -7982,9 +8279,9 @@ function layoutMode(m){
   };
   $('.rt[data-rt=ai]').style.display=(m==='ai'||m==='study')?'none':'';
   $('.rt[data-rt=studio]').style.display=(m==='study')?'':'none';
-  if(m!=='study'&&$('.rt[data-rt=studio].on')){ const a=$('.rt[data-rt=ai]'); if(a)a.click(); }
+  if(m!=='study'&&m!=='ai'&&($('.rt[data-rt=studio].on')||prevMode==='ai')){ const a=$('.rt[data-rt=ai]'); if(a)a.click(); }
   if(m==='kasalar'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
-  if(m==='write'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='write'){app.classList.toggle('no-left',!!writeNoLeft);app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
   if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');renderStudio();rtab('studio');}
   if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
@@ -8842,6 +9139,25 @@ async function mediaCmd(action){
 
 let _lastRailPlat='';
 let _lastRailTip='';
+let _mediaPulseTimer=null;
+function syncMediaPulse(playing){
+  const btn=$('#mediaBtn');
+  if(!playing||document.hidden||!btn){
+    if(_mediaPulseTimer){clearInterval(_mediaPulseTimer);_mediaPulseTimer=null;}
+    if(btn){btn.style.removeProperty('--mp-o');btn.style.removeProperty('--mp-s');}
+    return;
+  }
+  if(_mediaPulseTimer)return;
+  const tick=()=>{
+    if(document.hidden||!mediaState.playing){syncMediaPulse(false);return;}
+    const w=0.5-0.5*Math.cos(((Date.now()%1800)/1800)*Math.PI*2);
+    btn.style.setProperty('--mp-o',(1-0.55*w).toFixed(2));
+    btn.style.setProperty('--mp-s',(1-0.20*w).toFixed(3));
+  };
+  tick();
+  _mediaPulseTimer=setInterval(tick,67);
+}
+document.addEventListener('visibilitychange',()=>{if(mediaState.playing)syncMediaPulse(!document.hidden);});
 function renderMediaRail(){
   const btn=$('#mediaBtn'); if(!btn)return;
   const plat=mediaState.platform||'idle';
@@ -8853,6 +9169,7 @@ function renderMediaRail(){
   const isActive=!!(mediaPinned||$('#mpop')?.classList.contains('show'));
   if(btn.classList.contains('playing')!==isPlaying) btn.classList.toggle('playing',isPlaying);
   if(btn.classList.contains('active')!==isActive) btn.classList.toggle('active',isActive);
+  syncMediaPulse(isPlaying);
   const tip=mediaState.source==='idle'
     ?'Medya Kumandası (Çalan yok)'
     :`${mediaState.playing?'▶':'❚❚'} ${mediaState.title}${mediaState.artist?' — '+mediaState.artist:''} (${mediaState.platformLabel})`;
@@ -9139,7 +9456,7 @@ async function hydrateUiState(){
 
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); syncEffortSelects(); syncAllGemBoxes();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initGcalPomo(); syncEffortSelects(); syncAllGemBoxes();
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');
@@ -9149,12 +9466,14 @@ initNavHistory();
 window.addEventListener('beforeunload',()=>{
   saveMainScroll();
   saveSessionTabs();
+  gcalSavePomo();
   flushUiStateRemote(true);
 });
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){
     saveMainScroll();
     saveSessionTabs();
+    gcalSavePomo();
     flushUiStateRemote(true);
   }
 });

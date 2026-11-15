@@ -110,7 +110,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .rbtn.rdrag{opacity:.35}
 .rbtn.rover-t::before,.rbtn.rover-b::before{content:'';position:absolute;left:4px;right:4px;height:2px;border-radius:2px;background:var(--cu)}
 .rbtn.rover-t::before{top:-3px}.rbtn.rover-b::before{bottom:-3px}
-.rbtn[data-tip]:hover::after{content:attr(data-tip);position:absolute;left:44px;background:var(--bg3);border:1px solid var(--line);padding:3px 8px;border-radius:6px;font-size:12px;white-space:nowrap;z-index:9;color:var(--txt)}
+.rbtn[data-tip]:hover::after{content:attr(data-tip);position:absolute;left:44px;background:var(--bg3);border:1px solid var(--line);padding:3px 8px;border-radius:6px;font-size:12px;white-space:nowrap;z-index:60;pointer-events:none;color:var(--txt)}
 .sp{flex:1}
 .left,.right{background:var(--bg2);overflow:hidden;min-width:0;min-height:0;position:relative}
 .right{grid-column:4;grid-row:2;height:100%;background:var(--bg2);border-left:1px solid var(--line)}
@@ -420,9 +420,12 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .gday-wrap{display:grid;grid-template-columns:1.35fr 1fr;flex:1;min-height:0;min-width:0;overflow:hidden}
 .gday-cockpit{border-left:1px solid var(--line);background:var(--bg);padding:18px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
 .gpomo{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;align-items:center;gap:16px}
-.gpomo-ring{width:96px;height:96px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--cu) calc(var(--pp,100)*1%),var(--bg3) 0);flex-shrink:0;position:relative}
-.gpomo-ring::before{content:'';position:absolute;inset:7px;border-radius:50%;background:var(--bg2)}
-.gpomo-time{position:relative;font:700 20px var(--mono);color:var(--txt)}
+.gpomo-ring{width:96px;height:96px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--cu) calc(var(--pp,100)*1%),var(--bg3) 0);flex-shrink:0;position:relative;cursor:grab;user-select:none;touch-action:none}
+.gpomo-ring.dragging{cursor:grabbing}
+.gpomo-ring::before{content:'';position:absolute;inset:7px;border-radius:50%;background:var(--bg2);pointer-events:none}
+.gpomo-time{position:relative;font:700 20px var(--mono);color:var(--txt);pointer-events:none}
+.gpomo-knob{position:absolute;left:50%;top:50%;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;border-radius:50%;background:var(--cu);border:2px solid var(--bg2);box-shadow:0 0 6px rgba(0,0,0,.45);transform:rotate(calc(var(--pp,100)*3.6deg)) translateY(-44.5px);pointer-events:none;transition:transform .06s linear}
+.gpomo-ring.dragging .gpomo-knob{transform:rotate(calc(var(--pp,100)*3.6deg)) translateY(-44.5px) scale(1.18);transition:none}
 /* Planlama (Ajanda) Görünümü */
 .gagenda{flex:1;overflow-y:auto;padding:22px 28px 80px;max-width:980px;width:100%;margin:0 auto;display:flex;flex-direction:column;gap:16px}
 .gag-day{display:grid;grid-template-columns:150px 1fr;gap:14px;padding:12px 0;border-bottom:1px solid var(--line);align-items:start}
@@ -657,7 +660,7 @@ canvas{width:100%;background:var(--bg);border:1px solid var(--line);border-radiu
 .gem-eff-pill .gem-chev{position:absolute;right:8px;pointer-events:none;color:var(--mut)}
 .gem-box.gem-compact .gem-eff-pill .gem-eff{font-size:11.5px;padding:5px 20px 5px 8px}
 .gem-box.gem-compact .gem-eff-pill .gem-chev{right:6px}
-.gem-send{width:0;height:34px;padding:0;margin:0;border-radius:50%;border:0;background:var(--gblue);color:#fff;display:grid;place-items:center;cursor:pointer;opacity:0;overflow:hidden;pointer-events:none;transform:scale(.75);transition:width .15s ease,opacity .15s ease,transform .15s ease,filter .14s ease,background .14s ease}
+.gem-send{width:0;height:34px;padding:0;margin:0;border-radius:50%;border:0;background:var(--cu);color:var(--on-cu);display:grid;place-items:center;cursor:pointer;opacity:0;overflow:hidden;pointer-events:none;transform:scale(.75);transition:width .15s ease,opacity .15s ease,transform .15s ease,filter .14s ease,background .14s ease}
 .gem-box.has-val .gem-send,.gem-box.is-running .gem-send{width:34px;margin-left:2px;opacity:1;pointer-events:auto;transform:scale(1)}
 .gem-send:hover{filter:brightness(1.1)}
 .gem-send:active{transform:scale(.94)}
@@ -966,8 +969,7 @@ body.fw-full .doc{max-width:none}
 .rbtn.mbtn-rail{position:relative}
 .rbtn.mbtn-rail svg{width:18px;height:18px;display:block}
 .rbtn.mbtn-rail.active{color:var(--cu);background:var(--cu-d)}
-.rbtn.mbtn-rail.playing::before{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--cu);box-shadow:0 0 0 2px var(--bg)}
-@keyframes mpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+.rbtn.mbtn-rail.playing::before{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--cu);box-shadow:0 0 0 2px var(--bg);opacity:var(--mp-o,1);transform:scale(var(--mp-s,1))}
 .mpop{position:fixed;left:60px;bottom:84px;width:308px;max-width:calc(100vw - 74px);max-height:calc(100vh - 104px);overflow-y:auto;background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;z-index:72;display:none;box-shadow:0 20px 60px #000a}
 .mpop.show{display:block;animation:in .16s ease}
 .mpop-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}
@@ -1169,4 +1171,17 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .nm-link.lvl-2{padding-left:14px}
 .nm-link.lvl-3{padding-left:24px;font-size:11.5px}
 @media (max-width:1100px){.notion-minimap{display:none}}
-@media print{.notion-topbar,.nblock-gutter,.notion-tail,.notion-minimap,.notion-float-lock,.notion-bubble,.notion-slash,.notion-math-pop,.n-table-bar,.n-mb-hint,.msg-act,.sc-act,.gem-wrap,.gem-side-foot,.gem-plus-menu{display:none!important}.nblock{margin:0!important;padding:2px 0!important}.nblock-h1,.nblock-h2,.nblock-h3,.n-callout,.n-math-block,.n-table-wrap{break-inside:avoid}}
+/* Pomodoro Tamamlanma Bildirim Kartı */
+.pomo-done-banner{position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:120;display:flex;align-items:center;gap:12px;max-width:460px;width:calc(100vw - 32px);padding:12px 14px;background:var(--bg2);color:var(--txt);border:1.5px solid var(--cu);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.48),0 0 0 1px rgba(255,255,255,.04);animation:pomoPop .28s ease,pomoPulse 1.8s ease-in-out 3}
+.pomo-done-ic{width:36px;height:36px;border-radius:10px;background:var(--cu-d);color:var(--cu);display:grid;place-items:center;font-size:18px;flex-shrink:0}
+.pomo-done-body{flex:1;min-width:0}
+.pomo-done-title{font:600 13.5px/1.3 var(--sans);color:var(--txt)}
+.pomo-done-sub{font:500 11.5px/1.35 var(--mono);color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.pomo-done-act{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.pomo-done-btn{background:var(--cu);color:var(--on-cu);border:0;border-radius:8px;padding:6px 10px;font:600 11.5px var(--sans);cursor:pointer;transition:.14s}
+.pomo-done-btn:hover{filter:brightness(1.08)}
+.pomo-done-close{background:transparent;color:var(--mut);border:1px solid var(--line);border-radius:8px;width:28px;height:28px;display:grid;place-items:center;cursor:pointer;font-size:13px;transition:.14s}
+.pomo-done-close:hover{color:var(--txt);border-color:var(--cu)}
+@keyframes pomoPop{from{opacity:0;transform:translateX(-50%) translateY(-10px) scale(.97)}to{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}}
+@keyframes pomoPulse{0%,100%{box-shadow:0 14px 40px rgba(0,0,0,.48),0 0 0 0 rgba(217,119,87,.35)}50%{box-shadow:0 14px 40px rgba(0,0,0,.48),0 0 0 8px rgba(217,119,87,0)}}
+@media print{.pomo-done-banner,.notion-topbar,.nblock-gutter,.notion-tail,.notion-minimap,.notion-float-lock,.notion-bubble,.notion-slash,.notion-math-pop,.n-table-bar,.n-mb-hint,.msg-act,.sc-act,.gem-wrap,.gem-side-foot,.gem-plus-menu{display:none!important}.nblock{margin:0!important;padding:2px 0!important}.nblock-h1,.nblock-h2,.nblock-h3,.n-callout,.n-math-block,.n-table-wrap{break-inside:avoid}}
