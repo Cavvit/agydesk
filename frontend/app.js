@@ -642,6 +642,18 @@ function mdToHtml(md,base){
 }
 let openTabs=['kasalar'], active='kasalar';
 let checkedSources=new Set();
+const WIN_ID=(()=>{
+  try{
+    let id=sessionStorage.getItem('agydesk_win_id');
+    if(!id){
+      id='w_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
+      sessionStorage.setItem('agydesk_win_id',id);
+    }
+    return id;
+  }catch(e){
+    return 'w_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
+  }
+})();
 const TAB_STORE_KEY='agydesk_tabs_v1';
 const NOTE_SCROLL_KEY='agydesk_note_scrolls_v1';
 const UI_SYNC_KEYS=[
@@ -806,13 +818,17 @@ function saveSessionTabs(){
       rightTab:curRt?curRt.dataset.rt:'ai'
     };
     const raw=JSON.stringify(payload);
+    try{ sessionStorage.setItem(TAB_STORE_KEY,raw); }catch(e){}
     localStorage.setItem(TAB_STORE_KEY,raw);
     persistUiState({[TAB_STORE_KEY]:raw},false);
   }catch(e){}
 }
 function restoreSessionTabs(){
   try{
-    const raw=localStorage.getItem(TAB_STORE_KEY);
+    let winRaw=null;
+    try{ winRaw=sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
+    const isFreshWindow=!winRaw;
+    const raw=winRaw||localStorage.getItem(TAB_STORE_KEY);
     if(!raw) return false;
     const saved=JSON.parse(raw);
     if(!saved||!Array.isArray(saved.openTabs)||!saved.openTabs.length) return false;
@@ -829,12 +845,18 @@ function restoreSessionTabs(){
         const num=parseInt(t.slice(6),10);
         if(Number.isFinite(num)&&num>blankN) blankN=num;
       }else if(t.startsWith('ai')&&t!=='side_ai'){
+        if(isFreshWindow) return; // Yeni pencere diger pencerenin AI oturumunu devralmasin
         const num=parseInt(t.slice(2),10);
         if(Number.isFinite(num)&&num>aiN) aiN=num;
         if(!ai[t]) ai[t]={title:'AI Oturumu '+t.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
       }
       cleaned.push(t);
     });
+    if(isFreshWindow&&saved.curMode==='ai'){
+      const freshId=ensureWindowAiSession();
+      if(!cleaned.includes(freshId)) cleaned.push(freshId);
+      saved.active=freshId;
+    }
     if(!cleaned.length){ _restoringSession=false; return false; }
     openTabs=cleaned;
     active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
@@ -2102,10 +2124,21 @@ const ai={
   side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}
 };
 let aiN=1;
+function makeUniqueAiId(){
+  return 'ai_'+WIN_ID.slice(-4)+'_'+Date.now().toString(36).slice(-4)+'_'+Math.random().toString(36).slice(2,5);
+}
+function ensureWindowAiSession(){
+  const existing=openTabs.find(isAI);
+  if(existing&&ai[existing]) return existing;
+  aiN++;
+  const id=makeUniqueAiId();
+  ai[id]={title:'AI Oturumu '+aiN,msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+  return id;
+}
 function newSession(){
   aiN++;
-  while(ai['ai'+aiN]) aiN++;
-  const id='ai'+aiN;
+  let id=makeUniqueAiId();
+  while(ai[id]) id=makeUniqueAiId();
   ai[id]={title:'AI Oturumu '+aiN,msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
   openPage(id);
 }
@@ -2687,6 +2720,9 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.title=ttl.slice(0,22);
   }
   const actNote=String(active).startsWith('note:')?active.slice(5):null;
+  s.running=true;
+  s.step='İstek gönderiliyor…';
+  aiRefresh(id);
   let res;
   try{
     res=await api('/api/run',{
@@ -2700,10 +2736,12 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
       approved:!!ok,
       sources:getCheckedSources(),
       active_note:actNote,
-      force_provider:(extraOpts&&extraOpts.force_provider)||null
+      force_provider:(extraOpts&&extraOpts.force_provider)||null,
+      win_id:WIN_ID
     });
-  }catch(e){ s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
+  }catch(e){ s.running=false; s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
   if(res.status==='approval'){
+    s.running=false;
     s.pending={text:rawText,skill,risk:res.risk,images:imgs};
     const why=res.risk==='risky'?'Riskli işlem (silme / dış gönderim / geri alınamaz)':'Dosya yazma / komut çalıştırma';
     s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${(rawText||'[Görsel analizi]').replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
@@ -2716,6 +2754,7 @@ function startEvents(){
   const es=new EventSource('/api/events');
   es.onmessage=e=>{
     const d=JSON.parse(e.data), s=ai[d.session];
+    if(d.win_id&&d.win_id!==WIN_ID) return;
     if(d.event==='step'&&s){s.step=d.step;aiRefresh(d.session);}
     else if(d.event==='done'&&s){
       s.running=false; if(d.quota)applyQuota(d.quota);
@@ -2761,7 +2800,11 @@ function startEvents(){
     }
     else if(d.event==='log'){ loadLog(); }
   };
-  es.onerror=()=>{ setTimeout(()=>{ loadChats(); loadVault(); loadHealth(); }, 2500); };
+  let _sseRecoveryTimer=null;
+  es.onerror=()=>{
+    if(_sseRecoveryTimer) clearTimeout(_sseRecoveryTimer);
+    _sseRecoveryTimer=setTimeout(()=>{ _sseRecoveryTimer=null; loadChats(); loadVault(); loadHealth(); }, 2500);
+  };
 }
 async function appendReplyToNote(btn){
   if(!String(active).startsWith('note:')) return;
@@ -2779,21 +2822,37 @@ async function appendReplyToNote(btn){
 async function loadChats(){
   try{
     const all=await api('/api/chats');
+    let changed=false;
+    let activeChanged=false;
     Object.entries(all).forEach(([sid,msgs])=>{
-      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; }
+      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; changed=true; }
+      if(ai[sid].running||ai[sid].pending) return;
       if(msgs&&msgs.length){
-        ai[sid].msgs=msgs.map(m=>({w:m.w,h:(m.w==='a'&&m.h&&!String(m.h).trim().startsWith('<'))?mdToHtml(m.h):m.h}));
+        const mapped=msgs.map(m=>({w:m.w,h:(m.w==='a'&&m.h&&!String(m.h).trim().startsWith('<'))?mdToHtml(m.h):m.h}));
+        const cur=ai[sid].msgs||[];
+        const sameLen=cur.length===mapped.length;
+        const sameTail=sameLen&&(cur.length===0||(cur[cur.length-1].w===mapped[mapped.length-1].w&&cur[cur.length-1].h===mapped[mapped.length-1].h));
+        if(!sameTail){
+          ai[sid].msgs=mapped;
+          changed=true;
+          if(sid===active) activeChanged=true;
+        }
         if(sid!=='side_ai'){
           const firstMe=msgs.find(m=>m.w==='me');
           if(firstMe){
             const stripped=firstMe.h.replace(/<[^>]+>/g,'').trim();
-            ai[sid].title=(stripped||'Görsel analizi').slice(0,22);
+            const nextTitle=(stripped||'Görsel analizi').slice(0,22);
+            if(ai[sid].title!==nextTitle){ ai[sid].title=nextTitle; changed=true; }
           }
         }
       }
     });
+    if(!changed) return;
     renderSessions(); renderTabs(); renderSideAi();
-    if(isAI(active)) renderMain();
+    if(isAI(active)&&activeChanged){
+      if($('#aichat')) aiRefresh(active);
+      else renderMain();
+    }
   }catch(e){}
 }
 function toast(t,id){
@@ -8360,7 +8419,7 @@ function setMode(m){
   layoutMode(m);
   if(m==='kasalar')openPage('kasalar');
   if(m==='plan')openPage('cal');
-  if(m==='ai'){const cur=isAI(active)?active:(openTabs.find(isAI)||'ai1'); openPage(cur);}
+  if(m==='ai'){const cur=isAI(active)?active:ensureWindowAiSession(); openPage(cur);}
   if(m==='study') openPage('studychat');
   else if(m==='write'&&(isAI(active)||active==='kasalar')){
     const o=openTabs.find(x=>!isAI(x)&&x!=='kasalar')||firstVaultTab();
@@ -9503,7 +9562,9 @@ async function hydrateUiState(){
         if(Array.isArray(saved)) applyRailOrder(saved);
       }catch(e){}
     }
-    if(typeof srv[TAB_STORE_KEY]==='string'){
+    let hasWinTabs=false;
+    try{ hasWinTabs=!!sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
+    if(!hasWinTabs&&typeof srv[TAB_STORE_KEY]==='string'){
       if(restoreSessionTabs()) initNavHistory();
     }else if(String(active).startsWith('note:')&&$('#doc')){
       restoreMainScroll(active);

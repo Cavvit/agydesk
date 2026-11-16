@@ -72,6 +72,7 @@ class RunReq(BaseModel):
     sources: list[str] = []
     active_note: str | None = None
     force_provider: str | None = None
+    win_id: str | None = None
 
 
 class LogReq(BaseModel):
@@ -458,14 +459,14 @@ async def _job(r: RunReq, dec: router.Decision):
     global _auth_needed
     loop = asyncio.get_running_loop()
     try:
-        emit("step", session=r.session, step=f"Yönlendiriliyor → {dec.label}")
+        emit("step", session=r.session, win_id=r.win_id, step=f"Yönlendiriliyor → {dec.label}")
         await asyncio.sleep(0.2)
         init_step = (
             f"{dec.label} çalışıyor… ({dec.reason})"
             if dec.provider == "local"
             else f"{dec.label} ({config.effective_effort(dec.provider, r.effort)}) çalışıyor… ({dec.reason})"
         )
-        emit("step", session=r.session, step=init_step)
+        emit("step", session=r.session, win_id=r.win_id, step=init_step)
         conv_id = store.get_conv_id(r.session)
         src_ctx = await asyncio.to_thread(vault.build_context_from_sources, r.sources, r.active_note)
         img_paths = await asyncio.to_thread(vault.resolve_chat_images, r.images)
@@ -489,7 +490,7 @@ async def _job(r: RunReq, dec: router.Decision):
             mode=r.mode,
             effort=r.effort,
             conv_id=conv_id,
-            on_step=lambda st: loop.call_soon_threadsafe(lambda s=st: emit("step", session=r.session, step=s)),
+            on_step=lambda st: loop.call_soon_threadsafe(lambda s=st: emit("step", session=r.session, win_id=r.win_id, step=s)),
             on_failover=_on_failover,
         )
         used_effort = None if dec.provider == "local" else config.effective_effort(dec.provider, r.effort)
@@ -503,7 +504,7 @@ async def _job(r: RunReq, dec: router.Decision):
         if not _subs:
             store.add_chat_msg(r.session, "a", text)
         fresh_quota = await asyncio.to_thread(store.quota_status, True, True)
-        emit("done", session=r.session, reply=text, real=real, tokens=tokens,
+        emit("done", session=r.session, win_id=r.win_id, reply=text, real=real, tokens=tokens,
              conv_id=new_conv, route=dec.dict(), effort=used_effort, quota=fresh_quota)
         emit("log")
     except asyncio.CancelledError:
@@ -521,6 +522,7 @@ async def _job(r: RunReq, dec: router.Decision):
         emit(
             "error",
             session=r.session,
+            win_id=r.win_id,
             error=err_str,
             code="auth_required" if auth_req else "provider_error",
             ollama_available=ollama_ok,
