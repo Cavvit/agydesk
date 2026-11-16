@@ -469,6 +469,30 @@ function wrapWindow(innerHtml,label,isCode){
     (isCode?`<span class="csep"></span><button onclick="copyBlock(this)" title="Kodu kopyala">⧉</button><button onclick="wrapBlock(this)" title="Satır kaydırma (Wrap)">↵</button>`:'')+
     `</div>${innerHtml}</div>`;
 }
+async function openTargetLink(ev,target,forceReveal=false){
+  if(ev){ev.preventDefault();ev.stopPropagation();}
+  if(!target)return false;
+  const reveal=forceReveal||!!(ev&&(ev.ctrlKey||ev.metaKey));
+  try{
+    const res=await fetch('/api/open',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({target,reveal})
+    });
+    const d=await res.json().catch(()=>({}));
+    if(!res.ok||!d.ok){
+      toast('⚠ '+(d.error||d.detail||'Açılamadı: '+target));
+      return false;
+    }
+    if(d.kind==='parent') toast('📂 Dosya henüz yok, üst klasör açıldı');
+  }catch(e){
+    toast('⚠ Bağlantı açılamadı');
+  }
+  return false;
+}
+function revealTargetFolder(ev,target){
+  return openTargetLink(ev,target,true);
+}
 function mdToHtml(md,base){
   const mathBlocks=[], codeBlocks=[];
   let s=String(md).replace(/\r\n/g,'\n');
@@ -524,7 +548,46 @@ function mdToHtml(md,base){
     const {id,label}=resolveWiki(inner);
     return id?`<span class="link" onclick="openPage('${id}')">📄 ${label}</span>`:`<span class="link">[[${label}]]</span>`;
   });
-  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  const unescHtml=str=>str.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>');
+  const escAttr=str=>str.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const isExtUrl=str=>/^(https?:\/\/|mailto:)/i.test(str);
+  const isLocalPath=str=>/^(file:\/\/\/?|[A-Za-z]:[\\/]|~[\\/])/i.test(str);
+  const trimTrail=str=>{
+    let r=str;
+    while(/[.,;:!?]$/.test(r)) r=r.slice(0,-1);
+    while(r.endsWith(')')&&(r.match(/\(/g)||[]).length<(r.match(/\)/g)||[]).length) r=r.slice(0,-1);
+    return r;
+  };
+  const makeUrlTag=(url,lbl)=>{
+    const tag=`<a class="ext-link" href="${escAttr(url)}" data-target="${escAttr(url)}" onclick="return openTargetLink(event,this.dataset.target)" title="Tarayıcıda aç: ${escAttr(url)}">${lbl}</a>`;
+    return `@@CODE_${codeBlocks.push(tag)-1}@@`;
+  };
+  const makePathTag=(p,lbl)=>{
+    const tag=`<a class="path-link" href="#" data-target="${escAttr(p)}" onclick="return openTargetLink(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Tıkla: Dosya/klasörü aç · Ctrl+Tık / Sağ tık: Klasörde göster">${lbl}</a>`;
+    return `@@CODE_${codeBlocks.push(tag)-1}@@`;
+  };
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(full,lbl,rawTgt)=>{
+    const tgt=unescHtml(rawTgt.trim());
+    if(isExtUrl(tgt)) return makeUrlTag(tgt,lbl);
+    if(isLocalPath(tgt)) return makePathTag(tgt,lbl);
+    return full;
+  });
+  s=s.replace(/`([^`\n]+)`/g,(_,rawInner)=>{
+    const clean=unescHtml(rawInner.trim());
+    if(isExtUrl(clean)||isLocalPath(clean)){
+      const tag=`<code class="path-code" data-target="${escAttr(clean)}" onclick="return openTargetLink(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Tıkla: Aç · Ctrl+Tık / Sağ tık: Klasörde göster">${rawInner}</code>`;
+      return `@@CODE_${codeBlocks.push(tag)-1}@@`;
+    }
+    return `@@CODE_${codeBlocks.push(`<code>${rawInner}</code>`)-1}@@`;
+  });
+  s=s.replace(/(https?:\/\/[^\s<>"'`]+|file:\/\/\/?[^\s<>"'`]+)/gi,m=>{
+    const clean=trimTrail(m), trail=m.slice(clean.length), raw=unescHtml(clean);
+    return (isExtUrl(raw)?makeUrlTag(raw,clean):makePathTag(raw,clean))+trail;
+  });
+  s=s.replace(/(^|[\s(>])((?:[A-Za-z]:[\\/]|~[\\/])[^\s<>"'`|?*]+)/g,(_,pre,p)=>{
+    const clean=trimTrail(p), trail=p.slice(clean.length), raw=unescHtml(clean);
+    return pre+makePathTag(raw,clean)+trail;
+  });
   s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
   s=s.replace(/\*([^*\n]+)\*/g,'<i>$1</i>');
   const lines=s.split('\n');

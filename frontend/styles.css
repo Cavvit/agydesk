@@ -258,6 +258,14 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .main.imgdrop{outline:2px dashed var(--cu);outline-offset:-8px;background:var(--cu-d)}
 .math{font:15px var(--mono);background:var(--bg);border-left:2px solid var(--cu);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;color:var(--cu)}
 .link{color:var(--cu);border-bottom:1px dashed var(--cu-d);cursor:pointer}
+.ext-link{color:var(--cu);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--cu) 45%,transparent);word-break:break-all;cursor:pointer;transition:.12s}
+.ext-link:hover{color:var(--tx);border-bottom-color:var(--cu);background:var(--cu-d);border-radius:3px}
+.ext-link::after{content:' ↗';font-size:.82em;opacity:.72}
+.path-link{color:var(--cu);font-family:var(--mono);font-size:.92em;text-decoration:none;border-bottom:1px dashed color-mix(in srgb,var(--cu) 50%,transparent);word-break:break-all;cursor:pointer;transition:.12s}
+.path-link:hover{background:var(--cu-d);border-bottom-style:solid;border-radius:3px}
+.path-link::before{content:'📂 ';font-size:.88em}
+.path-code{cursor:pointer;color:var(--cu);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent);transition:.12s}
+.path-code:hover{background:var(--cu-d);border-color:var(--cu)}
 .subpage{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;margin:6px 0;cursor:pointer;transition:.12s}
 .subpage:hover{border-color:var(--cu)}
 .drop{margin-top:20px;border:1.5px dashed var(--line);border-radius:10px;padding:18px;text-align:center;color:var(--mut);transition:.15s}

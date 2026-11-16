@@ -1,6 +1,10 @@
 """Atölye backend: görev yönlendirme, kota, izinler, checkpoint, SSE olayları."""
 import asyncio
 import json
+import os
+import subprocess
+from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -141,6 +145,11 @@ class ChatMsgReq(BaseModel):
     session: str
     w: str
     h: str
+
+
+class OpenTargetReq(BaseModel):
+    target: str
+    reveal: bool = False
 
 
 @app.get("/api/health")
@@ -616,6 +625,58 @@ async def media_cmd(r: MediaCmdReq):
     if not res.get("ok"):
         raise HTTPException(400, res.get("error", "Medya komutu başarısız"))
     return res
+
+
+def _open_external_target(target: str, reveal: bool) -> dict:
+    """Open URL or local file/folder in system shell."""
+    trimmed = target.strip()
+    if not trimmed:
+        raise HTTPException(400, "Boş hedef")
+
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    low = trimmed.lower()
+    if low.startswith(("http://", "https://", "mailto:")):
+        subprocess.Popen(["rundll32.exe", "url.dll,FileProtocolHandler", trimmed], creationflags=no_window)
+        return {"ok": True, "kind": "url", "path": trimmed}
+
+    if low.startswith("file:///"):
+        path_str = unquote(trimmed[8:])
+    elif low.startswith("file://"):
+        path_str = unquote(trimmed[7:])
+    else:
+        path_str = trimmed
+
+    if path_str.startswith(("~/", "~\\")):
+        path_str = os.path.expanduser("~") + path_str[1:]
+    path_str = path_str.replace("/", "\\")
+
+    path = Path(path_str)
+    if not path.is_absolute():
+        in_root = ROOT / path
+        in_vault = VAULT_DIR / path
+        if in_root.exists():
+            path = in_root
+        elif in_vault.exists():
+            path = in_vault
+
+    if path.is_dir():
+        subprocess.Popen(["explorer.exe", str(path)], creationflags=no_window)
+        return {"ok": True, "kind": "dir", "path": str(path)}
+    if path.is_file():
+        if reveal:
+            subprocess.Popen(["explorer.exe", f"/select,{path}"], creationflags=no_window)
+            return {"ok": True, "kind": "reveal", "path": str(path)}
+        os.startfile(str(path))
+        return {"ok": True, "kind": "file", "path": str(path)}
+    if path.parent.is_dir():
+        subprocess.Popen(["explorer.exe", str(path.parent)], creationflags=no_window)
+        return {"ok": True, "kind": "parent", "path": str(path.parent)}
+    raise HTTPException(404, f"Yol bulunamadı: {path}")
+
+
+@app.post("/api/open")
+async def open_target_ep(r: OpenTargetReq):
+    return await asyncio.to_thread(_open_external_target, r.target, r.reveal)
 
 
 @app.middleware("http")

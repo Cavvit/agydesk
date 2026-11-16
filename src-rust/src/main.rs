@@ -1005,6 +1005,130 @@ async fn media_cmd_ep(Json(r): Json<MediaCmdReq>) -> Response {
     }
 }
 
+#[derive(Deserialize)]
+struct OpenTargetReq {
+    target: String,
+    #[serde(default)]
+    reveal: bool,
+}
+
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    out.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn open_external_target(raw_target: &str, reveal: bool) -> Result<(String, String), String> {
+    let trimmed = raw_target
+        .trim()
+        .trim_matches(|c| c == '<' || c == '>' || c == '"' || c == '\'');
+    if trimmed.is_empty() {
+        return Err("Boş hedef".to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
+    {
+        Command::new("rundll32.exe")
+            .args(["url.dll,FileProtocolHandler", trimmed])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Tarayıcı açılamadı: {}", e))?;
+        return Ok(("url".to_string(), trimmed.to_string()));
+    }
+
+    let mut path_str = if lower.starts_with("file:///") {
+        percent_decode_path(&trimmed[8..])
+    } else if lower.starts_with("file://") {
+        percent_decode_path(&trimmed[7..])
+    } else {
+        trimmed.to_string()
+    };
+
+    if path_str.starts_with("~/") || path_str.starts_with("~\\") {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            path_str = format!("{}{}", home, &path_str[1..]);
+        }
+    }
+    path_str = path_str.replace('/', "\\");
+
+    let mut path = std::path::PathBuf::from(&path_str);
+    if !path.is_absolute() {
+        let in_root = ROOT.join(&path);
+        let in_vault = VAULT_DIR.join(&path);
+        if in_root.exists() {
+            path = in_root;
+        } else if in_vault.exists() {
+            path = in_vault;
+        }
+    }
+
+    if path.is_dir() {
+        Command::new("explorer.exe")
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Klasör açılamadı: {}", e))?;
+        return Ok(("dir".to_string(), path.display().to_string()));
+    }
+    if path.is_file() {
+        if reveal {
+            Command::new("explorer.exe")
+                .arg(format!("/select,{}", path.display()))
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("Klasör açılamadı: {}", e))?;
+            return Ok(("reveal".to_string(), path.display().to_string()));
+        }
+        Command::new("explorer.exe")
+            .arg(&path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| format!("Dosya açılamadı: {}", e))?;
+        return Ok(("file".to_string(), path.display().to_string()));
+    }
+    if let Some(parent) = path.parent() {
+        if parent.is_dir() {
+            Command::new("explorer.exe")
+                .arg(parent)
+                .creation_flags(CREATE_NO_WINDOW)
+                .spawn()
+                .map_err(|e| format!("Üst klasör açılamadı: {}", e))?;
+            return Ok(("parent".to_string(), parent.display().to_string()));
+        }
+    }
+    Err(format!("Yol bulunamadı: {}", path.display()))
+}
+
+async fn open_target_ep(Json(r): Json<OpenTargetReq>) -> Response {
+    let target = r.target;
+    let reveal = r.reveal;
+    let res = tokio::task::spawn_blocking(move || open_external_target(&target, reveal)).await;
+    match res {
+        Ok(Ok((kind, opened_path))) => Json(json!({
+            "ok": true,
+            "kind": kind,
+            "path": opened_path
+        }))
+        .into_response(),
+        Ok(Err(msg)) => err_resp(StatusCode::NOT_FOUND, msg),
+        Err(e) => err_resp(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 async fn undo_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Response {
     let cps = store::pending_checkpoints(&r.session);
     if cps.is_empty() {
@@ -1234,6 +1358,24 @@ fn run_native_window() {
         .with_url(&url)
         .with_devtools(true)
         .with_ipc_handler(make_ipc(proxy.clone()))
+        .with_new_window_req_handler(|req_url| {
+            let _ = open_external_target(&req_url, false);
+            false
+        })
+        .with_navigation_handler(|nav_url| {
+            let low = nav_url.to_ascii_lowercase();
+            if low.starts_with("http://127.0.0.1:8780")
+                || low.starts_with("http://localhost:8780")
+                || low.starts_with("about:")
+                || low.starts_with("blob:")
+                || low.starts_with("data:")
+            {
+                true
+            } else {
+                let _ = open_external_target(&nav_url, false);
+                false
+            }
+        })
         .build();
 
     let (webview, _fallback_ctx) = match build_primary {
@@ -1248,6 +1390,24 @@ fn run_native_window() {
                 .with_url(&url)
                 .with_devtools(true)
                 .with_ipc_handler(make_ipc(proxy.clone()))
+                .with_new_window_req_handler(|req_url| {
+                    let _ = open_external_target(&req_url, false);
+                    false
+                })
+                .with_navigation_handler(|nav_url| {
+                    let low = nav_url.to_ascii_lowercase();
+                    if low.starts_with("http://127.0.0.1:8780")
+                        || low.starts_with("http://localhost:8780")
+                        || low.starts_with("about:")
+                        || low.starts_with("blob:")
+                        || low.starts_with("data:")
+                    {
+                        true
+                    } else {
+                        let _ = open_external_target(&nav_url, false);
+                        false
+                    }
+                })
                 .build()
                 .expect("WebView2 bileşeni başlatılamadı");
             (wv, Some(fb_ctx))
@@ -1385,6 +1545,7 @@ fn build_router() -> Router {
         .route("/api/undo", post(undo_ep))
         .route("/api/media/status", get(media_status_ep))
         .route("/api/media/cmd", post(media_cmd_ep))
+        .route("/api/open", post(open_target_ep))
         .fallback_service(ServeDir::new(frontend_dir).append_index_html_on_directories(true))
         .layer(middleware::from_fn(no_cache_mw))
         .layer(CorsLayer::permissive())
