@@ -2337,7 +2337,9 @@ function renderMsgRowHtml(sessId,x,i,isStudy){
 function gemComposerHtml(opts){
   const sid=escAttr(opts.sessId);
   const cls='gem-box'+(opts.compact?' exp gem-compact':'');
+  const att=opts.attachId?`<div class="chat-att-bar gem-att-bar" id="${escAttr(opts.attachId)}"></div>`:'';
   return `<div class="gem-wrap"><div class="${cls}" data-gem-sess="${sid}">
+    ${att}
     <textarea id="${opts.inputId}" rows="1" placeholder="${escAttr(opts.placeholder||"AgyDesk'e sorun…")}"></textarea>
     <button class="gem-ic gem-plus" type="button" title="Ekle: Görsel, Skill veya Bağlam" onclick="toggleGemPlusMenu(this,'${sid}','${opts.inputId}')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
     <div class="gem-right">
@@ -2368,7 +2370,7 @@ function syncGemBoxState(inputEl){
   const hasVal=val.trim().length>0||hasAtt;
   const isCompact=box.classList.contains('gem-compact');
   const wasExp=box.classList.contains('exp');
-  let isMulti=isCompact||val.includes('\n');
+  let isMulti=isCompact||hasAtt||val.includes('\n');
   if(!isMulti&&val.length>0){
     const plusEl=box.querySelector('.gem-plus');
     const rightEl=box.querySelector('.gem-right');
@@ -2418,7 +2420,7 @@ function toggleGemPlusMenu(btn,sessId,inputId){
     const act=it.dataset.act, inp=$('#'+inputId);
     closeGemPlusMenu();
     if(act==='img'){ pickChatImages(sessId); return; }
-    if(act==='slash'&&inp){ inp.value=(inp.value?inp.value+' ':'')+'/'; autoGrow(inp); syncGemBoxState(inp); inp.focus(); return; }
+    if(act==='slash'&&inp){ inp.value=(inp.value?inp.value+' ':'')+'/'; autoGrow(inp); syncGemBoxState(inp); inp.focus(); inp.setSelectionRange(inp.value.length,inp.value.length); syncAiSlash(inp); return; }
     if(act==='note'&&inp&&hasNote){ const t=(noteCache[active]&&noteCache[active].title)||active.slice(5); inp.value=`"${t}" notuma göre: `+(inp.value||''); autoGrow(inp); syncGemBoxState(inp); inp.focus(); return; }
     if((act==='ozet'||act==='fisle')&&SK[act]){ aiSend(sessId,SK[act].prompt||('/'+act),act); }
   };
@@ -2659,8 +2661,7 @@ function renderAI(m){
   m.scrollTop=0;
   m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
    <div class="aiin" id="aidrop"><div class="col">
-   <div class="chat-att-bar ai-att-bar" id="aiAttach"></div>
-   ${gemComposerHtml({sessId:active,inputId:'aiInput',sendId:'aiSend',placeholder:"AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
+   ${gemComposerHtml({sessId:active,inputId:'aiInput',sendId:'aiSend',attachId:'aiAttach',placeholder:"AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   aiHead(active);
   const inp=$('#aiInput'),go=()=>{
     const cur=ai[active];
@@ -2669,7 +2670,7 @@ function renderAI(m){
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length))return;
     inp.value='';autoGrow(inp);syncGemBoxState(inp);aiSend(active,v);
   };
-  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{autoGrow(inp);syncGemBoxState(inp);}; inp.focus();
+  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{autoGrow(inp);syncGemBoxState(inp);}; wireAiSlash(inp); inp.focus();
   wireChatDrop($('#aidrop'),()=>active,k=>{if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
   wireChatDrop($('#aichat'),()=>active);
   renderChatAttachments(active);
@@ -6883,7 +6884,7 @@ async function renderCal(m,fetchApi=true){
 
       <button class="gcal-btn" onclick="gcalExportICS()" title="AgyCal takvimini .ics olarak indir (Google/Apple/Telefon Takvimine aktar)">📲 .ics</button>
 
-      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();document.getElementById('gcalViewDd').classList.toggle('open')" title="Görünüm Değiştir (D/W/M/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
+      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();const dd=document.getElementById('gcalViewDd');const host=dd.closest('.gcal');const r=dd.getBoundingClientRect();const hr=host?host.getBoundingClientRect():{left:0,right:innerWidth};dd.classList.toggle('align-right',(hr.right-r.left)<180&&(r.right-hr.left)>=180);dd.classList.toggle('open')" title="Görünüm Değiştir (D/W/M/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
 
       <button class="gcal-btn pri" onclick="openCalModal(null,GCAL.cursor)" title="Yeni Etkinlik / Sınav Oluştur (Kısayol: C)">＋ Oluştur</button>
     </div>
@@ -8183,7 +8184,7 @@ function renderStudyChat(m){
   m.scrollTop=0;
   m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
-    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="chat-att-bar sc-att-bar" id="scAttach"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'side_ai',inputId:'scIn',sendId:'scGo',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'side_ai',inputId:'scIn',sendId:'scGo',attachId:'scAttach',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   const i=$('#scIn'), go=()=>{
     const cur=ai.side_ai;
     if(cur&&(cur.running||cur.pending)){ aiStop('side_ai'); return; }
@@ -8194,6 +8195,7 @@ function renderStudyChat(m){
   $('#scGo').onclick=go;
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
   i.oninput=()=>{ autoGrow(i); syncGemBoxState(i); };
+  wireAiSlash(i);
   wireChatDrop(m.querySelector('.sc-wrap'),()=>'side_ai');
   renderChatAttachments('side_ai');
   syncAllGemBoxes();
@@ -8239,7 +8241,7 @@ function send(){
   i.value='';autoGrow(i);syncGemBoxState(i);
   aiSend('side_ai',q);
 }
-$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>{autoGrow(e.target);syncGemBoxState(e.target);};
+$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>{autoGrow(e.target);syncGemBoxState(e.target);}; wireAiSlash($('#chatIn'));
 wireChatDrop($('#rb-ai'),()=>'side_ai');
 
 /* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
@@ -8608,6 +8610,137 @@ $('#rb-skills').innerHTML='<input class="sk-search" id="skQ" placeholder="Skill 
 $('#skQ').oninput=e=>buildSkills(e.target.value);
 document.addEventListener('dragstart',e=>{const s=e.target.closest&&e.target.closest('.skill[data-skill]'); if(s)e.dataTransfer.setData('text/plain',s.dataset.skill);});
 buildSkills();
+
+/* ---------- VS Code IntelliSense Tarzı AI /Komut Otomatik Tamamlama ---------- */
+const _aiSlash={el:null,inp:null,items:[],idx:0,start:0,end:0,q:''};
+function getAiSlashCatalog(){
+  const list=[], seen=new Set();
+  GROUPS.forEach(([group,items])=>{
+    items.forEach(([k,ic,desc,kind])=>{
+      seen.add(k);
+      list.push({key:k,ic:ic||'/',desc:desc||(SK[k]&&SK[k].h)||'',kind:kind||'skill',group});
+    });
+  });
+  Object.keys(SK).forEach(k=>{
+    if(seen.has(k)) return;
+    const s=SK[k];
+    list.push({key:k,ic:'✦',desc:s.h||'',kind:s.kind||'skill',group:'Diğer'});
+  });
+  return list;
+}
+function ensureAiSlashEl(){
+  if(_aiSlash.el) return _aiSlash.el;
+  const el=document.createElement('div');
+  el.className='ai-slash';
+  el.id='aiSlashMenu';
+  document.body.appendChild(el);
+  el.addEventListener('mousedown',e=>{
+    const row=e.target.closest('.ai-slash-item');
+    if(!row) return;
+    e.preventDefault();
+    const it=_aiSlash.items[+row.dataset.i];
+    if(it) applyAiSlash(it);
+  });
+  document.addEventListener('mousedown',e=>{
+    if(!_aiSlash.el||!_aiSlash.el.classList.contains('show')) return;
+    if(!_aiSlash.el.contains(e.target)&&e.target!==_aiSlash.inp) closeAiSlash();
+  });
+  _aiSlash.el=el;
+  return el;
+}
+function closeAiSlash(){
+  if(_aiSlash.el) _aiSlash.el.classList.remove('show');
+  _aiSlash.items=[];
+  _aiSlash.idx=0;
+}
+function highlightSlashCmd(key,q){
+  if(!q) return '/'+key;
+  const idx=key.toLowerCase().indexOf(q);
+  if(idx<0) return '/'+key;
+  return '/'+key.slice(0,idx)+'<mark>'+key.slice(idx,idx+q.length)+'</mark>'+key.slice(idx+q.length);
+}
+function renderAiSlash(){
+  const el=ensureAiSlashEl();
+  const {items,idx,q,inp}=_aiSlash;
+  if(!inp||!items.length){
+    el.innerHTML=`<div class="ai-slash-empty">“/${q}” ile eşleşen komut yok</div>`;
+  }else{
+    const rows=items.map((it,i)=>{
+      const tagCls=it.kind==='cmd'?'cmd':(it.kind==='mode'?'mode':'');
+      const tagTxt=it.kind==='cmd'?'Komut':(it.kind==='mode'?'Mod':'Skill');
+      return `<div class="ai-slash-item${i===idx?' on':''}" data-i="${i}"><span class="ai-slash-ic">${it.ic}</span><span class="ai-slash-cmd">${highlightSlashCmd(it.key,q)}</span><span class="ai-slash-desc">${it.desc}</span><span class="ai-slash-tag ${tagCls}">${tagTxt}</span></div>`;
+    }).join('');
+    el.innerHTML=`<div class="ai-slash-list">${rows}</div><div class="ai-slash-foot"><span>↑↓ gezin · Tab / Enter seç</span><span>Esc kapat</span></div>`;
+  }
+  el.classList.add('show');
+  const box=inp.closest('.gem-box')||inp;
+  const r=box.getBoundingClientRect();
+  const w=Math.min(380,Math.max(280,r.width));
+  el.style.width=w+'px';
+  const mh=el.offsetHeight||240;
+  const left=Math.max(8,Math.min(r.left,innerWidth-w-8));
+  const topAbove=r.top-mh-6;
+  el.style.left=left+'px';
+  el.style.top=(topAbove>8?topAbove:Math.min(innerHeight-mh-8,r.bottom+6))+'px';
+  const activeRow=el.querySelector('.ai-slash-item.on');
+  if(activeRow) activeRow.scrollIntoView({block:'nearest'});
+}
+function syncAiSlash(inp){
+  if(!inp) return;
+  const pos=inp.selectionStart??inp.value.length;
+  const before=inp.value.slice(0,pos);
+  const m=before.match(/(?:^|\s)(\/([a-zA-Z0-9_-]*))$/);
+  if(!m){ closeAiSlash(); return; }
+  const q=(m[2]||'').toLowerCase();
+  const catalog=getAiSlashCatalog();
+  const matched=catalog.map(it=>{
+    const kl=it.key.toLowerCase(), dl=it.desc.toLowerCase();
+    let score=99;
+    if(!q) score=0;
+    else if(kl.startsWith(q)) score=0;
+    else if(kl.includes(q)) score=1;
+    else if(dl.includes(q)) score=2;
+    return score<99?{it,score}:null;
+  }).filter(Boolean).sort((a,b)=>a.score-b.score).map(x=>x.it);
+  _aiSlash.inp=inp;
+  _aiSlash.start=pos-m[1].length;
+  _aiSlash.end=pos;
+  _aiSlash.q=q;
+  _aiSlash.items=matched;
+  _aiSlash.idx=0;
+  renderAiSlash();
+}
+function applyAiSlash(it){
+  const inp=_aiSlash.inp; if(!inp) return;
+  const suffix=(it.kind==='cmd'||it.kind==='mode')?'':' ';
+  const ins='/'+it.key+suffix;
+  const v=inp.value;
+  inp.value=v.slice(0,_aiSlash.start)+ins+v.slice(_aiSlash.end);
+  const nextPos=_aiSlash.start+ins.length;
+  inp.focus();
+  inp.setSelectionRange(nextPos,nextPos);
+  autoGrow(inp);
+  syncGemBoxState(inp);
+  closeAiSlash();
+}
+function wireAiSlash(inp){
+  if(!inp||inp.dataset.aiSlashWired) return;
+  inp.dataset.aiSlashWired='1';
+  inp.addEventListener('input',()=>syncAiSlash(inp));
+  inp.addEventListener('click',()=>syncAiSlash(inp));
+  inp.addEventListener('keydown',e=>{
+    if(!_aiSlash.el||!_aiSlash.el.classList.contains('show')||_aiSlash.inp!==inp) return;
+    const len=_aiSlash.items.length;
+    if(e.key==='Escape'){ e.preventDefault(); e.stopImmediatePropagation(); closeAiSlash(); return; }
+    if(!len) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); e.stopImmediatePropagation(); _aiSlash.idx=(_aiSlash.idx+1)%len; renderAiSlash(); return; }
+    if(e.key==='ArrowUp'){ e.preventDefault(); e.stopImmediatePropagation(); _aiSlash.idx=(_aiSlash.idx-1+len)%len; renderAiSlash(); return; }
+    if(e.key==='Tab'||(e.key==='Enter'&&!e.shiftKey&&!e.isComposing)){
+      e.preventDefault(); e.stopImmediatePropagation();
+      applyAiSlash(_aiSlash.items[_aiSlash.idx]);
+    }
+  },true);
+}
 
 function aiInstant(id,k){
   const s=ai[id];
