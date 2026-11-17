@@ -1215,12 +1215,86 @@ fn load_window_icon() -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(img.into_raw(), w, h).ok()
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, serde::Deserialize)]
+struct DetachReq {
+    tab: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    x: Option<f64>,
+    #[serde(default)]
+    y: Option<f64>,
+    #[serde(default)]
+    w: Option<f64>,
+    #[serde(default)]
+    h: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
 enum WinCmd {
     Drag,
     Minimize,
     ToggleMaximize,
     Close,
+    Detach(DetachReq),
+}
+
+fn percent_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => {
+                out.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+fn parse_detach_cli_args() -> Option<DetachReq> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut tab: Option<String> = None;
+    let mut token = String::new();
+    let mut x: Option<f64> = None;
+    let mut y: Option<f64> = None;
+    let mut w: Option<f64> = None;
+    let mut h: Option<f64> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--detached-tab" if i + 1 < args.len() => {
+                tab = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--detach-token" if i + 1 < args.len() => {
+                token = args[i + 1].clone();
+                i += 2;
+            }
+            "--x" if i + 1 < args.len() => {
+                x = args[i + 1].parse::<f64>().ok();
+                i += 2;
+            }
+            "--y" if i + 1 < args.len() => {
+                y = args[i + 1].parse::<f64>().ok();
+                i += 2;
+            }
+            "--w" if i + 1 < args.len() => {
+                w = args[i + 1].parse::<f64>().ok();
+                i += 2;
+            }
+            "--h" if i + 1 < args.len() => {
+                h = args[i + 1].parse::<f64>().ok();
+                i += 2;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    tab.map(|t| DetachReq { tab: t, token, x, y, w, h })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1302,11 +1376,23 @@ fn run_native_window() {
 
     store::init();
 
+    let detach_cli = parse_detach_cli_args();
+    let is_detached = detach_cli.is_some();
+
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(1);
-    let url = format!("http://127.0.0.1:8780/?v={}", ts);
+    let url = if let Some(ref req) = detach_cli {
+        format!(
+            "http://127.0.0.1:8780/?v={}&detach_tab={}&detach_token={}",
+            ts,
+            percent_encode_query(&req.tab),
+            percent_encode_query(&req.token)
+        )
+    } else {
+        format!("http://127.0.0.1:8780/?v={}", ts)
+    };
 
     let event_loop = EventLoopBuilder::<WinCmd>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -1320,6 +1406,21 @@ fn run_native_window() {
         })
         .unwrap_or((1536.0, 864.0));
     let mut bounds = load_win_bounds(sw, sh);
+    if let Some(ref req) = detach_cli {
+        bounds.max = false;
+        if let Some(w) = req.w.filter(|v| v.is_finite()) {
+            bounds.w = w.clamp(760.0, (sw - 20.0).max(760.0));
+        }
+        if let Some(h) = req.h.filter(|v| v.is_finite()) {
+            bounds.h = h.clamp(520.0, (sh - 44.0).max(520.0));
+        }
+        if let Some(x) = req.x.filter(|v| v.is_finite()) {
+            bounds.x = x.clamp(-40.0, (sw - 180.0).max(0.0));
+        }
+        if let Some(y) = req.y.filter(|v| v.is_finite()) {
+            bounds.y = y.clamp(0.0, (sh - 120.0).max(0.0));
+        }
+    }
 
     let window = WindowBuilder::new()
         .with_title("AgyDesk — EEM Çalışma İstasyonu")
@@ -1334,7 +1435,14 @@ fn run_native_window() {
 
     let make_ipc = |p: tao::event_loop::EventLoopProxy<WinCmd>| {
         move |req: wry::http::Request<String>| {
-            let cmd = match req.body().as_str() {
+            let body = req.body().as_str();
+            if let Some(rest) = body.strip_prefix("detach:") {
+                if let Ok(dreq) = serde_json::from_str::<DetachReq>(rest) {
+                    let _ = p.send_event(WinCmd::Detach(dreq));
+                }
+                return;
+            }
+            let cmd = match body {
                 "drag" => Some(WinCmd::Drag),
                 "min" => Some(WinCmd::Minimize),
                 "max" => Some(WinCmd::ToggleMaximize),
@@ -1429,11 +1537,15 @@ fn run_native_window() {
                     let next_max = !window.is_maximized();
                     window.set_maximized(next_max);
                     bounds.max = next_max;
-                    save_win_bounds(&bounds);
+                    if !is_detached {
+                        save_win_bounds(&bounds);
+                    }
                 }
                 WinCmd::Close => {
                     bounds.max = window.is_maximized();
-                    save_win_bounds(&bounds);
+                    if !is_detached {
+                        save_win_bounds(&bounds);
+                    }
                     drop(webview_opt.take());
                     media::shutdown();
                     std::thread::spawn(|| {
@@ -1441,6 +1553,28 @@ fn run_native_window() {
                         std::process::exit(0);
                     });
                     *control_flow = ControlFlow::Exit;
+                }
+                WinCmd::Detach(dreq) => {
+                    if let Ok(exe) = std::env::current_exe() {
+                        let mut cmd = std::process::Command::new(exe);
+                        cmd.arg("--detached-tab").arg(&dreq.tab);
+                        if !dreq.token.is_empty() {
+                            cmd.arg("--detach-token").arg(&dreq.token);
+                        }
+                        if let Some(x) = dreq.x {
+                            cmd.arg("--x").arg(format!("{}", x.round()));
+                        }
+                        if let Some(y) = dreq.y {
+                            cmd.arg("--y").arg(format!("{}", y.round()));
+                        }
+                        if let Some(w) = dreq.w {
+                            cmd.arg("--w").arg(format!("{}", w.round()));
+                        }
+                        if let Some(h) = dreq.h {
+                            cmd.arg("--h").arg(format!("{}", h.round()));
+                        }
+                        let _ = cmd.spawn();
+                    }
                 }
             },
             TaoEvent::WindowEvent {
@@ -1472,7 +1606,9 @@ fn run_native_window() {
                 ..
             } => {
                 bounds.max = window.is_maximized();
-                save_win_bounds(&bounds);
+                if !is_detached {
+                    save_win_bounds(&bounds);
+                }
                 drop(webview_opt.take());
                 media::shutdown();
                 std::thread::spawn(|| {

@@ -785,7 +785,27 @@ function persistNoteScrolls(immediate=false){
     persistUiState({[NOTE_SCROLL_KEY]:JSON.stringify(noteScrollMap)});
   },300);
 }
+const chatScrollMap=Object.create(null);
+function saveChatScroll(id){
+  if(id==='studychat'){
+    const c=$('#scChat');
+    if(!c) return;
+    chatScrollMap.studychat={
+      top:Math.max(0,Math.round(c.scrollTop||0)),
+      atBottom:(c.scrollHeight-c.clientHeight-c.scrollTop)<60
+    };
+  }else if(id&&isAI(id)){
+    const c=$('#aichat');
+    if(!c) return;
+    chatScrollMap[id]={
+      top:Math.max(0,Math.round(c.scrollTop||0)),
+      atBottom:(c.scrollHeight-c.clientHeight-c.scrollTop)<60
+    };
+  }
+}
 function saveMainScroll(forceId=null){
+  const chatTarget=forceId||(active==='studychat'?'studychat':(isAI(active)?active:null));
+  if(chatTarget) saveChatScroll(chatTarget);
   const targetId=forceId||_mountedNoteScrollId;
   if(!targetId||!String(targetId).startsWith('note:')) return;
   const m=$('#main');
@@ -867,12 +887,65 @@ function saveSessionTabs(){
     };
     const raw=JSON.stringify(payload);
     try{ sessionStorage.setItem(TAB_STORE_KEY,raw); }catch(e){}
-    localStorage.setItem(TAB_STORE_KEY,raw);
-    persistUiState({[TAB_STORE_KEY]:raw},false);
+    if(!window.__IS_DETACHED_WIN){
+      localStorage.setItem(TAB_STORE_KEY,raw);
+      persistUiState({[TAB_STORE_KEY]:raw},false);
+    }
   }catch(e){}
 }
 function restoreSessionTabs(){
   try{
+    const urlParams=new URLSearchParams(window.location.search||'');
+    const detachTab=urlParams.get('detach_tab');
+    const detachToken=urlParams.get('detach_token');
+    if(sessionStorage.getItem('agy_detached_win')==='1'){
+      window.__IS_DETACHED_WIN=true;
+    }
+    if(detachTab){
+      window.__IS_DETACHED_WIN=true;
+      try{ sessionStorage.setItem('agy_detached_win','1'); }catch(e){}
+      let handoff=null;
+      if(detachToken){
+        try{
+          const hRaw=localStorage.getItem('agy_detach_'+detachToken);
+          if(hRaw){ handoff=JSON.parse(hRaw); localStorage.removeItem('agy_detach_'+detachToken); }
+        }catch(e){}
+      }
+      _restoringSession=true;
+      if(handoff){
+        if(typeof handoff.currentSpace==='string'&&handoff.currentSpace) currentSpace=handoff.currentSpace;
+        if(typeof handoff.currentKasa==='string'&&handoff.currentKasa) currentKasa=handoff.currentKasa;
+        if(handoff.aiData&&detachTab.startsWith('ai')){
+          const num=parseInt(detachTab.slice(2),10);
+          if(Number.isFinite(num)&&num>aiN) aiN=num;
+          ai[detachTab]=handoff.aiData;
+        }
+      }
+      if(detachTab.startsWith('blank:')){
+        const num=parseInt(detachTab.slice(6),10);
+        if(Number.isFinite(num)&&num>blankN) blankN=num;
+      }else if(detachTab.startsWith('ai')&&detachTab!=='side_ai'&&!ai[detachTab]){
+        const num=parseInt(detachTab.slice(2),10);
+        if(Number.isFinite(num)&&num>aiN) aiN=num;
+        ai[detachTab]={title:'AI Oturumu '+detachTab.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+      }
+      openTabs=[detachTab];
+      active=detachTab;
+      const targetMode=active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write')));
+      layoutMode(targetMode);
+      syncPdfSlotsWithTabs();
+      renderTabs();
+      renderTree();
+      renderSessions();
+      renderMain();
+      updateSideAiCtx();
+      updateRightProps();
+      syncPdfFocusMode();
+      _restoringSession=false;
+      saveSessionTabs();
+      try{ history.replaceState(null,'',window.location.pathname); }catch(e){}
+      return true;
+    }
     let winRaw=null;
     try{ winRaw=sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
     const isFreshWindow=!winRaw;
@@ -2023,7 +2096,209 @@ function openPage(id,forceTab=false,opts={}){
   renderSessions(); renderMain(); updateSideAiCtx(); updateRightProps(); syncPdfFocusMode(); saveSessionTabs();
   scheduleRecordNavState();
 }
+let _tabWidthLocked=false, _lockedTabW=0, _tabUnlockTimer=null;
+function ensureTabBarHoverListeners(){
+  const t=$('#tabs');
+  if(!t||t.dataset.chromeTabHooked) return;
+  t.dataset.chromeTabHooked='1';
+  t.addEventListener('mouseleave',()=>{
+    if(_tabWidthLocked) unlockTabWidths(true);
+  });
+  window.addEventListener('resize',()=>{
+    if(_tabWidthLocked) unlockTabWidths(false);
+  });
+}
+function maybeLockTabWidthsBeforeClose(){
+  const t=$('#tabs');
+  if(!t||openTabs.length<=1) return;
+  if(!t.matches(':hover')) return;
+  const firstTab=t.querySelector('.tab');
+  if(!firstTab) return;
+  const w=_tabWidthLocked&&_lockedTabW>0?_lockedTabW:firstTab.getBoundingClientRect().width;
+  if(!w||w<=0) return;
+  if(_tabUnlockTimer){ clearTimeout(_tabUnlockTimer); _tabUnlockTimer=null; }
+  _tabWidthLocked=true;
+  _lockedTabW=w;
+  t.classList.add('width-locked');
+  t.style.setProperty('--tab-lock-w',w.toFixed(2)+'px');
+}
+function unlockTabWidths(animate){
+  const t=$('#tabs');
+  if(!_tabWidthLocked){
+    if(t){ t.classList.remove('width-locked'); t.style.removeProperty('--tab-lock-w'); }
+    return;
+  }
+  const oldW=_lockedTabW;
+  _tabWidthLocked=false;
+  _lockedTabW=0;
+  if(!t) return;
+  if(_tabUnlockTimer){ clearTimeout(_tabUnlockTimer); _tabUnlockTimer=null; }
+  const tabs=[...t.querySelectorAll('.tab')];
+  t.classList.remove('width-locked');
+  t.style.removeProperty('--tab-lock-w');
+  if(!animate||!tabs.length||oldW<=0) return;
+  const targetW=tabs[0].getBoundingClientRect().width;
+  if(Math.abs(targetW-oldW)<1) return;
+  tabs.forEach(el=>{
+    el.style.transition='none';
+    el.style.flex=`0 0 ${oldW.toFixed(2)}px`;
+    el.style.maxWidth=`${oldW.toFixed(2)}px`;
+  });
+  void t.offsetWidth;
+  tabs.forEach(el=>{
+    el.style.transition='flex-basis .18s cubic-bezier(.2,0,0,1), max-width .18s cubic-bezier(.2,0,0,1)';
+    el.style.flex=`0 0 ${targetW.toFixed(2)}px`;
+    el.style.maxWidth=`${targetW.toFixed(2)}px`;
+  });
+  _tabUnlockTimer=setTimeout(()=>{
+    tabs.forEach(el=>{
+      el.style.transition='';
+      el.style.flex='';
+      el.style.maxWidth='';
+    });
+    _tabUnlockTimer=null;
+  },195);
+}
+const TAB_DOCK_WIN_ID='w_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
+const tabDockBC=typeof BroadcastChannel!=='undefined'?new BroadcastChannel('agydesk_tab_dock'):null;
+const otherWinRects=new Map();
+function getTabBarScreenRect(){
+  const t=$('#tabs');
+  if(!t) return null;
+  const r=t.getBoundingClientRect();
+  const sx=typeof window.screenX==='number'?window.screenX:0;
+  const sy=typeof window.screenY==='number'?window.screenY:0;
+  return { left:sx+r.left, top:sy+r.top, right:sx+r.right, bottom:sy+r.bottom };
+}
+function acceptDockedTab(payload){
+  if(!payload||!payload.tabId) return;
+  const id=payload.tabId;
+  if(payload.aiData&&isAI(id)){
+    const num=parseInt(id.slice(2),10);
+    if(Number.isFinite(num)&&num>aiN) aiN=num;
+    ai[id]=payload.aiData;
+  }
+  const t=$('#tabs');
+  let insertIdx=openTabs.length;
+  if(t&&Number.isFinite(payload.dropScreenX)){
+    const sx=typeof window.screenX==='number'?window.screenX:0;
+    const localX=payload.dropScreenX-sx;
+    const els=[...t.querySelectorAll('.tab')];
+    for(let i=0;i<els.length;i++){
+      const r=els[i].getBoundingClientRect();
+      if(localX<r.left+r.width/2){ insertIdx=i; break; }
+    }
+  }
+  const existingIdx=openTabs.indexOf(id);
+  if(existingIdx!==-1){
+    openTabs.splice(existingIdx,1);
+    if(existingIdx<insertIdx) insertIdx=Math.max(0,insertIdx-1);
+  }
+  openTabs.splice(Math.min(insertIdx,openTabs.length),0,id);
+  openPage(id,true);
+  try{ window.focus(); }catch(e){}
+}
+function dockTabToWindow(id,targetWinId,dropScreenX){
+  if(!id||!tabDockBC) return false;
+  if(active===id) saveMainScroll();
+  if(typeof flushNotionSave==='function'&&active===id) flushNotionSave();
+  const idx=openTabs.indexOf(id);
+  const payload={tabId:id,dropScreenX,fromWin:TAB_DOCK_WIN_ID};
+  if(isAI(id)&&ai[id]) payload.aiData=ai[id];
+  tabDockBC.postMessage({type:'dock-drop',target:targetWinId,payload});
+  openTabs=openTabs.filter(t=>t!==id);
+  removePdfSlot(id);
+  if(!openTabs.length){
+    try{ sessionStorage.removeItem(TAB_STORE_KEY); sessionStorage.removeItem('agy_detached_win'); }catch(e){}
+    winAct('close');
+    return true;
+  }
+  if(active===id) active=openTabs[Math.min(Math.max(0,idx),openTabs.length-1)];
+  if(active==='kasalar') layoutMode('kasalar');
+  else if(isAI(active)) layoutMode('ai');
+  else if(active==='cal') layoutMode('plan');
+  else if(active==='studychat') layoutMode('study');
+  else layoutMode('write');
+  renderTabs();
+  syncTreeActiveHighlight();
+  renderSessions();
+  renderMain();
+  updateSideAiCtx();
+  updateRightProps();
+  syncPdfFocusMode();
+  saveSessionTabs();
+  scheduleRecordNavState();
+  return true;
+}
+if(tabDockBC){
+  tabDockBC.onmessage=e=>{
+    const msg=e.data;
+    if(!msg||typeof msg!=='object') return;
+    if(msg.type==='ping-rects'&&msg.from!==TAB_DOCK_WIN_ID){
+      const tb=getTabBarScreenRect();
+      if(tb) tabDockBC.postMessage({type:'rect',winId:TAB_DOCK_WIN_ID,isDetached:!!window.__IS_DETACHED_WIN,tabBar:tb,ts:Date.now()});
+    }else if(msg.type==='rect'&&msg.winId!==TAB_DOCK_WIN_ID){
+      otherWinRects.set(msg.winId,{isDetached:msg.isDetached,tabBar:msg.tabBar,ts:msg.ts});
+    }else if(msg.type==='dock-hover'){
+      const t=$('#tabs');
+      if(!t) return;
+      if(msg.target===TAB_DOCK_WIN_ID&&msg.active) t.classList.add('tab-dock-target');
+      else t.classList.remove('tab-dock-target');
+    }else if(msg.type==='dock-drop'&&msg.target===TAB_DOCK_WIN_ID){
+      const t=$('#tabs');
+      if(t) t.classList.remove('tab-dock-target');
+      acceptDockedTab(msg.payload);
+    }else if(msg.type==='win-closed'&&msg.winId){
+      otherWinRects.delete(msg.winId);
+    }
+  };
+  window.addEventListener('beforeunload',()=>{
+    try{ tabDockBC.postMessage({type:'win-closed',winId:TAB_DOCK_WIN_ID}); }catch(e){}
+  });
+}
+
+function detachTabToWindow(id,screenX,screenY){
+  if(!id||openTabs.length<=1) return;
+  if(active===id) saveMainScroll();
+  if(typeof flushNotionSave==='function'&&active===id) flushNotionSave();
+  const idx=openTabs.indexOf(id);
+  const token=Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+  try{
+    const handoff={tabId:id,currentSpace,currentKasa};
+    if(isAI(id)&&ai[id]) handoff.aiData=ai[id];
+    localStorage.setItem('agy_detach_'+token,JSON.stringify(handoff));
+  }catch(e){}
+  openTabs=openTabs.filter(t=>t!==id);
+  if(!openTabs.length) openTabs=['kasalar'];
+  if(active===id) active=openTabs[Math.min(Math.max(0,idx),openTabs.length-1)];
+  if(active==='kasalar') layoutMode('kasalar');
+  else if(isAI(active)) layoutMode('ai');
+  else if(active==='cal') layoutMode('plan');
+  else if(active==='studychat') layoutMode('study');
+  else layoutMode('write');
+  removePdfSlot(id);
+  renderTabs();
+  syncTreeActiveHighlight();
+  renderSessions();
+  renderMain();
+  updateSideAiCtx();
+  updateRightProps();
+  syncPdfFocusMode();
+  saveSessionTabs();
+  scheduleRecordNavState();
+  const winW=Math.min(window.outerWidth||1180,1240);
+  const winH=Math.min(window.outerHeight||780,820);
+  const winX=Math.max(0,Math.round((Number.isFinite(screenX)?screenX:240)-180));
+  const winY=Math.max(0,Math.round((Number.isFinite(screenY)?screenY:140)-24));
+  if(window.ipc&&typeof window.ipc.postMessage==='function'){
+    window.ipc.postMessage('detach:'+JSON.stringify({tab:id,token,x:winX,y:winY,w:winW,h:winH}));
+  }else{
+    const u=`${window.location.pathname}?detach_tab=${encodeURIComponent(id)}&detach_token=${encodeURIComponent(token)}`;
+    window.open(u,'_blank',`width=${winW},height=${winH},left=${winX},top=${winY}`);
+  }
+}
 function closeTab(id,opts={}){
+  if(!opts.skipWidthLock) maybeLockTabWidthsBeforeClose();
   if(isAI(id)){ closeSession(id); return; }
   if(active===id) saveMainScroll();
   const idx=openTabs.indexOf(id);
@@ -2066,33 +2341,25 @@ function moveActiveTab(dir){
   saveSessionTabs();
 }
 function renderTabs(){
+  ensureTabBarHoverListeners();
   const t=$('#tabs'); t.innerHTML='';
-  t.ondragover=e=>{
-    e.preventDefault();
-    e.dataTransfer.dropEffect='move';
-  };
-  t.ondrop=e=>{
-    if(e.target===t||e.target.classList.contains('tab-add')){
-      e.preventDefault();
-      const srcId=e.dataTransfer.getData('text/plain')||draggedTabId;
-      if(!srcId) return;
-      const srcIdx=openTabs.indexOf(srcId);
-      if(srcIdx!==-1&&srcIdx!==openTabs.length-1){
-        const [moved]=openTabs.splice(srcIdx,1);
-        openTabs.push(moved);
-        renderTabs();
-        saveSessionTabs();
-      }
-    }
-  };
+  if(_tabWidthLocked&&_lockedTabW>0){
+    t.classList.add('width-locked');
+    t.style.setProperty('--tab-lock-w',_lockedTabW.toFixed(2)+'px');
+  }else{
+    t.classList.remove('width-locked');
+    t.style.removeProperty('--tab-lock-w');
+  }
+  t.ondragover=null;
+  t.ondrop=null;
   openTabs.forEach((id,idx)=>{
     const d=document.createElement('div'); d.className='tab'+(id===active?' on':'');
-    d.draggable=true;
+    d.draggable=false;
     d.dataset.tabId=id;
     const s=isAI(id)?ai[id]:(id==='studychat'?ai.src_ai:null);
     const info=pg(id);
     const shortcutHint=idx<8?` (Ctrl+${idx+1})`:(idx===openTabs.length-1?' (Ctrl+9)':'');
-    d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir';
+    d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir, aşağı çekerek yeni pencereye ayır';
     let calBadge='';
     if(id==='cal'&&typeof GCAL!=='undefined'){
       if(GCAL.pomo&&GCAL.pomo.running){
@@ -2106,54 +2373,175 @@ function renderTabs(){
     const stateBadge=s?(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):'';
     const badge=s?(isAI(id)?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`:'')+stateBadge:calBadge;
     d.innerHTML=`<span class="tic">${svgIcon(info.i)}</span><span class="tt">${info.t}</span>${badge}<span class="x" data-x="${id}" title="Sekmeyi kapat (Ctrl+W)">✕</span>`;
-    d.ondragstart=e=>{
-      isTabDragging=true;
-      draggedTabId=id;
-      e.dataTransfer.setData('text/plain',id);
-      e.dataTransfer.effectAllowed='move';
-      d.classList.add('dragging');
-    };
-    d.ondragend=()=>{
-      setTimeout(()=>{ isTabDragging=false; },60);
-      draggedTabId=null;
-      t.querySelectorAll('.tab').forEach(el=>el.classList.remove('dragging','drag-over-left','drag-over-right'));
-    };
-    d.ondragover=e=>{
-      e.preventDefault();
-      e.dataTransfer.dropEffect='move';
-      if(!draggedTabId||draggedTabId===id) return;
-      const rect=d.getBoundingClientRect();
-      const mid=rect.left+rect.width/2;
-      if(e.clientX<mid){
-        d.classList.add('drag-over-left');
-        d.classList.remove('drag-over-right');
-      }else{
-        d.classList.add('drag-over-right');
-        d.classList.remove('drag-over-left');
-      }
-    };
-    d.ondragleave=e=>{
-      if(!d.contains(e.relatedTarget)){
-        d.classList.remove('drag-over-left','drag-over-right');
-      }
-    };
-    d.ondrop=e=>{
-      e.preventDefault();
-      d.classList.remove('drag-over-left','drag-over-right');
-      const srcId=e.dataTransfer.getData('text/plain')||draggedTabId;
-      if(!srcId||srcId===id) return;
-      let dropIdx=openTabs.indexOf(id);
-      const rect=d.getBoundingClientRect();
-      if(e.clientX>rect.left+rect.width/2){
-        dropIdx++;
-      }
-      const srcIdx=openTabs.indexOf(srcId);
-      if(srcIdx===-1||dropIdx===-1) return;
-      const [moved]=openTabs.splice(srcIdx,1);
-      if(srcIdx<dropIdx) dropIdx--;
-      openTabs.splice(dropIdx,0,moved);
-      renderTabs();
-      saveSessionTabs();
+    d.onpointerdown=e=>{
+      if(e.button!==0||e.target.closest('.x')) return;
+      const pointerId=e.pointerId;
+      const startX=e.clientX, startY=e.clientY;
+      let dragBaseX=e.clientX;
+      let dragging=false, tearOut=false, dockTargetWinId=null, previewEl=null;
+      const showPreview=(cx,cy,dockWinId)=>{
+        if(!previewEl){
+          previewEl=document.createElement('div');
+          previewEl.id='tabTearPreview';
+          previewEl.className='tab-tear-preview';
+          previewEl.innerHTML=`<div class="ttp-bar"><span class="tic">${svgIcon(info.i)}</span><span class="tt">${escHtml(info.t)}</span></div><div class="ttp-hint"><span class="ttp-msg">Yeni pencereye ayır</span><span class="ttp-ico">↗</span></div>`;
+          document.body.appendChild(previewEl);
+        }
+        previewEl.classList.toggle('dock-ready',Boolean(dockWinId));
+        const msgEl=previewEl.querySelector('.ttp-msg');
+        const icoEl=previewEl.querySelector('.ttp-ico');
+        if(msgEl) msgEl.textContent=dockWinId?'Bu pencereye birleştir':(openTabs.length>1?'Yeni pencereye ayır':'Tek başına pencere');
+        if(icoEl) icoEl.textContent=dockWinId?'↙':(openTabs.length>1?'↗':'▢');
+        previewEl.style.left=cx+'px';
+        previewEl.style.top=cy+'px';
+      };
+      const hidePreview=()=>{
+        if(previewEl){ previewEl.remove(); previewEl=null; }
+      };
+      const setDockHover=(nextWinId)=>{
+        if(dockTargetWinId&&dockTargetWinId!==nextWinId&&tabDockBC){
+          tabDockBC.postMessage({type:'dock-hover',target:dockTargetWinId,active:false});
+        }
+        dockTargetWinId=nextWinId||null;
+        if(dockTargetWinId&&tabDockBC){
+          tabDockBC.postMessage({type:'dock-hover',target:dockTargetWinId,active:true});
+        }
+      };
+      const findDockTarget=(sx,sy)=>{
+        for(const [wId,wInfo] of otherWinRects.entries()){
+          const r=wInfo.tabBar;
+          if(!r) continue;
+          if(sx>=r.left-12&&sx<=r.right+48&&sy>=r.top-18&&sy<=r.bottom+26){
+            return wId;
+          }
+        }
+        return null;
+      };
+      const onMove=ev=>{
+        if(ev.pointerId!==pointerId) return;
+        const dx=ev.clientX-startX, dy=ev.clientY-startY;
+        if(!dragging){
+          if(Math.abs(dx)<5&&Math.abs(dy)<5) return;
+          dragging=true;
+          isTabDragging=true;
+          draggedTabId=id;
+          document.body.classList.add('tab-drag-no-select');
+          d.classList.add('tab-dragging-el');
+          try{ d.setPointerCapture(pointerId); }catch(err){}
+          if(tabDockBC){
+            otherWinRects.clear();
+            tabDockBC.postMessage({type:'ping-rects',from:TAB_DOCK_WIN_ID});
+          }
+        }
+        const tabsRect=t.getBoundingClientRect();
+        const hitDockWin=findDockTarget(ev.screenX,ev.screenY);
+        const nextTear=ev.clientY>tabsRect.bottom+38||ev.clientY<tabsRect.top-38||Boolean(hitDockWin);
+        if(nextTear){
+          tearOut=true;
+          d.classList.add('tab-tearing');
+          d.style.transform='';
+          setDockHover(hitDockWin);
+          showPreview(ev.clientX,ev.clientY,hitDockWin);
+          return;
+        }
+        setDockHover(null);
+        if(tearOut){
+          tearOut=false;
+          d.classList.remove('tab-tearing');
+          hidePreview();
+        }
+        const curDx=ev.clientX-dragBaseX;
+        d.style.transform=`translateX(${curDx}px)`;
+        const dRect=d.getBoundingClientRect();
+        const dCenter=dRect.left+dRect.width/2;
+        const tabEls=[...t.querySelectorAll('.tab')];
+        const curDomIdx=tabEls.indexOf(d);
+        if(curDomIdx===-1) return;
+        let swapTarget=null, swapDir=0;
+        if(curDomIdx<tabEls.length-1){
+          const rightEl=tabEls[curDomIdx+1];
+          const rRect=rightEl.getBoundingClientRect();
+          if(dCenter>rRect.left+rRect.width/2){ swapTarget=rightEl; swapDir=1; }
+        }
+        if(!swapTarget&&curDomIdx>0){
+          const leftEl=tabEls[curDomIdx-1];
+          const lRect=leftEl.getBoundingClientRect();
+          if(dCenter<lRect.left+lRect.width/2){ swapTarget=leftEl; swapDir=-1; }
+        }
+        if(swapTarget){
+          const siblings=tabEls.filter(el=>el!==d);
+          const oldLefts=new Map(siblings.map(el=>[el,el.getBoundingClientRect().left]));
+          const oldSelfOffset=d.offsetLeft;
+          const srcIdx=openTabs.indexOf(id);
+          const tgtId=swapTarget.dataset.tabId;
+          const tgtIdx=openTabs.indexOf(tgtId);
+          if(srcIdx!==-1&&tgtIdx!==-1){
+            const [moved]=openTabs.splice(srcIdx,1);
+            openTabs.splice(tgtIdx,0,moved);
+          }
+          if(swapDir>0){
+            t.insertBefore(d,swapTarget.nextSibling);
+          }else{
+            t.insertBefore(d,swapTarget);
+          }
+          const offsetDelta=d.offsetLeft-oldSelfOffset;
+          dragBaseX+=offsetDelta;
+          d.style.transform=`translateX(${ev.clientX-dragBaseX}px)`;
+          siblings.forEach(el=>{
+            const oldL=oldLefts.get(el);
+            const newL=el.getBoundingClientRect().left;
+            const delta=oldL-newL;
+            if(Math.abs(delta)>0.5){
+              el.style.transition='none';
+              el.style.transform=`translateX(${delta}px)`;
+              void el.offsetWidth;
+              el.style.transition='transform 160ms cubic-bezier(.2,0,0,1)';
+              el.style.transform='translateX(0)';
+            }
+          });
+        }
+      };
+      const onUp=ev=>{
+        if(ev.pointerId!==undefined&&ev.pointerId!==pointerId) return;
+        window.removeEventListener('pointermove',onMove);
+        window.removeEventListener('pointerup',onUp);
+        window.removeEventListener('pointercancel',onUp);
+        window.removeEventListener('blur',onUp);
+        try{ if(d.hasPointerCapture(pointerId)) d.releasePointerCapture(pointerId); }catch(err){}
+        hidePreview();
+        const finalDockWin=dockTargetWinId||findDockTarget(ev.screenX,ev.screenY);
+        setDockHover(null);
+        document.body.classList.remove('tab-drag-no-select');
+        d.classList.remove('tab-tearing');
+        if(!dragging){
+          draggedTabId=null;
+          return;
+        }
+        const wasTear=tearOut;
+        draggedTabId=null;
+        setTimeout(()=>{ isTabDragging=false; },60);
+        if(finalDockWin){
+          d.classList.remove('tab-dragging-el');
+          dockTabToWindow(id,finalDockWin,ev.screenX);
+          return;
+        }
+        if(wasTear&&openTabs.length>1){
+          d.classList.remove('tab-dragging-el');
+          detachTabToWindow(id,ev.screenX,ev.screenY);
+          return;
+        }
+        d.style.transition='transform 140ms cubic-bezier(.2,0,0,1)';
+        d.style.transform='translateX(0)';
+        setTimeout(()=>{
+          d.classList.remove('tab-dragging-el');
+          renderTabs();
+          saveSessionTabs();
+        },145);
+      };
+      window.addEventListener('pointermove',onMove);
+      window.addEventListener('pointerup',onUp);
+      window.addEventListener('pointercancel',onUp);
+      window.addEventListener('blur',onUp);
     };
     d.onclick=e=>{
       if(isTabDragging) return;
@@ -2645,6 +3033,7 @@ function clearSideAi(){
   renderSideAi();
 }
 function clearSrcAi(){
+  delete chatScrollMap.studychat;
   api('/api/clear',{session:'src_ai'}).catch(()=>{});
   ai.src_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
   ai.src_ai.running=false; ai.src_ai.unread=false; ai.src_ai.pending=null; ai.src_ai.attachments=[];
@@ -2850,7 +3239,17 @@ function renderAI(m){
   wireChatDrop($('#aichat'),()=>active);
   renderChatAttachments(active);
   syncAllGemBoxes();
-  const c=$('#aichat'); c.scrollTop=c.scrollHeight; renderSessions(); renderTabs(); runMermaid('#aichat .mermaid');
+  const c=$('#aichat');
+  const sessId=active;
+  c.addEventListener('scroll',()=>saveChatScroll(sessId),{passive:true});
+  const saved=chatScrollMap[sessId];
+  if(saved&&!saved.atBottom){
+    c.scrollTop=saved.top;
+    requestAnimationFrame(()=>{ if(active===sessId&&$('#aichat')) $('#aichat').scrollTop=saved.top; });
+  }else{
+    c.scrollTop=c.scrollHeight;
+  }
+  renderSessions(); renderTabs(); runMermaid('#aichat .mermaid');
 }
 async function triggerAgyLogin(){
   try{
@@ -8521,7 +8920,12 @@ function renderStudyChatBody(){
   const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
   const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
   const prevScroll=c.scrollTop;
-  const nearBottom=!c.dataset.rendered||(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
+  const isInitialMount=!c.dataset.rendered;
+  const nearBottom=!isInitialMount&&(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
+  if(!c.dataset.scrollHooked){
+    c.dataset.scrollHooked='1';
+    c.addEventListener('scroll',()=>saveChatScroll('studychat'),{passive:true});
+  }
   const n=getCheckedSources().length;
   let h='';
   if(!msgs.length&&!s.running){
@@ -8533,8 +8937,19 @@ function renderStudyChatBody(){
   c.innerHTML=`<div class="sc-col">${h}</div>`;
   c.dataset.rendered='1';
   c.dataset.msgCount=String(msgs.length);
-  if(msgs.length!==prevLen||nearBottom) c.scrollTop=c.scrollHeight;
-  else c.scrollTop=prevScroll;
+  if(isInitialMount){
+    const saved=chatScrollMap.studychat;
+    if(saved&&!saved.atBottom){
+      c.scrollTop=saved.top;
+      requestAnimationFrame(()=>{ if(active==='studychat'&&$('#scChat')) $('#scChat').scrollTop=saved.top; });
+    }else{
+      c.scrollTop=c.scrollHeight;
+    }
+  }else if(msgs.length!==prevLen||nearBottom){
+    c.scrollTop=c.scrollHeight;
+  }else{
+    c.scrollTop=prevScroll;
+  }
   const st=$('#scStop'); if(st) st.style.display=(s.running||s.pending)?'inline-flex':'none';
   const ch=$('#scChips');
   if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
@@ -9127,9 +9542,9 @@ function renderUsage(){
   const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
 }
 (()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
-$('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');$('#upop').classList.toggle('show');};
+$('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');const opening=!$('#upop').classList.contains('show');$('#upop').classList.toggle('show');if(opening)loadQuota();};
 document.addEventListener('click',e=>{if(!e.target.closest('#upop'))$('#upop').classList.remove('show');});
-loadQuota(); loadHealth(); setInterval(loadQuota,30000); loadLog(); startEvents();
+loadQuota(); loadHealth(); loadLog(); startEvents();
 
 /* ---------- Tema Yönetimi & Hızlı Seçici ---------- */
 const THEMES = [

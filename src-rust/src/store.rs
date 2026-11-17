@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const USAGE_TTL_S: f64 = 45.0;
+const USAGE_TTL_S: f64 = 300.0;
 
 #[derive(Clone)]
 pub struct LiveQuotaInfo {
@@ -287,7 +287,11 @@ pub fn fetch_agy_usage(force: bool) -> Option<HashMap<String, LiveQuotaInfo>> {
                 }
             }
             return Some(parsed);
+        } else if let Ok(mut cache) = USAGE_CACHE.lock() {
+            cache.ts = now;
         }
+    } else if let Ok(mut cache) = USAGE_CACHE.lock() {
+        cache.ts = now;
     }
 
     if let Some(cached) = USAGE_CACHE.lock().ok().and_then(|c| c.data.clone()) {
