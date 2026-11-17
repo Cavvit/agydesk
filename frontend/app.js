@@ -860,6 +860,7 @@ function saveSessionTabs(){
       noLeft:app?app.classList.contains('no-left'):false,
       writeNoLeft:typeof writeNoLeft==='boolean'?writeNoLeft:false,
       noRight:app?app.classList.contains('no-right'):false,
+      writeNoRight:typeof writeNoRight==='boolean'?writeNoRight:true,
       leftW:typeof leftW==='number'?leftW:248,
       rightW:typeof rightW==='number'?rightW:340,
       rightTab:curRt?curRt.dataset.rt:'ai'
@@ -909,6 +910,7 @@ function restoreSessionTabs(){
     active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
     const targetMode=saved.curMode||(active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write'))));
     writeNoLeft=typeof saved.writeNoLeft==='boolean'?saved.writeNoLeft:(targetMode==='write'&&typeof saved.noLeft==='boolean'?saved.noLeft:false);
+    writeNoRight=typeof saved.writeNoRight==='boolean'?saved.writeNoRight:(targetMode==='write'&&typeof saved.noRight==='boolean'?saved.noRight:true);
     layoutMode(targetMode);
     if(typeof saved.noLeft==='boolean') app.classList.toggle('no-left',saved.noLeft);
     if(typeof saved.noRight==='boolean') app.classList.toggle('no-right',saved.noRight);
@@ -8475,6 +8477,7 @@ function togglePane(side){
   }
   app.classList.toggle(side==='left'?'no-left':'no-right');
   if(side==='left'&&curMode==='write') writeNoLeft=app.classList.contains('no-left');
+  if(side==='right'&&curMode==='write') writeNoRight=app.classList.contains('no-right');
   syncPaneBtns();
   syncPdfFocusMode();
   saveSessionTabs();
@@ -8509,6 +8512,7 @@ function rtab(n){
   const el=$(`.rt[data-rt=${n}]`);
   if(el) el.click();
   app.classList.remove('no-right');
+  if(curMode==='write') writeNoRight=false;
   syncPaneBtns();
   saveSessionTabs();
 }
@@ -8616,6 +8620,7 @@ function winAct(cmd){
 /* ---------- Modlar ---------- */
 let curMode='kasalar';
 let writeNoLeft=false;
+let writeNoRight=true;
 function layoutMode(m){
   const prevMode=curMode;
   curMode=m;
@@ -8634,7 +8639,7 @@ function layoutMode(m){
   $('.rt[data-rt=studio]').style.display=(m==='study')?'':'none';
   if(m!=='study'&&m!=='ai'&&($('.rt[data-rt=studio].on')||prevMode==='ai')){ const a=$('.rt[data-rt=ai]'); if(a)a.click(); }
   if(m==='kasalar'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
-  if(m==='write'){app.classList.toggle('no-left',!!writeNoLeft);app.classList.add('no-right');show(1,0,0,'Kasa Notları');}
+  if(m==='write'){app.classList.toggle('no-left',!!writeNoLeft);app.classList.toggle('no-right',!!writeNoRight);show(1,0,0,'Kasa Notları');}
   if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');renderStudio();rtab('studio');}
   if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
@@ -10054,9 +10059,63 @@ async function hydrateUiState(){
   }
 }
 
+async function refreshActiveNote(id=active){
+  if(!id||!String(id).startsWith('note:')){ location.reload(); return; }
+  if(typeof saveMainScroll==='function') saveMainScroll(id);
+  delete noteCache[id];
+  if(typeof noteDomCache!=='undefined') noteDomCache.delete(id);
+  await loadVault();
+  if(active===id) await renderMain();
+  toast('✓ Not yenilendi',id);
+}
+function initNoteContextMenu(){
+  let menu=$('#agyCtxMenu');
+  if(!menu){
+    menu=document.createElement('div');
+    menu.id='agyCtxMenu';
+    menu.className='agy-ctx-menu';
+    document.body.appendChild(menu);
+  }
+  const hide=()=>menu.classList.remove('on');
+  document.addEventListener('click',e=>{ if(!menu.contains(e.target)) hide(); });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') hide(); });
+  window.addEventListener('blur',hide);
+  const mainEl=$('#main');
+  if(mainEl) mainEl.addEventListener('scroll',hide,{passive:true});
+  document.addEventListener('contextmenu',e=>{
+    if(e.defaultPrevented) return;
+    const inNote=active&&String(active).startsWith('note:')&&e.target&&e.target.closest('#main');
+    if(!inNote){ hide(); return; }
+    e.preventDefault();
+    const sel=String(window.getSelection?window.getSelection():'');
+    const editable=e.target.closest('textarea, input, [contenteditable="true"]');
+    const items=[{label:'⟳ Notu Yenile',fn:()=>refreshActiveNote(active)}];
+    if(editable||sel){
+      items.push({sep:true});
+      if(editable&&sel) items.push({label:'✂ Kes',fn:()=>document.execCommand('cut')});
+      if(sel) items.push({label:'📋 Kopyala',fn:()=>{ if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(sel).catch(()=>document.execCommand('copy')); else document.execCommand('copy'); }});
+      if(editable) items.push({label:'📌 Yapıştır',fn:()=>{ if(navigator.clipboard&&navigator.clipboard.readText) navigator.clipboard.readText().then(t=>{ if(t) document.execCommand('insertText',false,t); }).catch(()=>document.execCommand('paste')); else document.execCommand('paste'); }});
+    }
+    items.push({sep:true},{label:'↻ Uygulamayı Yenile',fn:()=>location.reload()});
+    menu.innerHTML='';
+    items.forEach(it=>{
+      if(it.sep){ const d=document.createElement('div'); d.className='agy-ctx-sep'; menu.appendChild(d); return; }
+      const b=document.createElement('button');
+      b.type='button'; b.className='agy-ctx-item'; b.textContent=it.label;
+      b.onclick=()=>{ hide(); it.fn(); };
+      menu.appendChild(b);
+    });
+    menu.classList.add('on');
+    const r=menu.getBoundingClientRect();
+    const x=Math.min(e.clientX,Math.max(8,window.innerWidth-r.width-8));
+    const y=Math.min(e.clientY,Math.max(8,window.innerHeight-r.height-8));
+    menu.style.left=x+'px'; menu.style.top=y+'px';
+  });
+}
+
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initPomoPop(); initGcalPomo(); syncEffortSelects(); syncAllGemBoxes();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');
