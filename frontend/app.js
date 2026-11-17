@@ -2013,7 +2013,7 @@ function openPage(id,forceTab=false,opts={}){
       syncPaneBtns();
     }
   }
-  else if(id==='studychat'&&curMode!=='study') layoutMode('study');
+  else if(id==='studychat'){if(ai.src_ai)ai.src_ai.unread=false;if(curMode!=='study') layoutMode('study');}
   else if(id!=='kasalar'&&id!=='studychat'&&id!=='cal'&&!isAI(id)&&curMode!=='write') layoutMode('write');
   syncPdfSlotsWithTabs();
   renderTabs();
@@ -2087,7 +2087,7 @@ function renderTabs(){
     const d=document.createElement('div'); d.className='tab'+(id===active?' on':'');
     d.draggable=true;
     d.dataset.tabId=id;
-    const s=isAI(id)?ai[id]:null;
+    const s=isAI(id)?ai[id]:(id==='studychat'?ai.src_ai:null);
     const info=pg(id);
     const shortcutHint=idx<8?` (Ctrl+${idx+1})`:(idx===openTabs.length-1?' (Ctrl+9)':'');
     d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir';
@@ -2101,7 +2101,8 @@ function renderTabs(){
         if(nx){ const df=gcalDiffDays(nx.date,todayIso); calBadge=`<span class="acal-tab-pill exam" title="Yaklaşan Sınav: ${nx.title}">${df===0?'BUGÜN':'🔥 '+df+'g'}</span>`; }
       }
     }
-    const badge=s?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`+(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):calBadge;
+    const stateBadge=s?(s.running?'<span class="spin"></span>':(s.pending?'<span class="udot" style="background:var(--cu)"></span>':(s.unread?'<span class="udot"></span>':''))):'';
+    const badge=s?(isAI(id)?`<span class="md ${s.mode}" title="${MODES[s.mode].n}"></span>`:'')+stateBadge:calBadge;
     d.innerHTML=`<span class="tic">${svgIcon(info.i)}</span><span class="tt">${info.t}</span>${badge}<span class="x" data-x="${id}" title="Sekmeyi kapat (Ctrl+W)">✕</span>`;
     d.ondragstart=e=>{
       isTabDragging=true;
@@ -2541,9 +2542,10 @@ function clearSideAi(){
 function clearSrcAi(){
   api('/api/clear',{session:'src_ai'}).catch(()=>{});
   ai.src_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
-  ai.src_ai.running=false; ai.src_ai.pending=null; ai.src_ai.attachments=[];
+  ai.src_ai.running=false; ai.src_ai.unread=false; ai.src_ai.pending=null; ai.src_ai.attachments=[];
   renderChatAttachments('src_ai');
   renderStudyChatBody();
+  renderTabs();
 }
 function escAttr(v){
   return String(v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -2843,7 +2845,8 @@ function startEvents(){
         $('#outs').appendChild(outBox);
         runMermaid('#outs .mermaid');
       }
-      if(!isSideId(d.session)&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
+      if(d.session==='src_ai'&&active!=='studychat'){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,'studychat');}
+      else if(!isSideId(d.session)&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
       aiRefresh(d.session);
       loadVault();
     }
@@ -7847,6 +7850,7 @@ function gcalClearPomoCustom(){
   GCAL.pomo.taskTitle='';
   gcalSavePomo();
   if($('#main .gcal')) renderCal($('#main'),false);
+  if($('#ppop')?.classList.contains('show')){ renderPomoPop(); syncOpenRailPops(); }
 }
 function gcalSavePomo(){
   try{
@@ -7949,6 +7953,19 @@ function gcalUpdatePomoDom(){
     const rMin=$('#railPomoMin'); if(rMin) rMin.textContent=p.sec>=60?Math.ceil(p.sec/60)+'m':p.sec+'s';
     const rTime=$('#railPomoTime'); if(rTime) rTime.textContent=`${mm}:${ss}`;
   }
+  const ppop=$('#ppop');
+  if(ppop?.classList.contains('show')){
+    const pt=$('#ppopTime'); if(pt) pt.textContent=`${mm}:${ss}`;
+    const pr=$('#ppopRing'); if(pr) pr.style.setProperty('--pp',pct);
+    const pm=$('#ppopMode'); if(pm) pm.textContent=p.mode||'Odak';
+    const ps=$('#ppopStatus'); if(ps) ps.textContent=p.running?'Odak aktif':(p.sec<p.total?'Duraklatıldı':'Hazır');
+    const pb=$('#ppopToggleBtn');
+    if(pb){
+      pb.textContent=p.running?'⏸ Duraklat':'▶ Başlat';
+      pb.classList.toggle('on',!!p.running);
+    }
+  }
+  syncOpenRailPops();
   if(prefs.title&&p.running&&p.sec>0){
     document.title=`⏱ ${mm}:${ss} — AgyDesk`;
   }else if(p.sec>0||!prefs.title){
@@ -7985,9 +8002,15 @@ function gcalPomoReset(mins,modeName){
   gcalUpdatePomoDom();
   renderTabs();
   if($('#main .gcal')) renderCal($('#main'),false);
+  if($('#ppop')?.classList.contains('show')){ renderPomoPop(); syncOpenRailPops(); }
 }
-function gcalPomoDialDown(e){
-  const ring=$('#gpomoRing');
+function gcalPomoRestartCurrent(){
+  const p=GCAL.pomo;
+  const mins=Math.max(1,Math.round(p.total/60));
+  gcalPomoReset(mins,p.mode||`${mins} dk Odak`);
+}
+function gcalPomoDialDown(e,ringEl=null){
+  const ring=ringEl||$('#gpomoRing');
   if(!ring) return;
   e.preventDefault();
   ring.classList.add('dragging');
@@ -8370,6 +8393,7 @@ function studioSend(q){
   studioPendingTitle=null; aiSend('src_ai',q);
 }
 function renderStudyChat(m){
+  if(ai.src_ai) ai.src_ai.unread=false;
   m.scrollTop=0;
   m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSrcAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('src_ai')">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
@@ -8999,7 +9023,7 @@ function renderUsage(){
   const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
 }
 (()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
-$('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#upop').classList.toggle('show');};
+$('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');$('#upop').classList.toggle('show');};
 document.addEventListener('click',e=>{if(!e.target.closest('#upop'))$('#upop').classList.remove('show');});
 loadQuota(); loadHealth(); setInterval(loadQuota,30000); loadLog(); startEvents();
 
@@ -9069,6 +9093,7 @@ function openThemePop() {
   if (!pop) return;
   $('#fpop')?.classList.remove('show');
   $('#mpop')?.classList.remove('show');
+  $('#ppop')?.classList.remove('show');
   renderThemePop();
   pop.classList.toggle('show');
 }
@@ -9130,7 +9155,7 @@ function renderFontPop(){
 function initTextPrefs(){
   applyTextPrefs(false);
   const b=$('#fontBtn');
-  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');$('#mpop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
+  if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
   const fp=$('#fpop'); if(fp) fp.addEventListener('click',e=>e.stopPropagation());
   document.addEventListener('click',e=>{ if(!e.target.closest('#fontBtn')) $('#fpop')?.classList.remove('show'); });
   document.addEventListener('keydown',e=>{
@@ -9164,6 +9189,7 @@ function applyRailOrder(saved){
     if(!placed.has(b.dataset.k)) rail.insertBefore(b,uring);
   });
   if(uring) rail.insertBefore(uring,null);
+  syncOpenRailPops();
 }
 function initRailDrag(){
   const rail=document.querySelector('.rail'); if(!rail) return;
@@ -9198,6 +9224,7 @@ function initRailDrag(){
       rail.insertBefore(drag, top?b:b.nextSibling);
       b.classList.remove('rover-t','rover-b');
       save();
+      syncOpenRailPops();
     });
   });
   if(sp){
@@ -9211,6 +9238,7 @@ function initRailDrag(){
       const r=sp.getBoundingClientRect(), top=e.clientY<r.top+r.height/2;
       rail.insertBefore(drag, top?sp:sp.nextSibling);
       save();
+      syncOpenRailPops();
     });
   }
 }
@@ -9576,6 +9604,21 @@ function toggleMediaSetup(){
   renderMediaPop();
 }
 
+async function openMediaApp(){
+  const s=mediaState;
+  if(!s||s.source==='idle') return;
+  closeMediaPop(true);
+  try{
+    const r=await fetch('/api/media/open',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({app:s.targetApp||'',title:s.title||'',platform:s.platform||''})
+    });
+    if(!r.ok) toast('Medya uygulaması açılamadı');
+  }catch{
+    toast('Medya uygulaması açılamadı');
+  }
+}
+
 async function mediaCmd(action){
   if(mediaState.source==='sp'){
     if(mediaState.deviceId&&!mediaState.isActiveDevice&&action==='playpause'){
@@ -9631,7 +9674,7 @@ function renderMediaRail(){
   if(btn.classList.contains('active')!==isActive) btn.classList.toggle('active',isActive);
   syncMediaPulse(isPlaying);
   const tip=mediaState.source==='idle'
-    ?'Medya Kumandası (Çalan yok)'
+    ?'AgyPlay (Çalan yok)'
     :`${mediaState.playing?'▶':'❚❚'} ${mediaState.title}${mediaState.artist?' — '+mediaState.artist:''} (${mediaState.platformLabel})`;
   if(tip!==_lastRailTip){
     btn.dataset.tip=tip;
@@ -9751,12 +9794,12 @@ function renderMediaPop(){
         <button class="mpop-next" onclick="cycleMediaPlayer()" ${multi?'':'disabled'} title="${escAttr(nextTip)}">${MEDIA_CTRL_SVG.chevron}</button>
       </div>
     </div>
-    <div class="mpop-card">
-      <div class="mpop-info">
+    <div class="mpop-card ${s.source!=='idle'?'clickable':''}">
+      <div class="mpop-info" ${s.source!=='idle'?`onclick="openMediaApp()" title="${escAttr((s.platformLabel||'Medya')+' uygulamasını aç')}"`:''}>
         <div class="mpop-title">${escAttr(s.title)}</div>
         <div class="mpop-artist">${escAttr(s.artist||'')}</div>
       </div>
-      <div class="mpop-art">${artHtml}</div>
+      <div class="mpop-art" ${s.source!=='idle'?`onclick="openMediaApp()" title="${escAttr((s.platformLabel||'Medya')+' uygulamasını aç')}"`:''}>${artHtml}</div>
     </div>
     ${seekHtml}
     <div class="mpop-ctrls">
@@ -9768,9 +9811,33 @@ function renderMediaPop(){
   `;
 }
 
+function positionRailPop(pop,anchor){
+  if(!pop||!anchor) return;
+  const r=anchor.getBoundingClientRect();
+  if(!r.width&&!r.height) return;
+  const popW=pop.offsetWidth||308;
+  const popH=pop.offsetHeight||220;
+  const left=Math.max(8,Math.min(Math.round(r.right+8),window.innerWidth-popW-8));
+  const btnCenter=r.top+r.height/2;
+  const top=Math.max(8,Math.min(Math.round(btnCenter-popH/2),window.innerHeight-popH-8));
+  pop.style.left=left+'px';
+  pop.style.top=top+'px';
+  pop.style.bottom='auto';
+}
+function syncOpenRailPops(){
+  const mpop=$('#mpop');
+  if(mpop?.classList.contains('show')) positionRailPop(mpop,$('#mediaBtn'));
+  const ppop=$('#ppop');
+  if(ppop?.classList.contains('show')) positionRailPop(ppop,$('#railPomo'));
+}
+
 function renderMediaUI(){
   renderMediaRail();
-  if($('#mpop')?.classList.contains('show'))renderMediaPop();
+  const pop=$('#mpop');
+  if(pop?.classList.contains('show')){
+    renderMediaPop();
+    positionRailPop(pop,$('#mediaBtn'));
+  }
 }
 
 let _mediaRefreshInFlight=null;
@@ -9793,9 +9860,11 @@ function openMediaPop(pin=false){
   $('#upop')?.classList.remove('show');
   $('#tpop')?.classList.remove('show');
   $('#fpop')?.classList.remove('show');
+  $('#ppop')?.classList.remove('show');
   if(pin)mediaPinned=true;
   renderMediaPop();
   pop.classList.add('show');
+  positionRailPop(pop,$('#mediaBtn'));
   renderMediaRail();
 }
 
@@ -9849,6 +9918,75 @@ function initMediaHub(){
     },ms);
   }
   scheduleMediaPoll();
+}
+
+function renderPomoPop(){
+  const pop=$('#ppop'); if(!pop) return;
+  const p=GCAL.pomo;
+  const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
+  const pct=Math.round((p.sec/Math.max(1,p.total))*100);
+  const pomoLabel=gcalGetPomoLabel();
+  const mins=Math.round(p.total/60), isBreak=/mola/i.test(p.mode||'');
+  const statusTxt=p.running?'Odak aktif':(p.sec<p.total?'Duraklatıldı':'Hazır');
+  pop.innerHTML=`
+    <div class="ppop-head">
+      <span class="ppop-badge">⏱ <span id="ppopMode">${escAttr(p.mode||'Odak')}</span></span>
+      <button type="button" class="ppop-cal" onclick="closePomoPop();openPage('cal');gcalSetView('day')" title="AgyCal Günlük Görünümünü Aç">▦ AgyCal</button>
+    </div>
+    <div class="ppop-body">
+      <div class="ppop-ring" id="ppopRing" style="--pp:${pct}" onpointerdown="gcalPomoDialDown(event,this)" title="Halkadan sürükleyerek süreyi ayarla">
+        <span class="ppop-knob"></span>
+        <span class="ppop-ring-txt" id="ppopTime">${mm}:${ss}</span>
+      </div>
+      <div class="ppop-info">
+        <div class="ppop-task" title="${escAttr(pomoLabel)}">
+          <span>🎯 ${escAttr(pomoLabel)}</span>
+          ${p.customTitle?`<button type="button" class="gcal-icbtn" title="Aktif kasaya dön" onclick="gcalClearPomoCustom()" style="font-size:11px;padding:0 5px">↺</button>`:''}
+        </div>
+        <div class="ppop-stat" id="ppopStatus">${statusTxt}</div>
+      </div>
+    </div>
+    <div class="ppop-acts">
+      <button type="button" class="ppop-btn pri ${p.running?'on':''}" id="ppopToggleBtn" onclick="gcalPomoToggle()">${p.running?'⏸ Duraklat':'▶ Başlat'}</button>
+      <button type="button" class="ppop-btn" onclick="gcalPomoRestartCurrent()" title="Mevcut süreyi başa al">↺ Sıfırla</button>
+    </div>
+    <div class="ppop-presets">
+      <button type="button" class="ppop-chip ${!isBreak&&mins===25?'on':''}" onclick="gcalPomoReset(25,'25 dk Odak')">25 dk</button>
+      <button type="button" class="ppop-chip ${!isBreak&&mins===50?'on':''}" onclick="gcalPomoReset(50,'50 dk Derin')">50 dk</button>
+      <button type="button" class="ppop-chip ${!isBreak&&mins===90?'on':''}" onclick="gcalPomoReset(90,'90 dk Blok')">90 dk</button>
+      <button type="button" class="ppop-chip ${isBreak&&mins===5?'on':''}" onclick="gcalPomoReset(5,'5 dk Mola')">Mola</button>
+    </div>
+  `;
+}
+function openPomoPop(){
+  const pop=$('#ppop'); if(!pop) return;
+  $('#upop')?.classList.remove('show');
+  $('#tpop')?.classList.remove('show');
+  $('#fpop')?.classList.remove('show');
+  closeMediaPop(true);
+  renderPomoPop();
+  pop.classList.add('show');
+  positionRailPop(pop,$('#railPomo'));
+}
+function closePomoPop(){
+  $('#ppop')?.classList.remove('show');
+}
+function togglePomoPop(e){
+  e?.stopPropagation();
+  const pop=$('#ppop'); if(!pop) return;
+  if(pop.classList.contains('show')) closePomoPop();
+  else openPomoPop();
+}
+function initPomoPop(){
+  const pop=$('#ppop'); if(!pop) return;
+  pop.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{
+    if(!e.target.closest('#ppop')&&!e.target.closest('#railPomo')) closePomoPop();
+  });
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&pop.classList.contains('show')) closePomoPop();
+  });
+  window.addEventListener('resize',syncOpenRailPops);
 }
 
 async function hydrateUiState(){
@@ -9918,7 +10056,7 @@ async function hydrateUiState(){
 
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initGcalPomo(); syncEffortSelects(); syncAllGemBoxes();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initPomoPop(); initGcalPomo(); syncEffortSelects(); syncAllGemBoxes();
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');

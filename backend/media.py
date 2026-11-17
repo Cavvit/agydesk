@@ -92,3 +92,13 @@ def send_cmd(action: str, app: str | None = None, position_ms: int | None = None
             return {"ok": False, "error": "position_ms gerekli"}
         payload["position_ms"] = max(0, int(position_ms))
     return _rpc(payload)
+
+
+def open_app(app: str | None = None, title: str | None = None, platform: str | None = None) -> dict:
+    """Medya oynatıcının masaüstü/tarayıcı penceresini öne getirir veya başlatır."""
+    return _rpc({
+        "op": "open",
+        "app": app or "",
+        "title": title or "",
+        "platform": platform or "",
+    })

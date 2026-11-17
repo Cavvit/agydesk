@@ -11,6 +11,7 @@ $asStreamMethod = [System.IO.WindowsRuntimeStreamExtensions].GetMethod('AsStream
 Add-Type -TypeDefinition @"
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -20,6 +21,14 @@ public static class WinTitleHelper {
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
 
     public static List<string> VisibleTitles() {
         var list = new List<string>();
@@ -34,6 +43,89 @@ public static class WinTitleHelper {
             return true;
         }, IntPtr.Zero);
         return list;
+    }
+
+    private static string ExpectedProcName(string appId, string platform) {
+        string a = (appId ?? "").ToLowerInvariant();
+        if (a.Contains("spotify") || platform == "spotify") return "spotify";
+        if (a.Contains("vlc") || platform == "vlc") return "vlc";
+        if (a.Contains("applemusic") || platform == "apple") return "applemusic";
+        if (a.Contains("msedge") || a.Contains("edge")) return "msedge";
+        if (a.Contains("chrome") || a.Contains("cinhimbnkkaeohfgghhklpknlkffjgod")) return "chrome";
+        if (a.Contains("firefox")) return "firefox";
+        if (a.Contains("brave")) return "brave";
+        if (a.Contains("opera")) return "opera";
+        if (a.Contains("vivaldi")) return "vivaldi";
+        int bang = a.IndexOf('!');
+        string basePart = bang > 0 ? a.Substring(0, bang) : a;
+        int slash = Math.Max(basePart.LastIndexOf('\\'), basePart.LastIndexOf('/'));
+        if (slash >= 0) basePart = basePart.Substring(slash + 1);
+        if (basePart.EndsWith(".exe")) basePart = basePart.Substring(0, basePart.Length - 4);
+        return basePart;
+    }
+
+    private static void FocusHwnd(IntPtr hwnd) {
+        if (IsIconic(hwnd)) ShowWindow(hwnd, 9);
+        IntPtr fg = GetForegroundWindow();
+        uint dummy;
+        uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
+        uint curThread = GetCurrentThreadId();
+        bool attached = (fgThread != 0 && fgThread != curThread) && AttachThreadInput(curThread, fgThread, true);
+        try {
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        } finally {
+            if (attached) AttachThreadInput(curThread, fgThread, false);
+        }
+    }
+
+    public static bool FindAndFocus(string appId, string title, string platform) {
+        string expProc = ExpectedProcName(appId, platform);
+        string tLow = (title ?? "").Trim().ToLowerInvariant();
+        string pLow = (platform ?? "").Trim().ToLowerInvariant();
+        IntPtr bestHwnd = IntPtr.Zero;
+        int bestScore = 0;
+
+        EnumWindows((hwnd, lp) => {
+            if (!IsWindowVisible(hwnd)) return true;
+            int len = GetWindowTextLength(hwnd);
+            if (len <= 0) return true;
+            var sb = new StringBuilder(len + 1);
+            GetWindowText(hwnd, sb, sb.Capacity);
+            string wt = sb.ToString().Trim();
+            if (wt.Length == 0) return true;
+            string wLow = wt.ToLowerInvariant();
+
+            uint pid = 0;
+            GetWindowThreadProcessId(hwnd, out pid);
+            string procName = "";
+            try {
+                if (pid != 0) procName = Process.GetProcessById((int)pid).ProcessName.ToLowerInvariant();
+            } catch {}
+
+            if (procName == "agydesk" || procName == "msedgewebview2" || procName == "powershell" || procName == "pwsh") return true;
+
+            int score = 0;
+            bool procMatch = expProc.Length >= 2 && (procName == expProc || procName.Contains(expProc));
+            if (procMatch) score += 40;
+            if (tLow.Length >= 3 && wLow.Contains(tLow)) score += 100;
+            if (pLow == "ytmusic" && wLow.Contains("youtube music")) score += 80;
+            else if (pLow == "youtube" && wLow.Contains("youtube")) score += 80;
+            else if (pLow == "spotify" && (wLow.Contains("spotify") || procName == "spotify")) score += 80;
+            else if (pLow == "soundcloud" && wLow.Contains("soundcloud")) score += 80;
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestHwnd = hwnd;
+            }
+            return true;
+        }, IntPtr.Zero);
+
+        if (bestScore >= 40 && bestHwnd != IntPtr.Zero) {
+            FocusHwnd(bestHwnd);
+            return true;
+        }
+        return false;
     }
 }
 "@
@@ -258,6 +350,39 @@ function Invoke-MediaCmd($action, $targetApp, $positionMs) {
     return [ordered]@{ ok = $true; handled = $res; app = $target.SourceAppUserModelId }
 }
 
+function Invoke-MediaOpen($targetApp, $title, $platform) {
+    $a = ($targetApp + '').Trim()
+    $t = ($title + '').Trim()
+    $p = ($platform + '').Trim().ToLowerInvariant()
+    try {
+        if ([WinTitleHelper]::FindAndFocus($a, $t, $p)) {
+            return [ordered]@{ ok = $true; method = 'focus' }
+        }
+    } catch {}
+    try {
+        if ($a -match 'spotify' -or $p -eq 'spotify') {
+            try { Start-Process 'spotify:'; return [ordered]@{ ok = $true; method = 'uri' } } catch {}
+            if ($a -match '!') { Start-Process "shell:AppsFolder\$a"; return [ordered]@{ ok = $true; method = 'aumid' } }
+            Start-Process 'https://open.spotify.com'
+            return [ordered]@{ ok = $true; method = 'web' }
+        }
+        if ($a -match '!' -or $a -match '_crx_') {
+            Start-Process "shell:AppsFolder\$a"
+            return [ordered]@{ ok = $true; method = 'aumid' }
+        }
+        if ($p -eq 'ytmusic') { Start-Process 'https://music.youtube.com'; return [ordered]@{ ok = $true; method = 'web' } }
+        if ($p -eq 'youtube') { Start-Process 'https://www.youtube.com'; return [ordered]@{ ok = $true; method = 'web' } }
+        if ($p -eq 'soundcloud') { Start-Process 'https://soundcloud.com'; return [ordered]@{ ok = $true; method = 'web' } }
+        if ($a) {
+            Start-Process $a
+            return [ordered]@{ ok = $true; method = 'launch' }
+        }
+    } catch {
+        return [ordered]@{ ok = $false; error = $_.Exception.Message }
+    }
+    return [ordered]@{ ok = $false; error = 'Medya uygulaması açılamadı' }
+}
+
 while ($true) {
     $line = [Console]::In.ReadLine()
     if ($null -eq $line) { break }
@@ -269,6 +394,8 @@ while ($true) {
             $out = Get-StatusObj $req.app
         } elseif ($req.op -eq 'cmd') {
             $out = Invoke-MediaCmd $req.action $req.app $req.position_ms
+        } elseif ($req.op -eq 'open') {
+            $out = Invoke-MediaOpen $req.app $req.title $req.platform
         } else {
             $out = [ordered]@{ ok = $false; error = 'Bilinmeyen op' }
         }

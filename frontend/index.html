@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=pomo1">
+<link rel="stylesheet" href="/styles.css?v=pomo3">
 </head>
 <body>
 <div class="app" id="app">
@@ -20,16 +20,16 @@
   <!-- RAY -->
   <nav class="rail">
     <div class="logo on" onclick="openKasalarHome(true)" title="AgyDesk — Çalışma Alanları (Ana Ekran)" style="cursor:pointer"><img src="/agydesk_logo.png" alt="AgyDesk"></div>
-    <button class="rbtn" data-mode="write" data-tip="Not Defteri & Yaz">✎</button>
-    <button class="rbtn" data-mode="study" data-tip="Kaynaklarla Çalış (NotebookLM)">◈</button>
-    <button class="rbtn" data-mode="plan" data-tip="AgyCal · Akıllı Takvim">▦</button>
-    <button class="rbtn" data-mode="ai" data-tip="Tam Ekran AI Oturumları">◆</button>
+    <button class="rbtn" data-mode="write" data-tip="AgyNote">✎</button>
+    <button class="rbtn" data-mode="study" data-tip="AgyStudy">◈</button>
+    <button class="rbtn" data-mode="plan" data-tip="AgyCal">▦</button>
+    <button class="rbtn" data-mode="ai" data-tip="AgyAI">◆</button>
     <div class="sp"></div>
-    <button class="rbtn mbtn-rail" id="mediaBtn" data-tip="Medya Kumandası"></button>
-    <button class="rbtn" id="themeBtn" data-tip="Görünüm ve Tema Seçici">◑</button>
-    <button class="rbtn" id="fontBtn" data-tip="Yazı tipi ve boyutu (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
-    <button class="rbtn" id="zenBtn" data-tip="Odak modu (Ctrl+.)">◐</button>
-    <div class="rail-pomo" id="railPomo" style="--p:100;display:none" onclick="openPage('cal');gcalSetView('day')" oncontextmenu="event.preventDefault();gcalPomoToggle()" title="Pomodoro · Tıkla: AgyCal'ı aç · Sağ tık: Duraklat/Başlat">
+    <button class="rbtn mbtn-rail" id="mediaBtn" data-tip="AgyPlay"></button>
+    <button class="rbtn" id="themeBtn" data-tip="AgyTheme">◑</button>
+    <button class="rbtn" id="fontBtn" data-tip="AgyType (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
+    <button class="rbtn" id="zenBtn" data-tip="AgyZen (Ctrl+.)">◐</button>
+    <div class="rail-pomo" id="railPomo" style="--p:100;display:none" onclick="togglePomoPop(event)" oncontextmenu="event.preventDefault();gcalPomoToggle()" title="Pomodoro · Tıkla: Mini kontrol · Sağ tık: Duraklat/Başlat">
       <div class="rail-pomo-ring"><span id="railPomoMin">25m</span></div>
       <small id="railPomoTime">25:00</small>
     </div>
@@ -39,6 +39,7 @@
   <div class="tpop" id="tpop"></div>
   <div class="tpop fpop" id="fpop"></div>
   <div class="mpop" id="mpop"></div>
+  <div class="ppop" id="ppop"></div>
 
   <!-- SOL -->
   <aside class="left" id="left"><div class="pane-in">
@@ -178,6 +179,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=pomo4"></script>
+<script src="/app.js?v=pomo7"></script>
 </body>
 </html>

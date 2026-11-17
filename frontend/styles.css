@@ -1000,7 +1000,7 @@ body.fw-full .doc{max-width:none}
 @media print{
   @page{size:A4 portrait;margin:10mm}
   html,body{background:#fff!important;color:#111!important;overflow:visible!important;height:auto!important;font-size:10.5pt!important}
-  .rail,.left,.right,.topbar,.status,.drop,.resizer,.meta button,.cbox .ctool,.cbox .cdrag,.upop,.mpop,.kmodal-bg,.pdf-zen-fab,.pdf-cache-stage:not(.active){display:none!important}
+  .rail,.left,.right,.topbar,.status,.drop,.resizer,.meta button,.cbox .ctool,.cbox .cdrag,.upop,.mpop,.ppop,.kmodal-bg,.pdf-zen-fab,.pdf-cache-stage:not(.active){display:none!important}
   .app,.center,.center-stage,.main{display:block!important;height:auto!important;overflow:visible!important;background:#fff!important}
   .doc{max-width:100%!important;padding:0!important;margin:0!important;column-count:1}
   .doc h1{font-size:16pt!important;color:#000!important;border-bottom:1.5px solid #222;padding-bottom:4px;margin-bottom:8px}
@@ -1014,7 +1014,7 @@ body.fw-full .doc{max-width:none}
 .rbtn.mbtn-rail svg{width:18px;height:18px;display:block}
 .rbtn.mbtn-rail.active{color:var(--cu);background:var(--cu-d)}
 .rbtn.mbtn-rail.playing::before{content:'';position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--cu);box-shadow:0 0 0 2px var(--bg);opacity:var(--mp-o,1);transform:scale(var(--mp-s,1))}
-.mpop{position:fixed;left:60px;bottom:84px;width:308px;max-width:calc(100vw - 74px);max-height:calc(100vh - 104px);overflow-y:auto;background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;z-index:72;display:none;box-shadow:0 20px 60px #000a}
+.mpop{position:fixed;left:60px;top:84px;width:308px;max-width:calc(100vw - 74px);max-height:calc(100vh - 16px);overflow-y:auto;background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;z-index:72;display:none;box-shadow:0 20px 60px #000a}
 .mpop.show{display:block;animation:in .16s ease}
 .mpop-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}
 .mpop-plat{display:inline-flex;align-items:center;gap:7px;font:600 12px var(--sans);color:var(--txt);min-width:0;overflow:hidden}
@@ -1029,10 +1029,13 @@ body.fw-full .doc{max-width:none}
 .mpop-btn{padding:5px 10px;border-radius:7px;border:1px solid var(--line);background:var(--bg3);color:var(--txt);font:500 11px var(--mono);transition:.12s}
 .mpop-btn:hover,.mpop-btn.on{border-color:var(--cu);color:var(--cu);background:var(--cu-d)}
 .mpop-card{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.mpop-card.clickable .mpop-info,.mpop-card.clickable .mpop-art{cursor:pointer}
 .mpop-info{min-width:0;flex:1}
-.mpop-title{font-weight:600;font-size:13.5px;line-height:1.3;color:var(--txt);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.mpop-title{font-weight:600;font-size:13.5px;line-height:1.3;color:var(--txt);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;transition:color .12s}
 .mpop-artist{font-size:12px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}
-.mpop-art{width:54px;height:54px;border-radius:8px;background:var(--bg3);border:1px solid var(--line);display:grid;place-items:center;color:var(--cu);flex-shrink:0;overflow:hidden}
+.mpop-art{width:54px;height:54px;border-radius:8px;background:var(--bg3);border:1px solid var(--line);display:grid;place-items:center;color:var(--cu);flex-shrink:0;overflow:hidden;transition:border-color .12s,box-shadow .12s}
+.mpop-card.clickable:hover .mpop-title{color:var(--cu)}
+.mpop-card.clickable:hover .mpop-art{border-color:var(--cu);box-shadow:0 0 0 1px color-mix(in srgb,var(--cu) 35%,transparent)}
 .mpop-art img{width:100%;height:100%;object-fit:cover;display:block}
 .mpop-art svg{width:22px;height:22px}
 .mpop-bar{height:2px;border-radius:99px;background:var(--bg3);margin-top:10px;overflow:hidden}
@@ -1050,6 +1053,34 @@ body.fw-full .doc{max-width:none}
 .mpop-setup input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:6px 8px;color:var(--txt);font:11.5px var(--mono);outline:0}
 .mpop-setup input:focus{border-color:var(--cu)}
 .mpop-setup code{background:var(--bg);border:1px solid var(--line);padding:1px 5px;border-radius:4px;color:var(--cu);font:10.5px var(--mono);word-break:break-all}
+
+/* ---------- Sol Ray Pomodoro Mini Penceresi ---------- */
+.ppop{position:fixed;left:60px;top:84px;width:308px;max-width:calc(100vw - 74px);max-height:calc(100vh - 16px);overflow-y:auto;background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:13px 14px;z-index:72;display:none;box-shadow:0 20px 60px #000a}
+.ppop.show{display:block;animation:in .16s ease}
+.ppop-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}
+.ppop-badge{display:inline-flex;align-items:center;gap:6px;font:600 11.5px var(--mono);color:var(--cu);min-width:0;overflow:hidden}
+.ppop-badge span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ppop-cal{padding:4px 9px;border-radius:7px;border:1px solid var(--line);background:var(--bg3);color:var(--txt);font:500 11px var(--mono);transition:.12s;flex-shrink:0}
+.ppop-cal:hover{border-color:var(--cu);color:var(--cu);background:var(--cu-d)}
+.ppop-body{display:flex;align-items:center;gap:14px;margin-bottom:12px}
+.ppop-ring{width:76px;height:76px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--cu) calc(var(--pp,100)*1%),var(--bg3) 0);flex-shrink:0;position:relative;cursor:grab;user-select:none;touch-action:none}
+.ppop-ring.dragging{cursor:grabbing}
+.ppop-ring::before{content:'';position:absolute;inset:6px;border-radius:50%;background:var(--bg2);pointer-events:none}
+.ppop-ring-txt{position:relative;font:700 15px var(--mono);color:var(--txt);pointer-events:none;font-variant-numeric:tabular-nums}
+.ppop-knob{position:absolute;left:50%;top:50%;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;background:var(--cu);border:2px solid var(--bg2);box-shadow:0 0 6px rgba(0,0,0,.45);transform:rotate(calc(var(--pp,100)*3.6deg)) translateY(-35px);pointer-events:none;transition:transform .06s linear}
+.ppop-ring.dragging .ppop-knob{transform:rotate(calc(var(--pp,100)*3.6deg)) translateY(-35px) scale(1.18);transition:none}
+.ppop-info{min-width:0;flex:1;display:flex;flex-direction:column;gap:4px}
+.ppop-task{font-size:13px;font-weight:600;color:var(--txt);display:flex;align-items:center;gap:5px;min-width:0}
+.ppop-task>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ppop-stat{font:500 11px var(--mono);color:var(--mut)}
+.ppop-acts{display:flex;align-items:center;gap:7px;margin-bottom:9px}
+.ppop-btn{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg3);color:var(--txt);font:600 12px var(--sans);transition:.12s;text-align:center}
+.ppop-btn:hover{border-color:var(--cu);color:var(--cu);background:var(--cu-d)}
+.ppop-btn.pri{border-color:color-mix(in srgb,var(--cu) 45%,transparent);background:var(--cu-d);color:var(--cu)}
+.ppop-btn.pri.on{background:var(--cu);color:var(--on-cu);border-color:var(--cu)}
+.ppop-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.ppop-chip{padding:5px 4px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--mut);font:500 11px var(--mono);transition:.12s;text-align:center}
+.ppop-chip:hover,.ppop-chip.on{border-color:var(--cu);color:var(--cu);background:var(--cu-d)}
 
 /* ---------- AgyDesk Notion Block & Live WYSIWYG Canvas ---------- */
 .doc.notion-doc{max-width:880px;margin:0 auto;padding:28px 48px 160px 56px;color:var(--txt);position:relative}

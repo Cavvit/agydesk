@@ -616,6 +616,12 @@ class MediaCmdReq(BaseModel):
     position_ms: int | None = None
 
 
+class MediaOpenReq(BaseModel):
+    app: str = ""
+    title: str = ""
+    platform: str = ""
+
+
 @app.get("/api/media/status")
 async def media_status(app: str = ""):
     return await asyncio.to_thread(media.get_status, app)
@@ -626,6 +632,14 @@ async def media_cmd(r: MediaCmdReq):
     res = await asyncio.to_thread(media.send_cmd, r.action, r.app, r.position_ms)
     if not res.get("ok"):
         raise HTTPException(400, res.get("error", "Medya komutu başarısız"))
+    return res
+
+
+@app.post("/api/media/open")
+async def media_open(r: MediaOpenReq):
+    res = await asyncio.to_thread(media.open_app, r.app, r.title, r.platform)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error", "Medya uygulaması açılamadı"))
     return res
 
 
