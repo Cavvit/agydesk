@@ -156,12 +156,23 @@ function navForward(){
   return true;
 }
 
-/* Fare Yan Tuşları (XBUTTON1=3 Geri, XBUTTON2=4 İleri) */
+/* Fare Yan Tuşları (XBUTTON1=3 Geri, XBUTTON2=4 İleri) ve Orta Tık Link Koruması */
 document.addEventListener('mousedown',e=>{
-  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); }
+  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); return; }
+  if(e.button===1 && e.target?.closest?.('a.path-link, a.ext-link, a[data-mdlink], code.path-code, a[href="#"]')){
+    e.preventDefault(); e.stopPropagation();
+  }
 },true);
 document.addEventListener('auxclick',e=>{
-  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); }
+  if(e.button===3||e.button===4){ e.preventDefault(); e.stopPropagation(); return; }
+  if(e.button===1){
+    const el=e.target?.closest?.('a.path-link, a.ext-link, a[data-mdlink], code.path-code, a[href="#"]');
+    if(el){
+      e.preventDefault(); e.stopPropagation();
+      const tgt=el.dataset?.target||el.dataset?.mdlink||el.getAttribute('href');
+      if(tgt && tgt!=='#') openTargetLink(e,tgt);
+    }
+  }
 },true);
 document.addEventListener('mouseup',e=>{
   if(e.button===3){ e.preventDefault(); e.stopPropagation(); navBack(); }
@@ -469,10 +480,46 @@ function wrapWindow(innerHtml,label,isCode){
     (isCode?`<span class="csep"></span><button onclick="copyBlock(this)" title="Kodu kopyala">⧉</button><button onclick="wrapBlock(this)" title="Satır kaydırma (Wrap)">↵</button>`:'')+
     `</div>${innerHtml}</div>`;
 }
+function resolveLocalNoteId(target){
+  if(!target) return null;
+  let clean=String(target).trim();
+  if(/^file:\/\/\//i.test(clean)) clean=clean.slice(8);
+  else if(/^file:\/\//i.test(clean)) clean=clean.slice(7);
+  try{ clean=decodeURIComponent(clean); }catch(e){}
+  clean=clean.replace(/\\/g,'/').replace(/^\/+(?=[A-Za-z]:\/)/,'').split('#')[0].split('?')[0];
+  if(!/\.md$/i.test(clean)) return null;
+  if(clean.startsWith('note:') && pages[clean]) return clean;
+  if(pages['note:'+clean]) return 'note:'+clean;
+  const notesIdx=clean.toLowerCase().lastIndexOf('/notes/');
+  if(notesIdx!==-1){
+    const rel=clean.slice(notesIdx+7);
+    if(pages['note:'+rel]) return 'note:'+rel;
+  }
+  const low=clean.toLowerCase();
+  const base=clean.split('/').pop().toLowerCase();
+  const keys=Object.keys(pages).filter(k=>k.startsWith('note:'));
+  const bySuffix=keys.find(k=>{
+    const rel=k.slice(5).toLowerCase();
+    return rel===low || low.endsWith('/'+rel) || rel.endsWith('/'+low);
+  });
+  if(bySuffix) return bySuffix;
+  const byBase=keys.find(k=>k.slice(5).split('/').pop().toLowerCase()===base);
+  if(byBase) return byBase;
+  const wiki=resolveWiki(base);
+  return wiki?.id||null;
+}
 async function openTargetLink(ev,target,forceReveal=false){
   if(ev){ev.preventDefault();ev.stopPropagation();}
   if(!target)return false;
   const reveal=forceReveal||!!(ev&&(ev.ctrlKey||ev.metaKey));
+  if(!reveal){
+    const noteId=resolveLocalNoteId(target);
+    if(noteId && typeof openPage==='function'){
+      const newTab=!!(ev&&(ev.button===1||ev.shiftKey));
+      openPage(noteId,true,newTab?{newTab:true}:{});
+      return false;
+    }
+  }
   try{
     const res=await fetch('/api/open',{
       method:'POST',
@@ -1958,9 +2005,16 @@ function openPage(id,forceTab=false,opts={}){
   }
   if(id==='kasalar'&&curMode!=='kasalar') layoutMode('kasalar');
   else if(isAI(id)&&curMode!=='ai') layoutMode('ai');
-  else if(id==='cal'&&curMode==='ai') layoutMode('plan');
-  else if(id==='studychat'&&curMode==='ai') layoutMode('study');
-  else if(id!=='kasalar'&&!isAI(id)&&(curMode==='kasalar'||curMode==='ai')) layoutMode('write');
+  else if(id==='cal'){
+    if(curMode!=='plan') layoutMode('plan');
+    else{
+      app.classList.add('no-left','no-right');
+      $$('.rbtn[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode==='plan'));
+      syncPaneBtns();
+    }
+  }
+  else if(id==='studychat'&&curMode!=='study') layoutMode('study');
+  else if(id!=='kasalar'&&id!=='studychat'&&id!=='cal'&&!isAI(id)&&curMode!=='write') layoutMode('write');
   syncPdfSlotsWithTabs();
   renderTabs();
   if(kasaChanged) renderTree(); else syncTreeActiveHighlight();
@@ -2119,7 +2173,10 @@ function renderTabs(){
 
 /* ---------- AI oturumları ---------- */
 const DEFAULT_AI_WELCOME='Merhaba, bu sekme tam ekran AI çalışma alanı. Aktif kasa kaynakların ve notların otomatik bağlıdır. Uzun bir görev verip başka sekmeye geçebilirsin.';
+const SIDE_IDS=['side_ai','src_ai'];
+function isSideId(id){ return SIDE_IDS.includes(id); }
 const ai={
+  src_ai:{title:'Kaynaklarla Çalış AI',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
   ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
   side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}
 };
@@ -2144,7 +2201,7 @@ function newSession(){
 }
 function closeSession(id,ev){
   if(ev) ev.stopPropagation();
-  if(id==='side_ai') return;
+  if(isSideId(id)) return;
   const s=ai[id];
   if(s&&s.running) api('/api/stop',{session:id}).catch(()=>{});
   api('/api/clear',{session:id}).catch(()=>{});
@@ -2153,18 +2210,19 @@ function closeSession(id,ev){
   unlockedNotes.delete(id);
   pruneUnlockedNotes();
   delete ai[id];
-  const realSessions=Object.keys(ai).filter(k=>k!=='side_ai');
+  const realSessions=Object.keys(ai).filter(k=>!isSideId(k));
+  let _fb=realSessions[0];
   if(!realSessions.length){
     aiN=1;
-    ai.ai1={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+    _fb=makeUniqueAiId(); ai[_fb]={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
   }
   if(!openTabs.length){
-    const fallback=(curMode==='ai')?'ai1':'kasalar';
+    const fallback=(curMode==='ai')?_fb:'kasalar';
     openTabs=[fallback];
   }
   if(active===id){
     const nextInTabs=openTabs[Math.min(Math.max(0,tabIdx),openTabs.length-1)];
-    const remAI=openTabs.find(isAI)||'ai1';
+    const remAI=openTabs.find(isAI)||_fb;
     if(curMode==='ai'&&openTabs.some(isAI)){
       active=openTabs.find(isAI);
     }else if(curMode==='ai'&&!nextInTabs){
@@ -2179,7 +2237,7 @@ function closeSession(id,ev){
 }
 function renderSessions(){
   const l=$('#sessions'); if(!l)return; l.innerHTML='';
-  Object.entries(ai).filter(([id])=>id!=='side_ai').forEach(([id,s])=>{
+  Object.entries(ai).filter(([id])=>!isSideId(id)).forEach(([id,s])=>{
     const d=document.createElement('div'); d.className='ses'+(id===active?' on':'');
     d.title=s.title;
     d.innerHTML=`<span class="sic">${svgIcon('◆')}</span><span class="st">${s.title}</span><small>${s.running?'<span class="spin"></span> çalışıyor':(s.unread?'● yeni sonuç':'boşta')}</small><button class="ses-x" title="Oturumu kapat" data-del="${id}">✕</button>`;
@@ -2235,7 +2293,8 @@ function copyChatMsg(sessId,idx,btn){
   copyTextSafe(txt).then(()=>flashMsgBtn(btn)).catch(()=>toast('Kopyalama başarısız'));
 }
 function activeInputForSession(sessId){
-  if(sessId==='side_ai') return (active==='studychat'?$('#scIn'):$('#chatIn'))||$('#chatIn')||$('#scIn');
+  if(sessId==='src_ai') return $('#scIn');
+  if(sessId==='side_ai') return $('#chatIn');
   return $('#aiInput');
 }
 function editChatMsg(sessId,idx){
@@ -2479,6 +2538,13 @@ function clearSideAi(){
   renderChatAttachments('side_ai');
   renderSideAi();
 }
+function clearSrcAi(){
+  api('/api/clear',{session:'src_ai'}).catch(()=>{});
+  ai.src_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
+  ai.src_ai.running=false; ai.src_ai.pending=null; ai.src_ai.attachments=[];
+  renderChatAttachments('src_ai');
+  renderStudyChatBody();
+}
 function escAttr(v){
   return String(v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -2536,6 +2602,7 @@ function renderChatAttachments(sessionId){
   }).join('');
   if(sessionId==='side_ai'){
     const a=$('#sideAttach'); if(a) a.innerHTML=html;
+  }else if(sessionId==='src_ai'){
     const b=$('#scAttach'); if(b) b.innerHTML=html;
   }else if(active===sessionId){
     const c=$('#aiAttach'); if(c) c.innerHTML=html;
@@ -2591,6 +2658,7 @@ function runMermaid(sel,force=false){
   }catch(e){}
 }
 function aiRefresh(id){
+  if(id==='src_ai'){ renderStudyChatBody(); renderTabs(); return; }
   if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
   if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);c.scrollTop=c.scrollHeight;aiHead(id);runMermaid('#aichat .mermaid');}
   syncAllGemBoxes();
@@ -2716,7 +2784,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.msgs.push({w:'me',h:msgHtml,raw:rawText});
     api('/api/chats',{session:id,w:'me',h:msgHtml}).catch(()=>{});
   }
-  if(id!=='side_ai'&&s.title.startsWith('AI Oturumu')){
+  if(!isSideId(id)&&s.title.startsWith('AI Oturumu')){
     const ttl=(rawText||(imgs[0]&&imgs[0].name)||'Görsel analizi').replace(/^Skill: /,'');
     s.title=ttl.slice(0,22);
   }
@@ -2767,7 +2835,7 @@ function startEvents(){
       const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
       const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span>${effChip}<span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
       s.msgs.push({w:'a',h,raw:d.reply});
-      if(d.session==='side_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
+      if(d.session==='src_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(d.session==='side_ai' && $('#outs')){
         const outBox=document.createElement('div'); outBox.className='out';
@@ -2775,7 +2843,7 @@ function startEvents(){
         $('#outs').appendChild(outBox);
         runMermaid('#outs .mermaid');
       }
-      if(d.session!=='side_ai'&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
+      if(!isSideId(d.session)&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
       aiRefresh(d.session);
       loadVault();
     }
@@ -2838,7 +2906,7 @@ async function loadChats(){
           changed=true;
           if(sid===active) activeChanged=true;
         }
-        if(sid!=='side_ai'){
+        if(!isSideId(sid)){
           const firstMe=msgs.find(m=>m.w==='me');
           if(firstMe){
             const stripped=firstMe.h.replace(/<[^>]+>/g,'').trim();
@@ -4681,7 +4749,7 @@ function inlineMdToEditableHtml(md,base){
   s=s.replace(/\*([^*\n]+)\*/g,'<i>$1</i>');
   s=s.replace(/~~([^~\n]+)~~/g,'<s>$1</s>');
   s=s.replace(/==([^=\n]+)==/g,'<mark>$1</mark>');
-  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" data-mdlink="$2" onclick="if(event.ctrlKey||notionState.locked)window.open(this.href,\'_blank\')">$1</a>');
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" data-mdlink="$2" onclick="if(event.ctrlKey||notionState.locked){return openTargetLink(event,this.dataset.mdlink);}">$1</a>');
 
   s=s.replace(/@@NTOK_(\d+)@@/g,(_,idx)=>tokens[+idx]);
   return s;
@@ -6008,7 +6076,7 @@ window.addEventListener('paste',e=>{
   if(aid==='aiInput'||(ae&&ae.closest&&ae.closest('.aiwrap'))){
     e.preventDefault(); attachChatImages(active,files); return;
   }
-  if(active==='studychat'){ e.preventDefault(); attachChatImages('side_ai',files); return; }
+  if(active==='studychat'){ e.preventDefault(); attachChatImages('src_ai',files); return; }
   if(isAI(active)){ e.preventDefault(); attachChatImages(active,files); return; }
   if(String(active).startsWith('note:')){ e.preventDefault(); dropImagesToNote(active,files); }
 });
@@ -6113,7 +6181,7 @@ function runSkill(k){
   if(curMode==='study'){ studioPendingTitle=s.h; if(active!=='studychat') openPage('studychat'); }
   rtab('ai');
   const promptText=s.prompt||(`/${k} — aktif not ve seçili kaynaklar üzerinde uygula.`);
-  aiSend('side_ai',promptText,k);
+  aiSend(curMode==='study'?'src_ai':'side_ai',promptText,k);
 }
 function wireDrop(){
   const dz=$('#drop'); if(!dz)return;
@@ -6228,6 +6296,7 @@ function parseCalEvent(raw){
   const defStart=kind==='exam'?'10:00':kind==='lab'?'13:30':kind==='study'?'20:00':'15:00';
   const defEnd=kind==='exam'?'12:00':kind==='lab'?'16:00':kind==='study'?'21:30':'16:30';
   const date=meta.date||`2026-11-${gcalPad(dayNum)}`;
+  const isAllDay=!!meta.allDay;
   return {
     id:raw.id,
     day:dayNum,
@@ -6235,9 +6304,9 @@ function parseCalEvent(raw){
     title:raw.title||'Etkinlik',
     kind,
     kasa:kasaStr||'',
-    start:meta.start||seedDef.start||defStart,
-    end:meta.end||seedDef.end||defEnd,
-    allDay:!!meta.allDay,
+    start:isAllDay?(meta.start||''):(meta.start||seedDef.start||defStart),
+    end:isAllDay?(meta.end||''):(meta.end||seedDef.end||defEnd),
+    allDay:isAllDay,
     loc:meta.loc||seedDef.loc||(kind==='exam'?'Sınav Amfisi':kind==='lab'?'Laboratuvar':''),
     desc:meta.desc||seedDef.desc||'',
     guests:meta.guests||'',
@@ -6253,8 +6322,8 @@ function packCalMeta(ev){
   return JSON.stringify({
     kasa:ev.kasa||'',
     date:ev.date,
-    start:ev.start||'10:00',
-    end:ev.end||'11:30',
+    start:ev.allDay?'':(ev.start||'10:00'),
+    end:ev.allDay?'':(ev.end||'11:30'),
     allDay:!!ev.allDay,
     loc:ev.loc||'',
     desc:ev.desc||'',
@@ -6299,7 +6368,7 @@ function getAllEventsForDate(isoDate){
       if(!hay.includes(q)) return false;
     }
     return true;
-  }).sort((a,b)=>gcalMin(a.start)-gcalMin(b.start));
+  }).sort((a,b)=>(a.allDay?-1:0)-(b.allDay?-1:0)||gcalMin(a.start)-gcalMin(b.start));
 }
 
 async function loadCalEvents(force=false){
@@ -6433,13 +6502,13 @@ function renderExamRadar(){
     const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
     const badgeTxt=diff<0?'Dün':diff===0?'BUGÜN!':diff===1?'Yarın':`${diff} gün kaldı`;
     const pct=Math.max(8,Math.min(100,Math.round((14-Math.min(14,Math.max(0,diff)))/14*100)));
-    return `<div class="gcal-cd" onclick="openCalModal(${e.id})" title="${e.title} · ${e.date} ${e.start}">
+    return `<div class="gcal-cd" onclick="openCalModal(${e.id})" title="${e.title} · ${e.date}${e.allDay?' · Tüm Gün':(e.start?' '+e.start:'')}">
       <div class="gcal-cd-top">
         <span>${k.icon} ${e.title}</span>
         <span class="gcal-cd-badge" style="background:${k.solid};color:#fff;border:1px solid ${k.solid}">${badgeTxt}</span>
       </div>
       <div style="display:flex;justify-content:space-between;font:10.5px var(--mono);color:var(--mut)">
-        <span>${e.date.split('-').reverse().slice(0,2).join('.')} · ${e.start}</span>
+        <span>${e.date.split('-').reverse().slice(0,2).join('.')} · ${e.allDay?'Tüm Gün':e.start}</span>
         <span>${gcalKasaTitle(e.kasa).slice(0,18)}</span>
       </div>
       <div class="gcal-cd-bar"><i style="width:${pct}%;background:${k.color}"></i></div>
@@ -6483,8 +6552,8 @@ function renderMonthStage(){
             ondragstart="gcalDragStart(event,'${e.id}')"
             onclick="event.stopPropagation();openCalModal('${e.id}')"
             style="background:${k.solid};color:#fff;border-left-color:transparent"
-            title="${e.start}–${e.end} · ${safeTitle}${e.loc?' ('+e.loc+')':''}">
-            <b>${e.start}</b><span>${e.title}</span>
+            title="${e.allDay?'Tüm Gün':`${e.start}–${e.end}`} · ${safeTitle}${e.loc?' ('+e.loc+')':''}">
+            ${e.allDay?`<b>•</b>`:`<b>${e.start}</b>`}<span>${e.title}</span>
           </div>`;
         }).join('')}
       </div>
@@ -6540,7 +6609,7 @@ function layoutOverlappingEvents(evs){
 }
 
 function renderTimeGrid(daysList,isSingleDay=false){
-  const START_H=7, END_H=23; // 07:00 .. 23:00 (16 saat * 60px = 960px)
+  const START_H=0, END_H=24; // 00:00 .. 24:00 (24 saat * 60px = 1440px)
   const todayIso=gcalTodayISO();
   const now=new Date();
   const nowMin=now.getHours()*60+now.getMinutes();
@@ -6558,10 +6627,10 @@ function renderTimeGrid(daysList,isSingleDay=false){
     </div>`;
     const allEvs=getAllEventsForDate(iso);
     const adEvs=allEvs.filter(e=>e.allDay||e.kind==='exam');
-    allDayCells+=`<div class="gw-ad-cell">
+    allDayCells+=`<div class="gw-ad-cell" onclick="openCalModal(null,'${iso}')" title="${iso} — Tüm gün etkinliği ekle">
       ${adEvs.map(e=>{
         const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
-        return `<div class="gev-pill ${e.done?'done':''}" onclick="openCalModal('${e.id}')" style="background:${k.solid};color:#fff;border-left-color:transparent">
+        return `<div class="gev-pill ${e.done?'done':''}" onclick="event.stopPropagation();openCalModal('${e.id}')" style="background:${k.solid};color:#fff;border-left-color:transparent">
           <span>${k.icon} ${e.title}</span>
         </div>`;
       }).join('')}
@@ -6649,6 +6718,7 @@ function renderDayStage(){
 
   return `<div class="gday-wrap">
     ${renderTimeGrid([cur],true)}
+    <div class="gcal-resizer gcal-resizer-r" onmousedown="gcalStartResize(event,'cockpit')" ondblclick="gcalResetResize('cockpit')" title="Sürükle: Pomodoro / Odak panelini boyutlandır (Çift tık: sıfırla)"></div>
     <div class="gday-cockpit">
       <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
@@ -6674,6 +6744,10 @@ function renderDayStage(){
             <button class="gcal-btn" onclick="gcalPomoReset(90,'90 dk Blok')">90 dk</button>
             <button class="gcal-btn" onclick="gcalPomoReset(5,'5 dk Mola')">Mola</button>
           </div>
+          <div class="gpomo-prefs">${(()=>{const pr=getPomoPrefs();return `
+            <button type="button" class="gpomo-pref ${pr.rail?'on':''}" onclick="togglePomoPref('rail')" title="AgyCal kapalıyken sol kenar çubuğunda geri sayım halkası göster">${pr.rail?'✓':'○'} Sol Rail Halkası</button>
+            <button type="button" class="gpomo-pref ${pr.title?'on':''}" onclick="togglePomoPref('title')" title="Sayacı tarayıcı/pencere başlığında göster">${pr.title?'✓':'○'} Pencere Başlığı</button>
+          `;})()}</div>
         </div>
       </div>
 
@@ -6686,7 +6760,7 @@ function renderDayStage(){
             ${!e.recurring?`<input type="checkbox" ${e.done?'checked':''} onclick="event.stopPropagation();gcalToggleDone(${e.id})" style="accent-color:var(--cu);cursor:pointer">`:`<span class="gag-dot" style="background:${k.color}"></span>`}
             <div style="flex:1;min-width:0">
               <div style="font-size:12.5px;font-weight:600;${e.done?'text-decoration:line-through;opacity:.55':''}">${k.icon} ${e.title}</div>
-              <div style="font:11px var(--mono);color:var(--mut)">${e.start}–${e.end}${e.loc?' · 📍 '+e.loc:''}</div>
+              <div style="font:11px var(--mono);color:var(--mut)">${e.allDay?'Tüm Gün':`${e.start}–${e.end}`}${e.loc?' · 📍 '+e.loc:''}</div>
             </div>
             <button class="gcal-icbtn" onclick="event.stopPropagation();gcalStartPomoFor('${e.title.replace(/'/g,"\\'")}')" title="Bu görev için Pomodoro başlat">⏱</button>
           </div>`;
@@ -6831,8 +6905,54 @@ function renderSemesterStage(){
   </div>`;
 }
 
+function gcalApplySavedWidths(){
+  const sw=Number(localStorage.getItem('agydesk_gcal_side_w')||0);
+  const cw=Number(localStorage.getItem('agydesk_gcal_cockpit_w')||0);
+  if(sw>=180 && sw<=440) document.documentElement.style.setProperty('--gcal-side-w',sw+'px');
+  if(cw>=360 && cw<=640) document.documentElement.style.setProperty('--gcal-cockpit-w',cw+'px');
+  else if(cw>0 && cw<360){
+    document.documentElement.style.setProperty('--gcal-cockpit-w','360px');
+    localStorage.setItem('agydesk_gcal_cockpit_w','360');
+  }
+}
+function gcalStartResize(ev,which){
+  if(ev.button!==0) return;
+  ev.preventDefault();
+  const handle=ev.currentTarget;
+  handle.classList.add('on');
+  document.body.style.cursor='col-resize';
+  const startX=ev.clientX;
+  const target=which==='side'?$('.gcal-side'):$('.gday-cockpit');
+  const startW=target?target.getBoundingClientRect().width:(which==='side'?256:380);
+  const onMove=e=>{
+    const dx=e.clientX-startX;
+    const raw=which==='side'?(startW+dx):(startW-dx);
+    const min=which==='side'?180:360, max=which==='side'?440:640;
+    const w=Math.round(Math.max(min,Math.min(max,raw)));
+    const prop=which==='side'?'--gcal-side-w':'--gcal-cockpit-w';
+    const key=which==='side'?'agydesk_gcal_side_w':'agydesk_gcal_cockpit_w';
+    document.documentElement.style.setProperty(prop,w+'px');
+    localStorage.setItem(key,String(w));
+  };
+  const onUp=()=>{
+    handle.classList.remove('on');
+    document.body.style.cursor='';
+    window.removeEventListener('mousemove',onMove);
+    window.removeEventListener('mouseup',onUp);
+  };
+  window.addEventListener('mousemove',onMove);
+  window.addEventListener('mouseup',onUp);
+}
+function gcalResetResize(which){
+  const prop=which==='side'?'--gcal-side-w':'--gcal-cockpit-w';
+  const key=which==='side'?'agydesk_gcal_side_w':'agydesk_gcal_cockpit_w';
+  document.documentElement.style.removeProperty(prop);
+  localStorage.removeItem(key);
+}
+
 async function renderCal(m,fetchApi=true){
   if(!m) m=$('#main');
+  gcalApplySavedWidths();
   if(fetchApi&&!calLoaded) await loadCalEvents(false);
   if(!GCAL.miniMonth) GCAL.miniMonth=gcalFromISO(GCAL.cursor);
   if(typeof renderTabs==='function') renderTabs();
@@ -6893,7 +7013,7 @@ async function renderCal(m,fetchApi=true){
     <div class="gcal-smartbar">
       <div class="gcal-smart-in">
         <span style="color:var(--cu);font-size:14px">⚡</span>
-        <input id="gcalSmartInput" placeholder="AgyCal Sihirli Ekle: &quot;Cuma 14:00 Yüksek Gerilim Lab #lab @D-204&quot; veya &quot;20 Kasım 09:00 Makinalar Quiz&quot; yazıp Enter'a bas (Kısayol: Q)" oninput="gcalSmartPreview(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();gcalSmartSubmit();}">
+        <input id="gcalSmartInput" placeholder="AgyCal Sihirli Ekle: &quot;Bugün sunumu bitir #görev&quot; veya &quot;Cuma 14:00 Yüksek Gerilim Lab #lab @D-204&quot; yazıp Enter'a bas (Kısayol: Q)" oninput="gcalSmartPreview(this.value)" onkeydown="if(event.key==='Enter'){event.preventDefault();gcalSmartSubmit();}">
         <button class="gcal-btn pri" style="padding:3px 9px;font-size:11.5px" onclick="gcalSmartSubmit()">Ekle ↵</button>
       </div>
       <div class="gcal-smart-prev" id="gcalSmartPrev">
@@ -6943,6 +7063,7 @@ async function renderCal(m,fetchApi=true){
           ✨ Bu Haftayı AI ile Planla
         </button>
       </aside>
+      <div class="gcal-resizer gcal-resizer-l" onmousedown="gcalStartResize(event,'side')" ondblclick="gcalResetResize('side')" title="Sürükle: Sol takvim panelini boyutlandır (Çift tık: sıfırla)"></div>
 
       <div class="gcal-stage" id="gcalStage">
         ${stageHtml}
@@ -7011,10 +7132,11 @@ async function gcalDropOnSlot(ev,targetIso,hour){
   const id=Number(ev.dataTransfer.getData('text/gcal')||gcalDraggedId);
   const item=calEvents.find(x=>x.id===id);
   if(!item) return;
-  const dur=Math.max(30,gcalMin(item.end)-gcalMin(item.start));
+  const dur=item.allDay?60:Math.max(30,gcalMin(item.end)-gcalMin(item.start));
   const newStart=hour*60;
   item.date=targetIso;
   item.day=gcalFromISO(targetIso).getDate();
+  item.allDay=false;
   item.start=gcalFmtMin(newStart);
   item.end=gcalFmtMin(newStart+dur);
   await persistCalEventUpdate(item);
@@ -7057,9 +7179,9 @@ function openCalModal(evId=null,defaultDate=null,defaultStart=null){
   GCAL.editingId=isEdit?ev.id:null;
 
   const dateVal=ev?ev.date:(defaultDate||GCAL.cursor||gcalTodayISO());
-  const hasExplicitTime=!!(ev||defaultStart);
-  const startVal=ev?ev.start:(defaultStart||'10:00');
-  const endVal=ev?ev.end:gcalFmtMin(gcalMin(startVal)+60);
+  const isAllDay=ev?!!ev.allDay:!defaultStart;
+  const startVal=(ev&&ev.start)?ev.start:(defaultStart||'10:00');
+  const endVal=(ev&&ev.end)?ev.end:gcalFmtMin(gcalMin(startVal)+60);
   const kindVal=ev?ev.kind:'exam';
   const kasaVal=ev?ev.kasa:(currentKasa!=='all'?currentKasa:'');
   const locVal=ev?(ev.loc||''):'';
@@ -7117,7 +7239,7 @@ function openCalModal(evId=null,defaultDate=null,defaultStart=null){
 
     <!-- Başlık ve Zaman Ekle (Mavi alt çizgili) -->
     <div class="gm-title-wrap">
-      <input class="gm-title-in" id="gmTitle" placeholder="Başlık ve zaman ekle" value="${titleVal.replace(/"/g,'&quot;')}" onkeydown="if(event.key==='Enter')saveCalFromModal()">
+      <input class="gm-title-in" id="gmTitle" placeholder="Başlık ekle (saat isteğe bağlı)" value="${titleVal.replace(/"/g,'&quot;')}" onkeydown="if(event.key==='Enter')saveCalFromModal()">
     </div>
 
     <!-- Etkinlik / Görev / Sınav / Lab Sekmeleri -->
@@ -7139,15 +7261,22 @@ function openCalModal(evId=null,defaultDate=null,defaultStart=null){
         <div class="gm-rbody">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <span id="gmDateHuman" style="font-weight:500">${humanDate} &nbsp;–&nbsp; ${humanDate}</span>
-            <button type="button" class="gm-pill-btn" id="gmAddTimeBtn" style="display:${hasExplicitTime?'none':'inline-block'}" onclick="event.stopPropagation();gcalExpandTimeRow(true)">Zaman ekle</button>
+            <div style="display:flex;align-items:center;gap:8px" onclick="event.stopPropagation()">
+              <label style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--mut);cursor:pointer;user-select:none">
+                <input type="checkbox" id="gmAllDay" ${isAllDay?'checked':''} onchange="gcalToggleAllDay(this.checked)" style="accent-color:var(--gblue);cursor:pointer"> Tüm gün
+              </label>
+              <button type="button" class="gm-pill-btn" id="gmAddTimeBtn" style="display:${isAllDay?'inline-block':'none'}" onclick="gcalExpandTimeRow(true)">Zaman ekle</button>
+            </div>
           </div>
-          <div class="gm-sub" id="gmRepeatSub">${repeatVal}${hasExplicitTime?` · ${startVal} – ${endVal}`:''}</div>
-          <div id="gmTimeExpand" style="display:${hasExplicitTime?'flex':'none'};flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center" onclick="event.stopPropagation()">
+          <div class="gm-sub" id="gmRepeatSub">${isAllDay?`Tüm gün · ${repeatVal}`:`${repeatVal} · ${startVal} – ${endVal}`}</div>
+          <div id="gmTimeExpand" style="display:${isAllDay?'none':'flex'};flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center" onclick="event.stopPropagation()">
             <input type="date" class="gmodal-in" id="gmDate" value="${dateVal}" style="width:138px" onchange="$('#gmDateHuman').innerHTML=gcalFmtDateHuman(this.value)+' &nbsp;–&nbsp; '+gcalFmtDateHuman(this.value)">
-            <input type="time" class="gmodal-in" id="gmStart" value="${startVal}" style="width:98px">
-            <span style="color:var(--mut)">–</span>
-            <input type="time" class="gmodal-in" id="gmEnd" value="${endVal}" style="width:98px">
-            <select class="gmodal-in" id="gmRepeat" style="width:130px;font-size:12px" onchange="$('#gmRepeatSub').textContent=this.value">
+            <span id="gmTimeInputs" style="display:${isAllDay?'none':'inline-flex'};align-items:center;gap:6px">
+              <input type="time" class="gmodal-in" id="gmStart" value="${startVal}" style="width:98px" onchange="gcalSyncTimeSub()">
+              <span style="color:var(--mut)">–</span>
+              <input type="time" class="gmodal-in" id="gmEnd" value="${endVal}" style="width:98px" onchange="gcalSyncTimeSub()">
+            </span>
+            <select class="gmodal-in" id="gmRepeat" style="width:130px;font-size:12px" onchange="gcalSyncTimeSub()">
               <option value="Yinelenmez" ${repeatVal==='Yinelenmez'?'selected':''}>Yinelenmez</option>
               <option value="Her hafta" ${repeatVal==='Her hafta'?'selected':''}>Her hafta</option>
               <option value="Her gün" ${repeatVal==='Her gün'?'selected':''}>Her gün</option>
@@ -7261,11 +7390,35 @@ function gcalCycleModalKind(){
   const next=order[(order.indexOf(cur)+1)%order.length];
   gcalSetModalKind(next);
 }
+function gcalSyncTimeSub(){
+  const sub=$('#gmRepeatSub'), rep=$('#gmRepeat')?.value||'Yinelenmez';
+  if(!sub) return;
+  const allDay=!!$('#gmAllDay')?.checked;
+  if(allDay){
+    sub.textContent=`Tüm gün · ${rep}`;
+  }else{
+    const s=$('#gmStart')?.value||'10:00', e=$('#gmEnd')?.value||'11:00';
+    sub.textContent=`${rep} · ${s} – ${e}`;
+  }
+}
+function gcalToggleAllDay(checked){
+  const ex=$('#gmTimeExpand'), ti=$('#gmTimeInputs'), btn=$('#gmAddTimeBtn');
+  if(ti) ti.style.display=checked?'none':'inline-flex';
+  if(btn) btn.style.display=checked?'inline-block':'none';
+  if(!checked && ex) ex.style.display='flex';
+  gcalSyncTimeSub();
+  if(!checked) $('#gmStart')?.focus();
+}
 function gcalExpandTimeRow(focusTime=false){
-  const ex=$('#gmTimeExpand'), btn=$('#gmAddTimeBtn');
+  const ex=$('#gmTimeExpand'), btn=$('#gmAddTimeBtn'), cb=$('#gmAllDay'), ti=$('#gmTimeInputs');
   if(ex) ex.style.display='flex';
-  if(btn) btn.style.display='none';
-  if(focusTime) $('#gmStart')?.focus();
+  if(focusTime){
+    if(cb) cb.checked=false;
+    if(ti) ti.style.display='inline-flex';
+    if(btn) btn.style.display='none';
+    gcalSyncTimeSub();
+    $('#gmStart')?.focus();
+  }
 }
 function gcalExpandDescRow(){
   const s=$('#gmDescShort'), w=$('#gmDescWrap');
@@ -7329,8 +7482,9 @@ async function saveCalFromModal(){
   const kindBtn=$('.gm-kbtn.on');
   const kind=kindBtn?kindBtn.dataset.k:'exam';
   const date=$('#gmDate')?.value||GCAL.cursor||gcalTodayISO();
-  const start=$('#gmStart')?.value||'10:00';
-  const end=$('#gmEnd')?.value||'11:00';
+  const allDay=!!$('#gmAllDay')?.checked;
+  const start=allDay?'':($('#gmStart')?.value||'10:00');
+  const end=allDay?'':($('#gmEnd')?.value||'11:00');
   const kasa=$('#gmKasa')?.value||'';
   const loc=($('#gmLoc')?.value||'').trim();
   const desc=(($('#gmDesc')?.value||$('#gmDescShort')?.value)||'').trim();
@@ -7342,11 +7496,11 @@ async function saveCalFromModal(){
 
   let item=GCAL.editingId?calEvents.find(x=>x.id===GCAL.editingId):null;
   if(item){
-    Object.assign(item,{title,kind,date,day,start,end,kasa,loc,desc,guests,meet,repeat,notify});
+    Object.assign(item,{title,kind,date,day,start,end,allDay,kasa,loc,desc,guests,meet,repeat,notify});
     await persistCalEventUpdate(item);
     toast(`✓ "${title}" güncellendi`);
   }else{
-    const newEv={id:Date.now(),day,date,title,kind,kasa,start,end,allDay:false,loc,desc,guests,meet,repeat,notify,done:false};
+    const newEv={id:Date.now(),day,date,title,kind,kasa,start,end,allDay,loc,desc,guests,meet,repeat,notify,done:false};
     try{
       const saved=await api('/api/calendar',{day,title,kind,kasa:packCalMeta(newEv)});
       if(saved&&saved.id) newEv.id=saved.id;
@@ -7381,7 +7535,7 @@ async function gcalToggleDone(id){
 function gcalDetectConflicts(){
   const out=[];
   const byDate={};
-  calEvents.filter(e=>!e.done).forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
+  calEvents.filter(e=>!e.done && !e.allDay).forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
   Object.entries(byDate).forEach(([dt,list])=>{
     if(list.length<2) return;
     const sorted=[...list].sort((a,b)=>(a.start||'09:00').localeCompare(b.start||'09:00'));
@@ -7399,7 +7553,7 @@ function gcalParseNaturalLanguage(raw){
   let txt=String(raw||'').trim();
   if(!txt) return null;
   let date=GCAL.cursor||gcalTodayISO();
-  let start='10:00', end='11:00', kind='task', loc='', kasa='';
+  let start='', end='', allDay=true, kind='task', loc='', kasa='';
   const now=gcalFromISO(gcalTodayISO());
 
   // 1) Konum (@D-204 veya @Amfi-2)
@@ -7420,6 +7574,7 @@ function gcalParseNaturalLanguage(raw){
   // 3) Saat aralığı (14:00-16:00 veya 14:00)
   const timeM=txt.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3])[:.]([0-5]\d))?\b/);
   if(timeM){
+    allDay=false;
     const h1=gcalPad(Number(timeM[1])), m1=timeM[2];
     start=`${h1}:${m1}`;
     if(timeM[3]!==undefined){
@@ -7476,7 +7631,7 @@ function gcalParseNaturalLanguage(raw){
   else if(/güç|bara|yük akışı/.test(fullLow)) kasa='guc-sistemleri';
 
   const title=txt.replace(/\s+/g,' ').trim()||'(Başlıksız etkinlik)';
-  return {title,date,start,end,kind,loc,kasa};
+  return {title,date,start,end,allDay,kind,loc,kasa};
 }
 
 function gcalSmartPreview(val){
@@ -7484,7 +7639,7 @@ function gcalSmartPreview(val){
   if(!box) return;
   const p=gcalParseNaturalLanguage(val);
   if(!p){
-    box.innerHTML=`<span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>`;
+    box.innerHTML=`<span style="color:var(--mut)">Örnek: <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Bugün sunumu bitir #görev';gcalSmartPreview(el.value);el.focus()">Bugün sunumu bitir #görev</u> · <u style="cursor:pointer;color:var(--cu)" onclick="const el=$('#gcalSmartInput');el.value='Cuma 14:00–16:00 Trafo Boşta Çalışma Deneyi #lab @D-102';gcalSmartPreview(el.value);el.focus()">Cuma 14:00 Trafo Deneyi #lab @D-102</u></span>`;
     return;
   }
   const kObj=GCAL_KINDS[p.kind]||GCAL_KINDS.task;
@@ -7492,7 +7647,7 @@ function gcalSmartPreview(val){
   box.innerHTML=`
     <span class="gcal-smart-chip" style="border-color:${kInk}66;color:${kInk}">${kObj.icon} ${kObj.label}</span>
     <span class="gcal-smart-chip">📅 ${p.date}</span>
-    <span class="gcal-smart-chip">🕒 ${p.start}–${p.end}</span>
+    ${p.allDay?`<span class="gcal-smart-chip">☀️ Tüm Gün</span>`:`<span class="gcal-smart-chip">🕒 ${p.start}–${p.end}</span>`}
     ${p.loc?`<span class="gcal-smart-chip">📍 ${p.loc}</span>`:''}
     ${p.kasa?`<span class="gcal-smart-chip" style="color:var(--cu)">📘 ${gcalKasaTitle(p.kasa)}</span>`:''}
   `;
@@ -7504,7 +7659,7 @@ async function gcalSmartSubmit(){
   const p=gcalParseNaturalLanguage(inp.value);
   if(!p) return;
   const day=gcalFromISO(p.date).getDate();
-  const newEv={id:Date.now(),day,date:p.date,title:p.title,kind:p.kind,kasa:p.kasa,start:p.start,end:p.end,allDay:false,loc:p.loc,desc:'',guests:'',meet:'',repeat:'Yinelenmez',notify:'Bir gün önce şu saatte: 5pm bildir',done:false};
+  const newEv={id:Date.now(),day,date:p.date,title:p.title,kind:p.kind,kasa:p.kasa,start:p.start,end:p.end,allDay:!!p.allDay,loc:p.loc,desc:'',guests:'',meet:'',repeat:'Yinelenmez',notify:'Bir gün önce şu saatte: 5pm bildir',done:false};
   try{
     const saved=await api('/api/calendar',{day,title:p.title,kind:p.kind,kasa:packCalMeta(newEv)});
     if(saved&&saved.id) newEv.id=saved.id;
@@ -7513,19 +7668,20 @@ async function gcalSmartSubmit(){
   GCAL.cursor=p.date;
   inp.value='';
   renderCal($('#main'),false);
-  toast(`⚡ AgyCal Sihirli Ekle: "${p.title}" (${p.date} ${p.start})`);
+  toast(`⚡ AgyCal Sihirli Ekle: "${p.title}" (${p.date}${p.allDay?' · Tüm Gün':' '+p.start})`);
 }
 
 function gcalExportICS(){
   const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//AgyDesk//AgyCal PRO//TR','CALSCALE:GREGORIAN','X-WR-CALNAME:AgyCal Akademik Takvim'];
   const fmtDt=(iso,hm)=>iso.replace(/-/g,'')+'T'+(hm||'09:00').replace(':','')+'00';
   calEvents.forEach(ev=>{
+    const dtCompact=(ev.date||'').replace(/-/g,'');
     lines.push(
       'BEGIN:VEVENT',
       `UID:agycal-${ev.id}@agydesk.local`,
       `DTSTAMP:${fmtDt(gcalTodayISO(),'09:00')}`,
-      `DTSTART:${fmtDt(ev.date,ev.start||'09:00')}`,
-      `DTEND:${fmtDt(ev.date,ev.end||'10:00')}`,
+      ev.allDay?`DTSTART;VALUE=DATE:${dtCompact}`:`DTSTART:${fmtDt(ev.date,ev.start||'09:00')}`,
+      ev.allDay?`DTEND;VALUE=DATE:${dtCompact}`:`DTEND:${fmtDt(ev.date,ev.end||'10:00')}`,
       `SUMMARY:${(ev.title||'').replace(/[,;\\]/g,' ')}`,
       ev.loc?`LOCATION:${ev.loc.replace(/[,;\\]/g,' ')}`:'',
       ev.desc?`DESCRIPTION:${ev.desc.replace(/\n/g,'\\n')}`:'',
@@ -7758,15 +7914,46 @@ function initGcalPomo(){
       p.endAt=null;
     }
   }catch(e){}
+  gcalUpdatePomoDom();
+}
+const GCAL_POMO_PREFS_KEY='agydesk_pomo_prefs';
+function getPomoPrefs(){
+  try{
+    const raw=localStorage.getItem(GCAL_POMO_PREFS_KEY);
+    const o=raw?JSON.parse(raw):{};
+    return {rail:o.rail!==false,title:o.title!==false};
+  }catch(e){ return {rail:true,title:true}; }
+}
+function togglePomoPref(key){
+  const prefs=getPomoPrefs();
+  prefs[key]=!prefs[key];
+  try{ localStorage.setItem(GCAL_POMO_PREFS_KEY,JSON.stringify(prefs)); }catch(e){}
+  gcalUpdatePomoDom();
+  if($('#main .gcal')) renderCal($('#main'),false);
 }
 function gcalUpdatePomoDom(){
   const p=GCAL.pomo;
+  const prefs=getPomoPrefs();
   const mm=gcalPad(Math.floor(p.sec/60)), ss=gcalPad(p.sec%60);
   const pct=Math.round((p.sec/Math.max(1,p.total))*100);
   const topEl=$('#gcalTopPomo'); if(topEl) topEl.textContent=`${mm}:${ss}`;
   const tabEl=$('#acalTabPomo'); if(tabEl) tabEl.textContent=`⏱ ${mm}:${ss}`;
   const tEl=$('#gpomoTime'); if(tEl) tEl.textContent=`${mm}:${ss}`;
   const rEl=$('#gpomoRing'); if(rEl) rEl.style.setProperty('--pp',pct);
+  const railEl=$('#railPomo');
+  if(railEl){
+    const showRail=prefs.rail&&(p.running||p.sec<p.total);
+    railEl.style.display=showRail?'flex':'none';
+    railEl.style.setProperty('--p',pct);
+    railEl.classList.toggle('paused',!p.running);
+    const rMin=$('#railPomoMin'); if(rMin) rMin.textContent=p.sec>=60?Math.ceil(p.sec/60)+'m':p.sec+'s';
+    const rTime=$('#railPomoTime'); if(rTime) rTime.textContent=`${mm}:${ss}`;
+  }
+  if(prefs.title&&p.running&&p.sec>0){
+    document.title=`⏱ ${mm}:${ss} — AgyDesk`;
+  }else if(p.sec>0||!prefs.title){
+    if(document.title!=='AgyDesk'&&!document.title.startsWith('🔔')) document.title='AgyDesk';
+  }
 }
 function gcalPomoToggle(){
   const p=GCAL.pomo;
@@ -7784,6 +7971,7 @@ function gcalPomoToggle(){
     gcalStartPomoInterval();
   }
   gcalSavePomo();
+  gcalUpdatePomoDom();
   renderTabs();
   if($('#main .gcal')) renderCal($('#main'),false);
 }
@@ -7794,6 +7982,7 @@ function gcalPomoReset(mins,modeName){
   p.running=false; p.timer=null; p.endAt=null;
   p.total=totalSec; p.sec=totalSec; p.mode=modeName;
   gcalSavePomo();
+  gcalUpdatePomoDom();
   renderTabs();
   if($('#main .gcal')) renderCal($('#main'),false);
 }
@@ -8157,7 +8346,7 @@ function studioAdd(title,md,html){
   saveStudio(); renderStudio();
 }
 function studioSaveMsg(i){
-  const m=ai.side_ai.msgs[i]; if(!m) return;
+  const m=ai.src_ai.msgs[i]; if(!m) return;
   const d=document.createElement('div'); d.innerHTML=m.h; d.querySelectorAll('.route').forEach(x=>x.remove());
   const txt=d.textContent.trim();
   studioAdd(txt.slice(0,48)||'Not',txt,d.innerHTML);
@@ -8177,17 +8366,17 @@ function renderStudio(){
 }
 function studioSend(q){
   q=(q||'').trim();
-  if(!q&&!(ai.side_ai&&ai.side_ai.attachments&&ai.side_ai.attachments.length)) return;
-  studioPendingTitle=null; aiSend('side_ai',q);
+  if(!q&&!(ai.src_ai&&ai.src_ai.attachments&&ai.src_ai.attachments.length)) return;
+  studioPendingTitle=null; aiSend('src_ai',q);
 }
 function renderStudyChat(m){
   m.scrollTop=0;
-  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSideAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('side_ai')">■ Dur</button></div>
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSrcAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('src_ai')">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
-    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'side_ai',inputId:'scIn',sendId:'scGo',attachId:'scAttach',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'src_ai',inputId:'scIn',sendId:'scGo',attachId:'scAttach',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   const i=$('#scIn'), go=()=>{
-    const cur=ai.side_ai;
-    if(cur&&(cur.running||cur.pending)){ aiStop('side_ai'); return; }
+    const cur=ai.src_ai;
+    if(cur&&(cur.running||cur.pending)){ aiStop('src_ai'); return; }
     const v=i.value;
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length)) return;
     i.value=''; autoGrow(i); syncGemBoxState(i); studioSend(v);
@@ -8196,14 +8385,14 @@ function renderStudyChat(m){
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
   i.oninput=()=>{ autoGrow(i); syncGemBoxState(i); };
   wireAiSlash(i);
-  wireChatDrop(m.querySelector('.sc-wrap'),()=>'side_ai');
-  renderChatAttachments('side_ai');
+  wireChatDrop(m.querySelector('.sc-wrap'),()=>'src_ai');
+  renderChatAttachments('src_ai');
   syncAllGemBoxes();
   updateSideAiCtx(); renderStudyChatBody(); i.focus();
 }
 function renderStudyChatBody(){
   const c=$('#scChat'); if(!c||active!=='studychat') return;
-  const s=ai.side_ai; if(!s) return;
+  const s=ai.src_ai; if(!s) return;
   const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
   const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
   const prevScroll=c.scrollTop;
@@ -8213,7 +8402,7 @@ function renderStudyChatBody(){
   if(!msgs.length&&!s.running){
     h=`<div class="sc-hero"><div class="big">Kaynaklarınla sohbet</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
   }else{
-    h=msgs.map(({x,i})=>renderMsgRowHtml('side_ai',x,i,true)).join('');
+    h=msgs.map(({x,i})=>renderMsgRowHtml('src_ai',x,i,true)).join('');
     if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
@@ -8345,12 +8534,28 @@ function initResizers(){
 }
 initResizers();
 
+function syncWinMaxIcon(){
+  const btn=$('#winMaxBtn');
+  if(!btn) return;
+  const isMax=(window.outerWidth>=screen.availWidth-4 && window.outerHeight>=screen.availHeight-4)
+    || Boolean(document.fullscreenElement);
+  btn.title=isMax?'Önceki boyut':'Ekranı kapla';
+  btn.setAttribute('aria-label',btn.title);
+  btn.innerHTML=isMax
+    ? '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M3 3V1.5h5.5V7H7" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round"/><rect x="1.5" y="3" width="5.5" height="5.5" rx=".6" stroke="currentColor" stroke-width="1.15"/></svg>'
+    : '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="1.5" y="1.5" width="7" height="7" rx=".8" stroke="currentColor" stroke-width="1.2"/></svg>';
+}
+window.addEventListener('resize',syncWinMaxIcon);
+document.addEventListener('fullscreenchange',syncWinMaxIcon);
+syncWinMaxIcon();
+
 function winAct(cmd){
   if(cmd==='close'){
     try{ saveMainScroll(); saveSessionTabs(); flushUiStateRemote(true); }catch(e){}
   }
   if(window.ipc && typeof window.ipc.postMessage==='function'){
     window.ipc.postMessage(cmd);
+    if(cmd==='max') setTimeout(syncWinMaxIcon,80);
   }else if(cmd==='close'){
     window.close();
   }
@@ -8593,7 +8798,7 @@ function buildSkills(q=''){
       const d=document.createElement('div'); d.className='skill s'; d.draggable=true; d.dataset.skill=k;
       d.innerHTML=`<div class="ic">${ic}</div><div>${k.startsWith('caveman')||kind==='cmd'||['plan','goal','boost'].includes(k)?'/':''}${k}<small>${desc}</small></div><span class="tg">${kind==='cmd'?'KOMUT':kind==='mode'?'MOD':'ÇALIŞTIR'}</span>`;
       d.onclick=()=>{
-        const targetSess=isAI(active)?active:'side_ai';
+        const targetSess=isAI(active)?active:(active==='studychat'?'src_ai':'side_ai');
         if(kind==='cmd'||kind==='mode'){
           if(!isAI(active)) rtab('ai');
           aiSend(targetSess,'/'+k,k);
@@ -8941,7 +9146,7 @@ function initTextPrefs(){
 function applyRailOrder(saved){
   const rail=document.querySelector('.rail');
   if(!rail||!Array.isArray(saved)||!saved.length) return;
-  const btns=[...rail.querySelectorAll('.rbtn')];
+  const btns=[...rail.querySelectorAll('.rbtn,.rail-pomo')];
   const keyOf=(b,i)=>b.dataset.k||(b.dataset.k=b.dataset.mode||b.id||(i===0?'attach':'newnote'));
   btns.forEach((b,i)=>keyOf(b,i));
   const sp=rail.querySelector('.sp'), uring=rail.querySelector('.uring');
@@ -8962,7 +9167,7 @@ function applyRailOrder(saved){
 }
 function initRailDrag(){
   const rail=document.querySelector('.rail'); if(!rail) return;
-  const btns=[...rail.querySelectorAll('.rbtn')];
+  const btns=[...rail.querySelectorAll('.rbtn,.rail-pomo')];
   const keyOf=(b,i)=>b.dataset.k||(b.dataset.k=b.dataset.mode||b.id||(i===0?'attach':'newnote'));
   btns.forEach((b,i)=>keyOf(b,i));
   const sp=rail.querySelector('.sp');
@@ -8971,7 +9176,7 @@ function initRailDrag(){
     if(Array.isArray(saved)) applyRailOrder(saved);
   }catch(e){}
   const save=()=>{
-    const order=[...rail.querySelectorAll('.rbtn,.sp')].map(b=>b.classList.contains('sp')?'sp':b.dataset.k);
+    const order=[...rail.querySelectorAll('.rbtn,.rail-pomo,.sp')].map(b=>b.classList.contains('sp')?'sp':b.dataset.k);
     persistUiState({agydesk_rail:JSON.stringify(order)},true);
   };
   let drag=null;

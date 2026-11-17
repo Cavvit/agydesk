@@ -29,6 +29,10 @@
     <button class="rbtn" id="themeBtn" data-tip="Görünüm ve Tema Seçici">◑</button>
     <button class="rbtn" id="fontBtn" data-tip="Yazı tipi ve boyutu (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
     <button class="rbtn" id="zenBtn" data-tip="Odak modu (Ctrl+.)">◐</button>
+    <div class="rail-pomo" id="railPomo" style="--p:100;display:none" onclick="openPage('cal');gcalSetView('day')" oncontextmenu="event.preventDefault();gcalPomoToggle()" title="Pomodoro · Tıkla: AgyCal'ı aç · Sağ tık: Duraklat/Başlat">
+      <div class="rail-pomo-ring"><span id="railPomoMin">25m</span></div>
+      <small id="railPomoTime">25:00</small>
+    </div>
     <div class="uring" id="uring" style="--p:100" title="AI kullanım & kalan haklar"><span id="uringTxt">100%</span></div>
   </nav>
   <div class="upop" id="upop"></div>
@@ -76,7 +80,7 @@
     </button>
     <div class="win-ctrls">
       <button class="win-btn" onclick="winAct('min')" title="Simge durumuna küçült" aria-label="Simge durumuna küçült"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 5h8" stroke="currentColor" stroke-width="1.2"/></svg></button>
-      <button class="win-btn" onclick="winAct('max')" title="Ekranı kapla / Geri yükle" aria-label="Ekranı kapla"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="1.5" y="1.5" width="7" height="7" rx=".8" stroke="currentColor" stroke-width="1.2"/></svg></button>
+      <button class="win-btn" id="winMaxBtn" onclick="winAct('max')" title="Ekranı kapla / Geri yükle" aria-label="Ekranı kapla"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><rect x="1.5" y="1.5" width="7" height="7" rx=".8" stroke="currentColor" stroke-width="1.2"/></svg></button>
       <button class="win-btn close" onclick="winAct('close')" title="Kapat" aria-label="Kapat"><svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1.5l7 7M8.5 1.5l-7 7" stroke="currentColor" stroke-width="1.2"/></svg></button>
     </div>
   </div>
