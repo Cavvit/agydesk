@@ -2327,23 +2327,126 @@ function regenChatMsg(sessId,idx){
   if(s.lastReq) retryLastAi(sessId,false);
   else toast('Yeniden üretilecek önceki istem bulunamadı');
 }
-async function appendChatMsgToNote(sessId,idx,btn){
-  if(!String(active).startsWith('note:')){
-    toast('📝 Nota eklemek için önce ortada bir not aç');
+async function appendMarkdownToNoteId(noteId,raw,btn,openAfter=false){
+  if(!noteId||!String(noteId).startsWith('note:')||!raw) return;
+  const rel=noteId.slice(5);
+  try{
+    let n=noteCache[noteId];
+    if(!n) n=await api('/api/note?rel='+encodeURIComponent(rel));
+    noteCache[noteId]=await api('/api/note',{rel,content:(n.content||'').replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
+    invalidateNoteDomCache(noteId);
+    if(active===noteId) renderMain();
+    else if(openAfter) openPage(noteId);
+    if(btn) flashMsgBtn(btn);
+    toast('💾 Yanıt nota eklendi ve kaydedildi',noteId);
+  }catch(e){ toast('⚠ Nota eklenemedi: '+e.message); }
+}
+let _pendingAppendPayload=null;
+function openAppendToNotePicker(raw,btn){
+  if(!raw) return;
+  _pendingAppendPayload={raw,btn};
+  const box=$('#kasaModalBox');
+  if(!box){ toast('📝 Önce bir not aç'); return; }
+  const openNoteIds=new Set(openTabs.filter(t=>String(t).startsWith('note:')));
+  const allNotes=Object.keys(pages).filter(id=>id.startsWith('note:')).map(id=>{
+    const p=pages[id]||{};
+    const rel=id.slice(5);
+    return {id,title:p.t||rel.split('/').pop(),folder:p.folder||p.kasa||rel.split('/')[0]||'',open:openNoteIds.has(id)};
+  }).sort((a,b)=>(b.open-a.open)||a.title.localeCompare(b.title,'tr'));
+  const targets=flattenFolderTargets();
+  const defTarget=defaultTargetInScope()||(targets[0]?targets[0].rel:'');
+  const opts=targets.length
+    ? targets.map(t=>`<option value="${t.rel}" ${t.rel===defTarget?'selected':''}>${'  '.repeat(t.depth)}${t.depth?'└─ 📁 ':'❖ '}${escHtml(t.label)}</option>`).join('')
+    : kasalarData.map(k=>`<option value="${k.key}">${k.icon} ${escHtml(k.title)}</option>`).join('');
+  const suggestTitle=(raw.replace(/^#+\s*/,'').split('\n').find(l=>l.trim())||'AI Notu').replace(/[*_`>#]/g,'').trim().slice(0,56);
+
+  box.innerHTML=`
+    <h3>📝 Yanıtı Nota Ekle</h3>
+    <div style="display:flex;gap:6px;margin-bottom:4px">
+      <button type="button" class="btn" id="apTabPick" style="flex:1;padding:6px 10px" onclick="switchAppendTab('pick')">📄 Mevcut Nota Ekle</button>
+      <button type="button" class="hb" id="apTabNew" style="flex:1;padding:6px 10px" onclick="switchAppendTab('new')">＋ Yeni Not Oluştur</button>
+    </div>
+    <div id="apPanePick">
+      <input id="apSearch" placeholder="Not veya kasa ara…" oninput="filterAppendNotes(this.value)" style="margin-bottom:6px">
+      <div id="apList" style="max-height:240px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px"></div>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:7px;margin-top:8px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="apOpenAfter" style="width:auto"> Ekledikten sonra notu aç
+      </label>
+    </div>
+    <div id="apPaneNew" style="display:none">
+      <label>Hedef Kasa / Klasör
+        <select id="apKasa">${opts}</select>
+      </label>
+      <label>Yeni Not Başlığı
+        <input id="apNewTitle" value="${escAttr(suggestTitle)}" placeholder="Not başlığı…">
+      </label>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:7px;margin-top:4px;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="apNewOpenAfter" checked style="width:auto"> Oluşturduktan sonra notu aç
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+        <button type="button" class="hb" onclick="closeKasaModal()">İptal</button>
+        <button type="button" class="btn" style="padding:7px 14px" onclick="submitAppendNewNote()">Oluştur ve Ekle</button>
+      </div>
+    </div>`;
+  window._apAllNotes=allNotes;
+  filterAppendNotes('');
+  $('#kasaModal').classList.add('show');
+  setTimeout(()=>$('#apSearch')?.focus(),40);
+}
+function switchAppendTab(mode){
+  const isPick=mode==='pick';
+  $('#apPanePick').style.display=isPick?'':'none';
+  $('#apPaneNew').style.display=isPick?'none':'';
+  $('#apTabPick').className=isPick?'btn':'hb';
+  $('#apTabNew').className=isPick?'hb':'btn';
+  if(!isPick) setTimeout(()=>$('#apNewTitle')?.focus(),40);
+}
+function filterAppendNotes(q){
+  const list=$('#apList'); if(!list) return;
+  const s=(q||'').trim().toLowerCase();
+  const rows=(window._apAllNotes||[]).filter(n=>!s||n.title.toLowerCase().includes(s)||n.folder.toLowerCase().includes(s));
+  if(!rows.length){
+    list.innerHTML=`<div style="padding:14px;text-align:center;color:var(--mut);font-size:12px">Eşleşen not bulunamadı — "＋ Yeni Not Oluştur" sekmesini kullanabilirsin.</div>`;
     return;
   }
+  list.innerHTML=rows.slice(0,60).map(n=>`
+    <button type="button" class="hb" style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px 10px;text-align:left" onclick="pickAppendNote('${escAttr(n.id)}')">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.open?'⭐ ':'📄 '}${escHtml(n.title)}</span>
+      <span style="font:10.5px var(--mono);color:var(--mut);flex-shrink:0">${escHtml(n.folder)}</span>
+    </button>`).join('');
+}
+async function pickAppendNote(noteId){
+  const payload=_pendingAppendPayload; _pendingAppendPayload=null;
+  const openAfter=!!$('#apOpenAfter')?.checked;
+  closeKasaModal();
+  if(!payload) return;
+  await appendMarkdownToNoteId(noteId,payload.raw,payload.btn,openAfter);
+}
+async function submitAppendNewNote(){
+  const payload=_pendingAppendPayload;
+  const target=$('#apKasa')?.value;
+  const title=($('#apNewTitle')?.value||'').trim();
+  const openAfter=!!$('#apNewOpenAfter')?.checked;
+  if(!title){ $('#apNewTitle')?.focus(); return; }
+  _pendingAppendPayload=null;
+  closeKasaModal();
+  if(!payload) return;
+  try{
+    const res=await api('/api/note/create',{kasa:target,title,content:payload.raw+'\n'});
+    await loadVault();
+    if(openAfter) openPage(res.id);
+    if(payload.btn) flashMsgBtn(payload.btn);
+    toast(`📝 "${title}" oluşturuldu ve yanıt eklendi`,res.id);
+  }catch(e){ toast('⚠ Not oluşturulamadı: '+e.message); }
+}
+async function appendChatMsgToNote(sessId,idx,btn){
   const raw=extractMsgText(sessId,idx);
   if(!raw) return;
-  const rel=active.slice(5);
-  const n=noteCache[active];
-  if(!n){ toast('Aktif not önbellekte bulunamadı'); return; }
-  try{
-    noteCache[active]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
-    invalidateNoteDomCache(active);
-    renderMain();
-    flashMsgBtn(btn);
-    toast('💾 Yanıt açık nota eklendi ve kaydedildi',active);
-  }catch(e){ toast('⚠ Nota eklenemedi: '+e.message); }
+  if(!String(active).startsWith('note:')){
+    openAppendToNotePicker(raw,btn);
+    return;
+  }
+  await appendMarkdownToNoteId(active,raw,btn,false);
 }
 function saveChatMsgToStudio(sessId,idx,btn){
   const s=ai[sessId], m=s&&s.msgs&&s.msgs[idx];
@@ -2881,17 +2984,13 @@ function startEvents(){
   };
 }
 async function appendReplyToNote(btn){
-  if(!String(active).startsWith('note:')) return;
   const raw=decodeURIComponent(btn.dataset.md||'');
-  const rel=active.slice(5);
-  const n=noteCache[active];
-  if(!n) return;
-  try{
-    noteCache[active]=await api('/api/note',{rel,content:n.content.replace(/\s*$/,'')+'\n\n---\n\n'+raw+'\n'});
-    invalidateNoteDomCache(active);
-    renderMain();
-    toast('💾 Yanıt nota eklendi ve kaydedildi',active);
-  }catch(e){ alert('Nota eklenemedi: '+e.message); }
+  if(!raw) return;
+  if(!String(active).startsWith('note:')){
+    openAppendToNotePicker(raw,btn);
+    return;
+  }
+  await appendMarkdownToNoteId(active,raw,btn,false);
 }
 async function loadChats(){
   try{
@@ -9041,8 +9140,8 @@ const THEMES = [
   { id: 'tokyo', name: 'Tokyo Night', desc: 'Modern mavi-mor siber tonlar', dot: '#7aa2f7', cat: 'dark' },
   { id: 'gruvbox', name: 'Gruvbox Retro', desc: 'Sıcak sepyamsı koyu mod', dot: '#d79921', cat: 'dark' },
   { id: 'cyberpunk', name: 'Cyberpunk Neon', desc: 'Canlı pembe & mor kontrast', dot: '#f72585', cat: 'dark' },
-  { id: 'mono-dark', name: 'Saf Siyah-Beyaz', desc: 'Sade, Obsidian & NotebookLM tarzı', dot: '#ffffff', cat: 'dark' },
-  { id: 'mono-light', name: 'Saf Beyaz-Siyah (Açık)', desc: 'Sade kâğıt beyazı, siyah vurgu', dot: '#000000', cat: 'light' },
+  { id: 'mono-dark', name: 'Saf Siyah-Beyaz', desc: 'Sade, Obsidian & NotebookLM tarzı', dot: '#000000', cat: 'dark' },
+  { id: 'mono-light', name: 'Saf Beyaz-Siyah (Açık)', desc: 'Sade kâğıt beyazı, siyah vurgu', dot: '#ffffff', cat: 'light' },
   { id: 'eink', name: 'E-Ink Kağıt (Açık)', desc: 'Sıfır parlama, kitap okuma', dot: '#1b4a2c', cat: 'light' },
   { id: 'sepia', name: 'Papirüs Sepya (Açık)', desc: 'Yumuşak sıcak gündüz modu', dot: '#874218', cat: 'light' }
 ];
@@ -10077,34 +10176,198 @@ function initNoteContextMenu(){
     document.body.appendChild(menu);
   }
   const hide=()=>menu.classList.remove('on');
+  const copyTxt=t=>{
+    if(!t) return;
+    if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).catch(()=>document.execCommand('copy'));
+    else document.execCommand('copy');
+  };
+  const selectNoteContent=editable=>{
+    if(editable){
+      if(editable.select){ editable.focus(); editable.select(); return; }
+      const r=document.createRange(); r.selectNodeContents(editable);
+      const s=window.getSelection(); s.removeAllRanges(); s.addRange(r); return;
+    }
+    const target=$('#mdView')||$('#doc')||$('#main');
+    if(!target) return;
+    const r=document.createRange(); r.selectNodeContents(target);
+    const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  };
+  const sendCtxAi=prompt=>{ rtab('ai'); aiSend('side_ai',prompt); };
+
   document.addEventListener('click',e=>{ if(!menu.contains(e.target)) hide(); });
   document.addEventListener('keydown',e=>{ if(e.key==='Escape') hide(); });
   window.addEventListener('blur',hide);
   const mainEl=$('#main');
   if(mainEl) mainEl.addEventListener('scroll',hide,{passive:true});
+
   document.addEventListener('contextmenu',e=>{
-    if(e.defaultPrevented) return;
-    const inNote=active&&String(active).startsWith('note:')&&e.target&&e.target.closest('#main');
-    if(!inNote){ hide(); return; }
+    if(e.defaultPrevented||e.shiftKey){ hide(); return; }
+    const inApp=e.target&&e.target.closest('#main, #right, #left');
+    if(!inApp){ hide(); return; }
     e.preventDefault();
+    const isNote=Boolean(active&&String(active).startsWith('note:'));
     const sel=String(window.getSelection?window.getSelection():'');
+    const selTrim=sel.trim();
+    const hasSel=selTrim.length>0;
     const editable=e.target.closest('textarea, input, [contenteditable="true"]');
-    const items=[{label:'⟳ Notu Yenile',fn:()=>refreshActiveNote(active)}];
-    if(editable||sel){
-      items.push({sep:true});
-      if(editable&&sel) items.push({label:'✂ Kes',fn:()=>document.execCommand('cut')});
-      if(sel) items.push({label:'📋 Kopyala',fn:()=>{ if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(sel).catch(()=>document.execCommand('copy')); else document.execCommand('copy'); }});
-      if(editable) items.push({label:'📌 Yapıştır',fn:()=>{ if(navigator.clipboard&&navigator.clipboard.readText) navigator.clipboard.readText().then(t=>{ if(t) document.execCommand('insertText',false,t); }).catch(()=>document.execCommand('paste')); else document.execCommand('paste'); }});
-    }
-    items.push({sep:true},{label:'↻ Uygulamayı Yenile',fn:()=>location.reload()});
+    const linkEl=e.target.closest('a[href], [data-target], [data-mdlink]');
+    const imgEl=e.target.closest('img');
+    const blockEl=e.target.closest('.nblock');
+    const msgEl=e.target.closest('[data-sess][data-idx]');
+    const blockTxt=blockEl&&blockEl.innerText?blockEl.innerText.trim():'';
+    const msgTxt=msgEl&&msgEl.innerText?msgEl.innerText.trim():'';
+    const docTxt=(isNote?($('#mdView')?.innerText||$('#doc')?.innerText||''):($('#main')?.innerText||'')).trim();
+    const isLocked=typeof notionState==='object'&&!!notionState.locked;
+    const isEditMd=isNote&&typeof editNoteIds!=='undefined'&&editNoteIds.has(active);
+    const isFocus=app&&app.classList.contains('no-left')&&app.classList.contains('no-right');
+    const aiTarget=hasSel?selTrim:(blockTxt||msgTxt||docTxt.slice(0,3000));
+    const words=t=>t?t.split(/\s+/).filter(Boolean).length:0;
+
     menu.innerHTML='';
-    items.forEach(it=>{
-      if(it.sep){ const d=document.createElement('div'); d.className='agy-ctx-sep'; menu.appendChild(d); return; }
+
+    // 1. Canlı bilgi şeridi
+    const meta=document.createElement('div');
+    meta.className='agy-ctx-meta';
+    const modeLabel=isNote?`📄 Not · ${words(docTxt)} kelime`:(active==='studychat'?'📚 AgyStudy':(isAI(active)?'🤖 AI Sohbet':'❖ AgyDesk'));
+    meta.textContent=hasSel
+      ? `✦ Seçim: ${words(selTrim)} kelime · ${selTrim.length} karakter`
+      : modeLabel;
+    menu.appendChild(meta);
+
+    // 2. Üst hızlı düzenleme şeridi (Kes / Kopyala / Yapıştır / Tümünü Seç)
+    const quickBar=document.createElement('div');
+    quickBar.className='agy-ctx-quick';
+    const quickActs=[
+      {icon:'✂',title:'Kes (Ctrl+X)',disabled:!(editable&&hasSel),fn:()=>document.execCommand('cut')},
+      {icon:'📋',title:'Kopyala (Ctrl+C)',disabled:!hasSel,fn:()=>{ copyTxt(sel); toast('✓ Kopyalandı'); }},
+      {icon:'📌',title:'Yapıştır (Ctrl+V)',disabled:!editable,fn:()=>{
+        if(navigator.clipboard&&navigator.clipboard.readText){
+          navigator.clipboard.readText().then(t=>{ if(t) document.execCommand('insertText',false,t); }).catch(()=>document.execCommand('paste'));
+        }else document.execCommand('paste');
+      }},
+      {icon:'☑',title:'Tümünü Seç (Ctrl+A)',disabled:false,fn:()=>selectNoteContent(editable)}
+    ];
+    quickActs.forEach(qa=>{
       const b=document.createElement('button');
-      b.type='button'; b.className='agy-ctx-item'; b.textContent=it.label;
-      b.onclick=()=>{ hide(); it.fn(); };
-      menu.appendChild(b);
+      b.type='button'; b.className='agy-ctx-qbtn'+(qa.disabled?' disabled':'');
+      b.disabled=!!qa.disabled; b.title=qa.title; b.textContent=qa.icon;
+      b.onclick=()=>{ if(!qa.disabled){ hide(); qa.fn(); } };
+      quickBar.appendChild(b);
     });
+    menu.appendChild(quickBar);
+
+    const addSep=()=>{ const d=document.createElement('div'); d.className='agy-ctx-sep'; menu.appendChild(d); };
+    const addItem=it=>{
+      const b=document.createElement('button');
+      b.type='button';
+      b.className='agy-ctx-item'+(it.accent?' accent':'')+(it.disabled?' disabled':'');
+      b.disabled=!!it.disabled;
+      const lbl=document.createElement('span'); lbl.textContent=it.label; b.appendChild(lbl);
+      if(it.key){ const k=document.createElement('kbd'); k.className='agy-ctx-key'; k.textContent=it.key; b.appendChild(k); }
+      b.onclick=()=>{ if(it.disabled) return; hide(); it.fn(); };
+      menu.appendChild(b);
+    };
+
+    // 3. Bağlam-duyarlı Link / Görsel / Web Arama
+    if(linkEl){
+      const href=linkEl.getAttribute('data-target')||linkEl.getAttribute('data-mdlink')||linkEl.getAttribute('href')||'';
+      if(href&&href!=='#'){
+        addSep();
+        addItem({label:'↗ Bağlantıyı Aç',fn:()=>{ if(typeof openTargetLink==='function') openTargetLink(e,href,true); else window.open(href,'_blank','noopener'); }});
+        addItem({label:'🔗 Bağlantıyı Kopyala',fn:()=>{ copyTxt(href); toast('✓ Bağlantı kopyalandı'); }});
+      }
+    }
+    if(imgEl&&imgEl.src){
+      addSep();
+      addItem({label:'🖼 Görseli Aç',fn:()=>window.open(imgEl.src,'_blank','noopener')});
+      addItem({label:'🔗 Görsel Adresini Kopyala',fn:()=>{ copyTxt(imgEl.src); toast('✓ Görsel adresi kopyalandı'); }});
+    }
+    if(hasSel){
+      addSep();
+      addItem({label:'🔍 Web\'de Ara',fn:()=>window.open('https://www.google.com/search?q='+encodeURIComponent(selTrim),'_blank','noopener')});
+    }
+
+    // 4. Kompakt 2x2 AI Komut Izgarası
+    if(aiTarget){
+      addSep();
+      const aiGrid=document.createElement('div');
+      aiGrid.className='agy-ctx-aigrid';
+      const aiActs=[
+        {label:hasSel?'✨ Seçimi Açıkla':(blockTxt?'✨ Bloğu Açıkla':'✨ Notu Açıkla'),fn:()=>sendCtxAi(`Notumdaki şu kısmı açıkla:\n\n> ${aiTarget}`)},
+        {label:'🧠 Notu Özetle',fn:()=>sendCtxAi(`Açık olan notumu kısa ve net maddelerle özetle:\n\n${docTxt.slice(0,4500)}`)},
+        {label:'❓ Quiz Üret',fn:()=>sendCtxAi(`Şu içerikten çalışmam için 3 adet kısa soru + cevap anahtarı üret:\n\n${aiTarget.slice(0,3000)}`)},
+        {label:'🌐 Düzelt / Çevir',fn:()=>sendCtxAi(`Şu metni akıcı, teknik doğruluğu bozmadan Türkçeye çevir veya düzenle:\n\n> ${aiTarget.slice(0,2500)}`)}
+      ];
+      aiActs.forEach(aa=>{
+        const b=document.createElement('button');
+        b.type='button'; b.className='agy-ctx-aibtn'; b.textContent=aa.label;
+        b.onclick=()=>{ hide(); aa.fn(); };
+        aiGrid.appendChild(b);
+      });
+      menu.appendChild(aiGrid);
+    }
+
+    // 5. Not & Görünüm İşlemleri
+    addSep();
+    if(msgEl&&msgEl.classList.contains('a')){
+      addItem({label:'📝 Bu Yanıtı Nota Ekle',accent:true,fn:()=>appendChatMsgToNote(msgEl.dataset.sess,Number(msgEl.dataset.idx),null)});
+    }
+    if(isNote){
+      addItem({label:isLocked?'🔓 Düzenlemeyi Aç':'🔒 Salt Okunur Kilitle',fn:()=>{ if(typeof toggleNotionLock==='function') toggleNotionLock(active); }});
+      if(!isLocked&&!isEditMd){
+        addItem({label:'＋ Blok Ekle',key:'/',fn:()=>{ if(typeof openSlashFromTop==='function') openSlashFromTop(active); }});
+      }
+      addItem({label:isEditMd?'✨ Notion Tuvaline Geç':'</> Markdown Görünümü',fn:()=>{ if(typeof toggleEditNote==='function') toggleEditNote(active); }});
+    }
+    addItem({label:isFocus?'◫ Panelleri Göster':'⚡ Odak Modu',fn:()=>{
+      if(!app) return;
+      const next=!isFocus;
+      app.classList.toggle('no-left',next);
+      app.classList.toggle('no-right',next);
+      if(curMode==='write'){ writeNoLeft=next; writeNoRight=next; }
+      if(typeof syncPaneBtns==='function') syncPaneBtns();
+      if(typeof saveSessionTabs==='function') saveSessionTabs();
+    }});
+    if(isNote){
+      addItem({label:'📝 Ham Markdown Kopyala',fn:()=>{
+        const raw=(noteCache&&noteCache[active]&&noteCache[active].raw)||docTxt;
+        copyTxt(raw); toast('✓ Markdown panoya kopyalandı');
+      }});
+    }
+    addItem({label:'🖨 Yazdır (A4)',key:'Ctrl+P',fn:()=>window.print()});
+
+    // 6. Canlı Tema Şeridi (menüyü kapatmadan anlık tema değiştir)
+    if(typeof THEMES!=='undefined'&&typeof applyTheme==='function'){
+      addSep();
+      const tRow=document.createElement('div');
+      tRow.className='agy-ctx-themes';
+      THEMES.forEach(t=>{
+        const d=document.createElement('button');
+        d.type='button';
+        d.className='agy-ctx-tdot'+(t.id===curTheme?' on':'');
+        d.style.background=t.dot;
+        d.title=`Tema: ${t.name||t.id}`;
+        d.onclick=ev=>{
+          ev.stopPropagation();
+          applyTheme(t.id);
+          tRow.querySelectorAll('.agy-ctx-tdot').forEach(x=>x.classList.remove('on'));
+          d.classList.add('on');
+        };
+        tRow.appendChild(d);
+      });
+      menu.appendChild(tRow);
+    }
+
+    // 7. Yenileme
+    addSep();
+    addItem({label:'⟳ Notu Yenile',disabled:!isNote,fn:()=>refreshActiveNote(active)});
+    addItem({label:'↻ Uygulamayı Yenile',key:'Ctrl+R',fn:()=>location.reload()});
+
+    const hint=document.createElement('div');
+    hint.className='agy-ctx-hint';
+    hint.textContent='Shift + Sağ Tık: Sistem Menüsü';
+    menu.appendChild(hint);
+
     menu.classList.add('on');
     const r=menu.getBoundingClientRect();
     const x=Math.min(e.clientX,Math.max(8,window.innerWidth-r.width-8));
