@@ -1405,8 +1405,11 @@ async function loadVault(){
     renderKasaFilterSelect();
     rebuildTreeAndSources();
     const sameNoteMounted=String(active).startsWith('note:')&&Boolean($('#doc'))&&notionState.noteId===active;
+    const sameStudyMounted=active==='studychat'&&Boolean($('#scChat'));
+    const sameAiMounted=isAI(active)&&Boolean($('#aichat'));
     renderTree(); renderTabs();
-    if(!sameNoteMounted) renderMain();
+    if(!sameNoteMounted&&!sameStudyMounted&&!sameAiMounted) renderMain();
+    else if(sameStudyMounted) renderStudyChatBody();
     updateRightProps(); updateSideAiCtx(); saveSessionTabs();
   }catch(e){ console.error('loadVault error:',e); }
 }
@@ -2452,6 +2455,11 @@ function renderTabs(){
         }
       };
       const findDockTarget=(sx,sy)=>{
+        const selfL=typeof window.screenX==='number'?window.screenX:0;
+        const selfT=typeof window.screenY==='number'?window.screenY:0;
+        const selfR=selfL+(window.outerWidth||window.innerWidth||0);
+        const selfB=selfT+(window.outerHeight||window.innerHeight||0);
+        if(sx>=selfL&&sx<=selfR&&sy>=selfT&&sy<=selfB) return null;
         for(const [wId,wInfo] of otherWinRects.entries()){
           const r=wInfo.tabBar;
           if(!r) continue;
@@ -2478,8 +2486,9 @@ function renderTabs(){
           }
         }
         const tabsRect=t.getBoundingClientRect();
-        const hitDockWin=findDockTarget(ev.screenX,ev.screenY);
-        const nextTear=ev.clientY>tabsRect.bottom+38||ev.clientY<tabsRect.top-38||Boolean(hitDockWin);
+        const outsideOwnTabBar=ev.clientY>tabsRect.bottom+38||ev.clientY<tabsRect.top-38;
+        const hitDockWin=outsideOwnTabBar?findDockTarget(ev.screenX,ev.screenY):null;
+        const nextTear=outsideOwnTabBar;
         if(nextTear){
           tearOut=true;
           d.classList.add('tab-tearing');
@@ -2553,7 +2562,7 @@ function renderTabs(){
         window.removeEventListener('blur',onUp);
         try{ if(d.hasPointerCapture(pointerId)) d.releasePointerCapture(pointerId); }catch(err){}
         hidePreview();
-        const finalDockWin=dockTargetWinId||findDockTarget(ev.screenX,ev.screenY);
+        const finalDockWin=tearOut?(dockTargetWinId||findDockTarget(ev.screenX,ev.screenY)):null;
         setDockHover(null);
         document.body.classList.remove('tab-drag-no-select');
         d.classList.remove('tab-tearing');
@@ -3291,8 +3300,11 @@ function approve(id,yes){
   if(yes){logAct(id,`✓ Onaylandı: ${p.text||'[Görsel]'}`,'ok'); aiSend(id,p.text,p.skill,true,true,p.images||[]);}
   else{s.msgs.push({w:'a',h:'✗ Reddedildi. İşlem yapılmadı.'}); logAct(id,`✗ Reddedildi: ${p.text||'[Görsel]'}`,'w'); aiRefresh(id);}
 }
+const chatDrafts={};
 function renderAI(m){
   const s=ai[active]; s.unread=false;
+  const prevInp=$('#aiInput');
+  if(prevInp&&prevInp.dataset&&prevInp.dataset.sessId&&prevInp.value) chatDrafts[prevInp.dataset.sessId]=prevInp.value;
   m.scrollTop=0;
   m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
    <div class="aiin" id="aidrop"><div class="col">
@@ -3303,9 +3315,11 @@ function renderAI(m){
     if(cur&&(cur.running||cur.pending)){ aiStop(active); return; }
     const v=inp.value;
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length))return;
+    delete chatDrafts[active];
     inp.value='';autoGrow(inp);syncGemBoxState(inp);aiSend(active,v);
   };
-  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{autoGrow(inp);syncGemBoxState(inp);}; wireAiSlash(inp); inp.focus();
+  if(inp){ inp.dataset.sessId=active; if(chatDrafts[active]){ inp.value=chatDrafts[active]; autoGrow(inp); syncGemBoxState(inp); } }
+  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{chatDrafts[active]=inp.value;autoGrow(inp);syncGemBoxState(inp);}; wireAiSlash(inp); inp.focus();
   wireChatDrop($('#aidrop'),()=>active,k=>{if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
   wireChatDrop($('#aichat'),()=>active);
   renderChatAttachments(active);
@@ -9067,6 +9081,8 @@ function renderStudyChat(m){
   const sid=getStudySessId();
   const s=ensureStudySession(sid);
   s.unread=false;
+  const prevSc=$('#scIn');
+  if(prevSc&&prevSc.dataset&&prevSc.dataset.sessId&&prevSc.value) chatDrafts[prevSc.dataset.sessId]=prevSc.value;
   m.scrollTop=0;
   m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><label class="sc-src-wrap" title="Kasa değiştir (her kasa kendi sohbetine ve Studio notlarına sahiptir)">📚 <select class="sc-src-sel" id="scSrcSel" onchange="selectKasaFilter(this.value)"></select><svg class="sc-src-chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></label><span style="flex:1"></span><button class="hb" onclick="clearSrcAi()" title="Bu kasanın sohbetini sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop(getStudySessId())">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
@@ -9077,11 +9093,13 @@ function renderStudyChat(m){
     if(cur&&(cur.running||cur.pending)){ aiStop(curSid); return; }
     const v=i.value;
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length)) return;
+    delete chatDrafts[curSid];
     i.value=''; autoGrow(i); syncGemBoxState(i); studioSend(v);
   };
+  if(i){ i.dataset.sessId=sid; if(chatDrafts[sid]){ i.value=chatDrafts[sid]; autoGrow(i); syncGemBoxState(i); } }
   $('#scGo').onclick=go;
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
-  i.oninput=()=>{ autoGrow(i); syncGemBoxState(i); };
+  i.oninput=()=>{ chatDrafts[getStudySessId()]=i.value; autoGrow(i); syncGemBoxState(i); };
   wireAiSlash(i);
   wireChatDrop(m.querySelector('.sc-wrap'),()=>getStudySessId());
   renderChatAttachments(sid);
