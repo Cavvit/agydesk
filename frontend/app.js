@@ -703,10 +703,12 @@ const WIN_ID=(()=>{
 })();
 const TAB_STORE_KEY='agydesk_tabs_v1';
 const NOTE_SCROLL_KEY='agydesk_note_scrolls_v1';
+const IMG_ROT_KEY='agydesk_img_rot_v1';
 const UI_SYNC_KEYS=[
   'agydesk_theme',
   TAB_STORE_KEY,
   NOTE_SCROLL_KEY,
+  IMG_ROT_KEY,
   'agydesk_font',
   'agydesk_tz',
   'agydesk_fullw',
@@ -4355,6 +4357,41 @@ function deactivatePdfCache(){
   if(m){ m.style.visibility=''; m.style.pointerEvents=''; }
   for(const slot of pdfSlotMap.values()) slot.classList.remove('active');
 }
+function fitImgStudio(img,rot){
+  if(!img||!img.naturalWidth||!img.naturalHeight) return;
+  const box=img.parentElement;
+  const wrap=img.closest('.img-studio');
+  if(!box||!wrap) return;
+  const r=((rot%360)+360)%360;
+  const swapped=(r===90||r===270);
+  const cw=Math.max(200,(wrap.clientWidth||window.innerWidth)-48);
+  const nw=img.naturalWidth,nh=img.naturalHeight;
+  const visW=swapped?nh:nw;
+  const visH=swapped?nw:nh;
+  const scale=Math.min(1,cw/visW);
+  const w=Math.round(nw*scale);
+  const h=Math.round(nh*scale);
+  img.style.maxWidth='none';
+  img.style.width=w+'px';
+  img.style.height=h+'px';
+  box.style.width=Math.round(visW*scale)+'px';
+  box.style.height=Math.round(visH*scale)+'px';
+}
+function getSavedImgRot(id){
+  try{
+    const m=JSON.parse(localStorage.getItem(IMG_ROT_KEY)||'{}');
+    return (m&&typeof m[id]==='number')?m[id]:0;
+  }catch(e){ return 0; }
+}
+function saveImgRot(id,rot){
+  try{
+    const m=JSON.parse(localStorage.getItem(IMG_ROT_KEY)||'{}')||{};
+    const norm=((rot%360)+360)%360;
+    if(norm===0) delete m[id];
+    else m[id]=norm;
+    persistUiState({[IMG_ROT_KEY]:JSON.stringify(m)});
+  }catch(e){}
+}
 function getPdfState(id){
   if(!pdfState[id]){
     pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:localStorage.getItem('agydesk_pdf_filter')||'normal',drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
@@ -4711,7 +4748,7 @@ async function renderVaultNote(m,id){
   if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)){
     const st=getPdfState(id);
     if(typeof st.imgZoom!=='number') st.imgZoom=100;
-    if(typeof st.imgRot!=='number') st.imgRot=0;
+    if(typeof st.imgRot!=='number') st.imgRot=getSavedImgRot(id);
     if(typeof st.imgInv!=='boolean') st.imgInv=false;
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
     m.innerHTML=`<div class="pdf-studio">
@@ -4722,11 +4759,11 @@ async function renderVaultNote(m,id){
           <button onclick="const s=getPdfState('${id}');s.imgZoom=Math.max(25,(s.imgZoom||100)-25);renderMain()">−</button>
           <span>%${st.imgZoom}</span>
           <button onclick="const s=getPdfState('${id}');s.imgZoom=Math.min(400,(s.imgZoom||100)+25);renderMain()">＋</button>
-          <button onclick="const s=getPdfState('${id}');s.imgZoom=100;s.imgRot=0;s.imgInv=false;renderMain()">Sıfırla</button>
+          <button onclick="const s=getPdfState('${id}');s.imgZoom=100;s.imgRot=0;s.imgInv=false;saveImgRot('${id}',0);renderMain()">Sıfırla</button>
         </div>
         <div class="pdf-grp">
-          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)-90)%360;renderMain()" title="Sola Döndür">↺ 90°</button>
-          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)+90)%360;renderMain()" title="Sağa Döndür">↻ 90°</button>
+          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)-90)%360;saveImgRot('${id}',s.imgRot);renderMain()" title="Sola Döndür">↺ 90°</button>
+          <button onclick="const s=getPdfState('${id}');s.imgRot=((s.imgRot||0)+90)%360;saveImgRot('${id}',s.imgRot);renderMain()" title="Sağa Döndür">↻ 90°</button>
           <button class="${st.imgInv?'on':''}" onclick="const s=getPdfState('${id}');s.imgInv=!s.imgInv;renderMain()" title="Renkleri Ters Çevir (Şema/Tahta İnceleme)">◑ Kontrast</button>
         </div>
         <div class="pdf-grp" title="Okuma Modu">
@@ -4740,9 +4777,13 @@ async function renderVaultNote(m,id){
         <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
       <div class="img-studio ${filtCls}" id="pdfFrameWrap">
-        <img src="/api/raw/${encodeURI(rel)}" style="transform:scale(${(st.imgZoom||100)/100}) rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
+        <div class="img-rot-box" style="zoom:${(st.imgZoom||100)/100}">
+          <img src="/api/raw/${encodeURI(rel)}" onload="fitImgStudio(this,${st.imgRot||0})" style="transform:rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
+        </div>
       </div>
     </div>`;
+    const imgEl=m.querySelector('.img-studio img');
+    if(imgEl&&imgEl.complete) fitImgStudio(imgEl,st.imgRot||0);
     updateRightProps();
     return;
   }
