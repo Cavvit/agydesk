@@ -182,7 +182,23 @@ document.addEventListener('mouseup',e=>{
 /* ---------- Uygulama Geneli Geri Al / Yinele (Ctrl+Z / Ctrl+Y) ---------- */
 const APP_UNDO_STACK=[];
 const APP_REDO_STACK=[];
-const CLOSED_TABS=[];
+const CLOSED_TABS_KEY='agydesk_closed_tabs_v1';
+const CLOSED_TABS=(()=>{
+  try{
+    const raw=sessionStorage.getItem(CLOSED_TABS_KEY)||localStorage.getItem(CLOSED_TABS_KEY);
+    const arr=raw?JSON.parse(raw):[];
+    return Array.isArray(arr)?arr.filter(x=>x&&x.id&&!String(x.id).startsWith('blank:')&&x.id!=='kasalar'):[];
+  }catch(e){ return []; }
+})();
+function saveClosedTabs(){
+  try{
+    const clean=CLOSED_TABS.filter(x=>x&&x.id&&!String(x.id).startsWith('blank:')&&x.id!=='kasalar').slice(-30);
+    const raw=JSON.stringify(clean);
+    sessionStorage.setItem(CLOSED_TABS_KEY,raw);
+    localStorage.setItem(CLOSED_TABS_KEY,raw);
+    if(typeof persistUiState==='function') persistUiState({[CLOSED_TABS_KEY]:raw},false);
+  }catch(e){}
+}
 let _appUndoRunning=false;
 let lastAppActionAt=0;
 
@@ -232,16 +248,21 @@ async function performAppRedo(){
   }
 }
 function reopenLastClosedTab(){
+  const vaultLoaded=Object.keys(pages).some(k=>k.startsWith('note:'));
   while(CLOSED_TABS.length){
     const item=CLOSED_TABS.pop();
+    saveClosedTabs();
     if(!item||!item.id) continue;
-    if(String(item.id).startsWith('note:')&&!pages[item.id]) continue;
-    if(isAI(item.id)&&!ai[item.id]) continue;
-    if(!openTabs.includes(item.id)){
-      const pos=Math.min(Math.max(0,item.idx),openTabs.length);
-      openTabs.splice(pos,0,item.id);
+    if(String(item.id).startsWith('blank:')||item.id==='kasalar') continue;
+    if(openTabs.includes(item.id)) continue;
+    if(String(item.id).startsWith('note:')&&vaultLoaded&&!pages[item.id]) continue;
+    if(isAI(item.id)&&!ai[item.id]){
+      if(item.aiSnap&&typeof item.aiSnap==='object') ai[item.id]=item.aiSnap;
+      else continue;
     }
-    openPage(item.id);
+    const pos=Math.min(Math.max(0,Number.isFinite(item.idx)?item.idx:openTabs.length),openTabs.length);
+    openTabs.splice(pos,0,item.id);
+    openPage(item.id,true);
     return true;
   }
   return false;
@@ -702,11 +723,14 @@ const WIN_ID=(()=>{
   }
 })();
 const TAB_STORE_KEY='agydesk_tabs_v1';
+const LAST_CLOSED_WIN_KEY='agydesk_last_closed_tabs_v1';
 const NOTE_SCROLL_KEY='agydesk_note_scrolls_v1';
 const IMG_ROT_KEY='agydesk_img_rot_v1';
 const UI_SYNC_KEYS=[
   'agydesk_theme',
   TAB_STORE_KEY,
+  LAST_CLOSED_WIN_KEY,
+  CLOSED_TABS_KEY,
   NOTE_SCROLL_KEY,
   IMG_ROT_KEY,
   'agydesk_font',
@@ -868,7 +892,7 @@ function initMainScrollTracking(){
   },{passive:true});
 }
 
-function saveSessionTabs(){
+function saveSessionTabs(isClosing=false){
   if(_restoringSession) return;
   try{
     const curRt=document.querySelector('.rt.on');
@@ -889,6 +913,10 @@ function saveSessionTabs(){
     };
     const raw=JSON.stringify(payload);
     try{ sessionStorage.setItem(TAB_STORE_KEY,raw); }catch(e){}
+    if(isClosing){
+      try{ localStorage.setItem(LAST_CLOSED_WIN_KEY,raw); }catch(e){}
+      persistUiState({[LAST_CLOSED_WIN_KEY]:raw},false);
+    }
     if(!window.__IS_DETACHED_WIN){
       localStorage.setItem(TAB_STORE_KEY,raw);
       persistUiState({[TAB_STORE_KEY]:raw},false);
@@ -951,7 +979,7 @@ function restoreSessionTabs(){
     let winRaw=null;
     try{ winRaw=sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
     const isFreshWindow=!winRaw;
-    const raw=winRaw||localStorage.getItem(TAB_STORE_KEY);
+    const raw=winRaw||localStorage.getItem(LAST_CLOSED_WIN_KEY)||localStorage.getItem(TAB_STORE_KEY);
     if(!raw) return false;
     const saved=JSON.parse(raw);
     if(!saved||!Array.isArray(saved.openTabs)||!saved.openTabs.length) return false;
@@ -2068,17 +2096,20 @@ function openPage(id,forceTab=false,opts={}){
   if(isAI(id)&&!ai[id])return;
   if(active!==id) saveMainScroll();
   const p=pages[id];
-  if(!forceTab&&!openTabs.includes(id)&&((p&&p.ext&&SIDE_EXT.includes(p.ext))||(String(id).startsWith('note:')&&isSideDoc(id)))){
+  if(!forceTab&&!isBlank(active)&&!openTabs.includes(id)&&((p&&p.ext&&SIDE_EXT.includes(p.ext))||(String(id).startsWith('note:')&&isSideDoc(id)))){
     openRightViewer(p?p.rel:id.slice(5),p?p.t:'');
     return;
   }
   if(!openTabs.includes(id)){
     const ai_=openTabs.indexOf(active);
-    const canReplace=opts.replace&&!opts.newTab&&ai_!==-1&&!isAI(active)&&active!=='kasalar'&&!isAI(id);
+    const canReplace=(opts.replace||isBlank(active))&&(!opts.newTab||isBlank(active))&&ai_!==-1&&!isAI(active)&&active!=='kasalar'&&!isAI(id);
     if(canReplace) openTabs[ai_]=id;
     else if(opts.newTab&&ai_!==-1) openTabs.splice(ai_+1,0,id);
     else openTabs.push(id);
     pruneUnlockedNotes();
+  }else if(isBlank(active)&&!isBlank(id)&&active!==id){
+    const bi=openTabs.indexOf(active);
+    if(bi!==-1) openTabs.splice(bi,1);
   }
   active=id;
   let kasaChanged=false;
@@ -2220,7 +2251,7 @@ function dockTabToWindow(id,targetWinId,dropScreenX){
   removePdfSlot(id);
   if(!openTabs.length){
     try{ sessionStorage.removeItem(TAB_STORE_KEY); sessionStorage.removeItem('agy_detached_win'); }catch(e){}
-    winAct('close');
+    winAct('close',true);
     return true;
   }
   if(active===id) active=openTabs[Math.min(Math.max(0,idx),openTabs.length-1)];
@@ -2321,14 +2352,17 @@ function closeTab(id,opts={}){
   if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
   removePdfSlot(id);
-  if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'){
+  if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'&&!isBlank(id)){
     CLOSED_TABS.push({id,idx});
     if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
+    saveClosedTabs();
     pushAppUndo({
       label:`"${pgTitle}" sekmesi`,
       undo:async()=>{
+        const ci=CLOSED_TABS.findLastIndex(x=>x&&x.id===id);
+        if(ci!==-1){ CLOSED_TABS.splice(ci,1); saveClosedTabs(); }
         if(!openTabs.includes(id)) openTabs.splice(Math.min(idx,openTabs.length),0,id);
-        openPage(id);
+        openPage(id,true);
       },
       redo:async()=>{ closeTab(id,{silentUndo:true}); }
     });
@@ -2615,6 +2649,11 @@ function closeSession(id,ev){
   if(s&&s.running) api('/api/stop',{session:id}).catch(()=>{});
   api('/api/clear',{session:id}).catch(()=>{});
   const tabIdx=openTabs.indexOf(id);
+  if(tabIdx!==-1){
+    CLOSED_TABS.push({id,idx:tabIdx,aiSnap:s?{...s,running:false}:null});
+    if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
+    saveClosedTabs();
+  }
   openTabs=openTabs.filter(t=>t!==id);
   unlockedNotes.delete(id);
   pruneUnlockedNotes();
@@ -2797,6 +2836,7 @@ function openAppendToNotePicker(raw,btn){
   window._apAllNotes=allNotes;
   filterAppendNotes('');
   $('#kasaModal').classList.add('show');
+  bindKasaModalEnter(()=>{ if($('#apPaneNew')&&$('#apPaneNew').style.display!=='none') submitAppendNewNote(); });
   setTimeout(()=>$('#apSearch')?.focus(),40);
 }
 function switchAppendTab(mode){
@@ -2840,7 +2880,7 @@ async function submitAppendNewNote(){
   try{
     const res=await api('/api/note/create',{kasa:target,title,content:payload.raw+'\n'});
     await loadVault();
-    if(openAfter) openPage(res.id);
+    if(openAfter){ unlockedNotes.add(res.id); openPage(res.id); }
     if(payload.btn) flashMsgBtn(payload.btn);
     toast(`📝 "${title}" oluşturuldu ve yanıt eklendi`,res.id);
   }catch(e){ toast('⚠ Not oluşturulamadı: '+e.message); }
@@ -3775,6 +3815,23 @@ function renderKasalarHome(m){
 
 function closeKasaModal(){ $('#kasaModal').classList.remove('show'); }
 $('#kasaModal').onclick=e=>{ if(e.target.id==='kasaModal') closeKasaModal(); };
+function bindKasaModalEnter(submitFn){
+  const box=$('#kasaModalBox');
+  if(!box) return;
+  box.onkeydown=e=>{
+    if(e.key==='Escape'){ e.preventDefault(); closeKasaModal(); return; }
+    if(e.key!=='Enter'||e.isComposing) return;
+    const tag=(e.target.tagName||'').toUpperCase();
+    if(tag==='BUTTON'||tag==='A') return;
+    if(tag==='TEXTAREA'){
+      if(e.ctrlKey||e.metaKey){ e.preventDefault(); submitFn(); }
+      return;
+    }
+    if(tag==='INPUT'&&(e.target.type==='file'||e.target.type==='button'||e.target.type==='submit')) return;
+    e.preventDefault();
+    submitFn();
+  };
+}
 
 function openSpaceModal(spaceId=null){
   const existing=spaceId?getSpaceObj(spaceId):null;
@@ -3806,7 +3863,8 @@ function openSpaceModal(spaceId=null){
       </div>
     </div>`;
   $('#kasaModal').classList.add('show');
-  setTimeout(()=>{ const el=$('#msTitle'); if(el){ el.focus(); el.onkeydown=e=>{ if(e.key==='Enter') submitSpace(existing?existing.id:null); }; } },50);
+  bindKasaModalEnter(()=>submitSpace(existing?existing.id:null));
+  setTimeout(()=>$('#msTitle')?.focus(),50);
 }
 async function submitSpace(spaceId=null){
   const title=$('#msTitle').value.trim();
@@ -3909,6 +3967,7 @@ function openNewKasaModal(defaultSpaceId=null){
       <button class="btn" style="padding:7px 16px" onclick="submitNewKasa()">Oluştur ve Aç</button>
     </div>`;
   $('#kasaModal').classList.add('show');
+  bindKasaModalEnter(submitNewKasa);
   setTimeout(()=>$('#mkTitle').focus(),50);
 }
 async function submitNewKasa(){
@@ -3961,6 +4020,7 @@ function openEditKasaModal(kasaKey){
       <button class="btn" style="padding:7px 16px" onclick="submitEditKasa('${kasaKey}')">Kaydet</button>
     </div>`;
   $('#kasaModal').classList.add('show');
+  bindKasaModalEnter(()=>submitEditKasa(kasaKey));
   setTimeout(()=>$('#ekTitle').focus(),50);
 }
 async function submitEditKasa(kasaKey){
@@ -4016,7 +4076,8 @@ function openNewFolderModal(defaultParent,parentLabel){
       <button class="btn" style="padding:7px 16px" onclick="submitNewFolder()">Klasör Oluştur</button>
     </div>`;
   $('#kasaModal').classList.add('show');
-  setTimeout(()=>{ const inp=$('#mfName'); if(inp){ inp.focus(); inp.onkeydown=e=>{ if(e.key==='Enter') submitNewFolder(); }; } },50);
+  bindKasaModalEnter(submitNewFolder);
+  setTimeout(()=>$('#mfName')?.focus(),50);
 }
 async function submitNewFolder(){
   const parent=$('#mfParent').value;
@@ -4062,6 +4123,7 @@ function openNewNoteModal(defaultTarget){
       <button class="btn" style="padding:7px 16px" onclick="submitNewNote()">Ekle ve Aç</button>
     </div>`;
   $('#kasaModal').classList.add('show');
+  bindKasaModalEnter(submitNewNote);
   setTimeout(()=>$('#mnTitle').focus(),50);
 }
 async function submitNewNote(){
@@ -4083,6 +4145,7 @@ async function submitNewNote(){
         await dropImagesToNote(res.id,files);
       }
       await loadVault();
+      unlockedNotes.add(res.id);
       openPage(res.id);
       toast(`📝 "${title}"${files.length?` (+${files.length} ek dosya)`:''} oluşturuldu`,res.id);
     }else if(files.length){
@@ -4546,6 +4609,7 @@ async function convertPdfToMdNote(id){
   try{
     const res=await api('/api/note/create',{kasa,title,content});
     await loadVault();
+    unlockedNotes.add(res.id);
     openPage(res.id);
     toast(`📝 "${title}" oluşturuldu ve açıldı`,res.id);
   }catch(e){ alert('Not oluşturulamadı: '+e.message); }
@@ -4564,6 +4628,7 @@ async function savePdfScratchAsNote(id){
     const res=await api('/api/note/create',{kasa,title,content});
     await loadVault();
     openRightViewer(rel,p.t);
+    unlockedNotes.add(res.id);
     openPage(res.id);
     toast(`💾 Çalışma notun kasaya kaydedildi (PDF sağ panele alındı!)`,res.id);
   }catch(e){ alert('Kaydedilemedi: '+e.message); }
@@ -9205,9 +9270,9 @@ window.addEventListener('resize',syncWinMaxIcon);
 document.addEventListener('fullscreenchange',syncWinMaxIcon);
 syncWinMaxIcon();
 
-function winAct(cmd){
-  if(cmd==='close'){
-    try{ saveMainScroll(); saveSessionTabs(); flushUiStateRemote(true); }catch(e){}
+function winAct(cmd,skipSessionSave=false){
+  if(cmd==='close'&&!skipSessionSave){
+    try{ saveMainScroll(); saveSessionTabs(true); flushUiStateRemote(true); }catch(e){}
   }
   if(window.ipc && typeof window.ipc.postMessage==='function'){
     window.ipc.postMessage(cmd);
@@ -10726,9 +10791,19 @@ async function hydrateUiState(){
         if(Array.isArray(saved)) applyRailOrder(saved);
       }catch(e){}
     }
+    if(typeof srv[CLOSED_TABS_KEY]==='string'&&!CLOSED_TABS.length){
+      try{
+        const ct=JSON.parse(srv[CLOSED_TABS_KEY]);
+        if(Array.isArray(ct)){
+          ct.forEach(x=>{
+            if(x&&x.id&&!String(x.id).startsWith('blank:')&&x.id!=='kasalar') CLOSED_TABS.push(x);
+          });
+        }
+      }catch(e){}
+    }
     let hasWinTabs=false;
     try{ hasWinTabs=!!sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
-    if(!hasWinTabs&&typeof srv[TAB_STORE_KEY]==='string'){
+    if(!hasWinTabs&&(typeof srv[LAST_CLOSED_WIN_KEY]==='string'||typeof srv[TAB_STORE_KEY]==='string')){
       if(restoreSessionTabs()) initNavHistory();
     }else if(String(active).startsWith('note:')&&$('#doc')){
       restoreMainScroll(active);
@@ -10971,7 +11046,7 @@ if(!restoreSessionTabs()){
 initNavHistory();
 window.addEventListener('beforeunload',()=>{
   saveMainScroll();
-  saveSessionTabs();
+  saveSessionTabs(true);
   gcalSavePomo();
   flushUiStateRemote(true);
 });
