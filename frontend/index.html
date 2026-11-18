@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=ctx4">
+<link rel="stylesheet" href="/styles.css?v=ctx6">
 </head>
 <body>
 <div class="app" id="app">
@@ -75,6 +75,7 @@
     </div>
     <button class="zen-exit-btn" onclick="toggleZen()" title="Odak modundan çık (Ctrl+. veya Esc)">◐ Odaktan Çık</button>
     <div class="tabs" id="tabs"></div>
+    <span class="top-bat" id="appBattery" style="display:none" title=""></span>
     <button class="top-clock" id="appClock" onclick="cycleClockFmt()" title="Yerel saat · Tarih veya saniye görünümü için tıkla"></button>
     <button class="pbtn" id="rightTog" onclick="togglePane('right')" title="Sağ paneli aç/kapat (Ctrl+J)">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
@@ -179,6 +180,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=ctx4"></script>
+<script src="/app.js?v=ctx7"></script>
 </body>
 </html>

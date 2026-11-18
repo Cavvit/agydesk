@@ -198,6 +198,24 @@ async def ping():
     return {"ok": True}
 
 
+@app.get("/api/system/battery")
+async def system_battery():
+    try:
+        import psutil
+        bat = psutil.sensors_battery()
+    except Exception:
+        bat = None
+    if bat is None:
+        return {"available": False}
+    secs = bat.secsleft if isinstance(bat.secsleft, int) and bat.secsleft >= 0 else None
+    return {
+        "available": True,
+        "percent": int(round(bat.percent)),
+        "plugged": bool(bat.power_plugged),
+        "secs_left": secs,
+    }
+
+
 @app.get("/api/ui_state")
 async def get_ui_state_ep():
     return store.get_ui_state()

@@ -341,6 +341,51 @@ async fn ping_ep() -> Json<Value> {
     Json(json!({ "ok": true, "engine": "rust" }))
 }
 
+#[repr(C)]
+struct WinSystemPowerStatus {
+    ac_line_status: u8,
+    battery_flag: u8,
+    battery_life_percent: u8,
+    system_status_flag: u8,
+    battery_life_time: u32,
+    battery_full_life_time: u32,
+}
+
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn GetSystemPowerStatus(lpSystemPowerStatus: *mut WinSystemPowerStatus) -> i32;
+}
+
+async fn system_battery_ep() -> Json<Value> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut st = WinSystemPowerStatus {
+            ac_line_status: 255,
+            battery_flag: 255,
+            battery_life_percent: 255,
+            system_status_flag: 0,
+            battery_life_time: u32::MAX,
+            battery_full_life_time: u32::MAX,
+        };
+        let ok = unsafe { GetSystemPowerStatus(&mut st as *mut WinSystemPowerStatus) };
+        if ok != 0 && (st.battery_flag & 128) == 0 && st.battery_life_percent <= 100 {
+            let plugged = st.ac_line_status == 1;
+            let secs_left = if st.battery_life_time != u32::MAX {
+                Some(st.battery_life_time)
+            } else {
+                None
+            };
+            return Json(json!({
+                "available": true,
+                "percent": st.battery_life_percent,
+                "plugged": plugged,
+                "secs_left": secs_left,
+            }));
+        }
+    }
+    Json(json!({ "available": false }))
+}
+
 async fn get_ui_state_ep() -> Json<Value> {
     Json(Value::Object(store::get_ui_state()))
 }
@@ -1654,6 +1699,7 @@ fn build_router() -> Router {
     Router::new()
         .route("/api/health", get(health_ep))
         .route("/api/ping", get(ping_ep))
+        .route("/api/system/battery", get(system_battery_ep))
         .route("/api/auth/login", post(auth_login_ep))
         .route("/api/ui_state", get(get_ui_state_ep).post(set_ui_state_ep))
         .route("/api/vault", get(get_vault_ep))

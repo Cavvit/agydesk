@@ -3014,11 +3014,22 @@ function aiBody(id){
   return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+
     (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
 }
+function scrollChatToLastReply(c,s){
+  if(!c||!s||!s._scrollToLastReply) return false;
+  const rows=c.querySelectorAll('.msg-row.a');
+  const last=rows.length?rows[rows.length-1]:null;
+  s._scrollToLastReply=false;
+  if(!last) return false;
+  const cRect=c.getBoundingClientRect();
+  const rRect=last.getBoundingClientRect();
+  c.scrollTop=Math.max(0,c.scrollTop+(rRect.top-cRect.top)-10);
+  return true;
+}
 function renderSideAi(){
   const c=$('#chat'), s=ai.side_ai;
   if(!c||!s) return;
   c.innerHTML=aiBody('side_ai');
-  c.scrollTop=c.scrollHeight;
+  if(!scrollChatToLastReply(c,s)) c.scrollTop=c.scrollHeight;
   const stBtn=$('#sideAiStop');
   if(stBtn) stBtn.style.display=(s.running||s.pending)?'inline-flex':'none';
   syncAllGemBoxes();
@@ -3156,7 +3167,7 @@ function runMermaid(sel,force=false){
 function aiRefresh(id){
   if(id==='src_ai'){ renderStudyChatBody(); renderTabs(); return; }
   if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
-  if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);c.scrollTop=c.scrollHeight;aiHead(id);runMermaid('#aichat .mermaid');}
+  if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);if(!scrollChatToLastReply(c,ai[id])) c.scrollTop=c.scrollHeight;saveChatScroll(id);aiHead(id);runMermaid('#aichat .mermaid');}
   syncAllGemBoxes();
   renderTabs(); renderSessions();
 }
@@ -3243,7 +3254,9 @@ function renderAI(m){
   const sessId=active;
   c.addEventListener('scroll',()=>saveChatScroll(sessId),{passive:true});
   const saved=chatScrollMap[sessId];
-  if(saved&&!saved.atBottom){
+  if(scrollChatToLastReply(c,s)){
+    saveChatScroll(sessId);
+  }else if(saved&&!saved.atBottom){
     c.scrollTop=saved.top;
     requestAnimationFrame(()=>{ if(active===sessId&&$('#aichat')) $('#aichat').scrollTop=saved.top; });
   }else{
@@ -3295,6 +3308,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.title=ttl.slice(0,22);
   }
   const actNote=String(active).startsWith('note:')?active.slice(5):null;
+  s._scrollToLastReply=false;
   s.running=true;
   s.step='İstek gönderiliyor…';
   aiRefresh(id);
@@ -3322,6 +3336,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${(rawText||'[Görsel analizi]').replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
     aiRefresh(id); return;
   }
+  s._scrollToLastReply=false;
   s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label; aiRefresh(id);
 }
 /* ---------- Sunucu olayları (SSE) ---------- */
@@ -3341,6 +3356,7 @@ function startEvents(){
       const printBtn=`<button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()" title="Canon G3080 A4 Çift Yüz Renkli Yazdır">🖨 Yazdır</button>`;
       const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span>${effChip}<span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
       s.msgs.push({w:'a',h,raw:d.reply});
+      s._scrollToLastReply=true;
       if(d.session==='src_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(d.session==='side_ai' && $('#outs')){
@@ -6573,8 +6589,11 @@ window.addEventListener('paste',e=>{
   if(!files.length) return;
   const ae=document.activeElement;
   const aid=ae?ae.id:'';
-  if(aid==='chatIn'||aid==='scIn'||(ae&&ae.closest&&(ae.closest('#rb-ai')||ae.closest('.sc-wrap')))){
+  if(aid==='chatIn'||(ae&&ae.closest&&ae.closest('#rb-ai'))){
     e.preventDefault(); attachChatImages('side_ai',files); return;
+  }
+  if(aid==='scIn'||(ae&&ae.closest&&ae.closest('.sc-wrap'))){
+    e.preventDefault(); attachChatImages('src_ai',files); return;
   }
   if(aid==='aiInput'||(ae&&ae.closest&&ae.closest('.aiwrap'))){
     e.preventDefault(); attachChatImages(active,files); return;
@@ -7472,6 +7491,7 @@ async function renderCal(m,fetchApi=true){
   const curMonShort=GCAL_MONTHS[nowDt.getMonth()].slice(0,3).toUpperCase();
   const conflicts=gcalDetectConflicts();
   const prevSideScroll=m.querySelector('.gcal-side')?.scrollTop||0;
+  const prevWeekScroll=m.querySelector('#gweekScroll')?.scrollTop;
 
   m.innerHTML=`<div class="gcal ${GCAL.sideOpen?'':'no-side'}">
     <!-- Üst AgyCal Araç Çubuğu -->
@@ -7580,6 +7600,19 @@ async function renderCal(m,fetchApi=true){
   </div>`;
   const nextSide=m.querySelector('.gcal-side');
   if(nextSide&&prevSideScroll) nextSide.scrollTop=prevSideScroll;
+  const nextWeek=m.querySelector('#gweekScroll');
+  if(nextWeek){
+    if(typeof prevWeekScroll==='number'&&prevWeekScroll>0) nextWeek.scrollTop=prevWeekScroll;
+    else requestAnimationFrame(gcalScrollToNow);
+  }
+}
+
+function gcalScrollToNow(){
+  const sc=$('#gweekScroll'); if(!sc) return;
+  const now=new Date();
+  const nowPx=now.getHours()*60+now.getMinutes();
+  const target=Math.max(0,Math.min(sc.scrollHeight-sc.clientHeight,Math.round(nowPx-sc.clientHeight*0.38)));
+  sc.scrollTop=target;
 }
 
 function renderCalStageOnly(){
@@ -8937,7 +8970,9 @@ function renderStudyChatBody(){
   c.innerHTML=`<div class="sc-col">${h}</div>`;
   c.dataset.rendered='1';
   c.dataset.msgCount=String(msgs.length);
-  if(isInitialMount){
+  if(scrollChatToLastReply(c,s)){
+    saveChatScroll('studychat');
+  }else if(isInitialMount){
     const saved=chatScrollMap.studychat;
     if(saved&&!saved.atBottom){
       c.scrollTop=saved.top;
@@ -9791,6 +9826,60 @@ function initAppClock(){
   setInterval(updateAppClock,1000);
 }
 
+/* ---------- Üst köşe pil göstergesi ---------- */
+const BAT_MODES=['unplugged','always'];
+let batteryVisMode=localStorage.getItem('agydesk_bat_mode')||'unplugged';
+let _lastBatData=null;
+let _lastBatKey='';
+function fmtBatTime(secs){
+  if(typeof secs!=='number'||secs<=0) return '';
+  const h=Math.floor(secs/3600), m=Math.round((secs%3600)/60);
+  if(h>0&&m>0) return `${h} sa ${m} dk`;
+  if(h>0) return `${h} sa`;
+  return `${Math.max(1,m)} dk`;
+}
+function renderAppBattery(d){
+  const el=$('#appBattery'); if(!el) return;
+  if(!d||!d.available||(batteryVisMode==='unplugged'&&d.plugged)){
+    if(el.style.display!=='none') el.style.display='none';
+    _lastBatKey='';
+    return;
+  }
+  const pct=Math.max(0,Math.min(100,Number(d.percent)||0));
+  const plugged=!!d.plugged;
+  const cls=plugged?'chg':pct<=10?'crit':pct<=25?'low':'';
+  const key=`${pct}|${plugged?1:0}|${d.secs_left||0}|${batteryVisMode}`;
+  if(key!==_lastBatKey){
+    _lastBatKey=key;
+    el.innerHTML=`<span class="bat-pill" style="--bat:${pct}"><span class="bat-fill"></span><span class="bat-num">${plugged?'⚡':''}${pct}</span></span><span class="bat-nub"></span>`;
+    el.className='top-bat'+(cls?' '+cls:'');
+    const rem=fmtBatTime(d.secs_left);
+    el.title=plugged?`Prizde · %${pct}`:`Pilde · %${pct}${rem?' · Kalan: '+rem:''}`;
+  }
+  if(el.style.display!=='inline-flex') el.style.display='inline-flex';
+}
+function setBatteryVisMode(mode){
+  if(!BAT_MODES.includes(mode)) return;
+  batteryVisMode=mode;
+  persistUiState({agydesk_bat_mode:mode},true);
+  _lastBatKey='';
+  renderAppBattery(_lastBatData);
+}
+async function pollAppBattery(){
+  try{
+    const r=await fetch('/api/system/battery');
+    if(!r.ok) return;
+    _lastBatData=await r.json();
+    renderAppBattery(_lastBatData);
+  }catch(e){}
+}
+function initAppBattery(){
+  if(!BAT_MODES.includes(batteryVisMode)) batteryVisMode='unplugged';
+  pollAppBattery();
+  setInterval(pollAppBattery,15000);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) pollAppBattery(); });
+}
+
 /* ---------- Sol Ray Medya Kumandası (SMTC + Spotify Connect Hibrit) ---------- */
 const MEDIA_ICONS={
   spotify:'<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9.5" fill="currentColor" opacity=".16" stroke="currentColor" stroke-width="1.7"/><path d="M7.3 9.7c3.4-1 7-.7 9.8.8M8 12.6c2.8-.8 5.8-.5 8.1.7M8.7 15.3c2.1-.6 4.4-.4 6.2.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
@@ -10545,6 +10634,7 @@ async function hydrateUiState(){
     if(typeof srv.agydesk_kview==='string') kasaViewMode=srv.agydesk_kview==='list'?'list':'grid';
     if(typeof srv.agydesk_effort==='string'&&EFFORTS.some(e=>e.id===srv.agydesk_effort)){ curEffort=srv.agydesk_effort; syncEffortSelects(); }
     if(typeof srv.agydesk_clock_fmt==='string'&&CLOCK_FMTS.includes(srv.agydesk_clock_fmt)){ clockFmt=srv.agydesk_clock_fmt; _lastClockHtml=''; updateAppClock(); }
+    if(typeof srv.agydesk_bat_mode==='string'&&BAT_MODES.includes(srv.agydesk_bat_mode)){ batteryVisMode=srv.agydesk_bat_mode; _lastBatKey=''; renderAppBattery(_lastBatData); }
     if(typeof srv[NOTE_SCROLL_KEY]==='string'){
       try{
         const sc=JSON.parse(srv[NOTE_SCROLL_KEY]);
@@ -10793,7 +10883,7 @@ function initNoteContextMenu(){
 
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
+initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initAppBattery(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');
