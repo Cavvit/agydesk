@@ -790,7 +790,7 @@ function saveChatScroll(id){
   if(id==='studychat'){
     const c=$('#scChat');
     if(!c) return;
-    chatScrollMap.studychat={
+    chatScrollMap['studychat:'+getStudySessId()]={
       top:Math.max(0,Math.round(c.scrollTop||0)),
       atBottom:(c.scrollHeight-c.clientHeight-c.scrollTop)<60
     };
@@ -1030,6 +1030,11 @@ function updateSideAiCtx(){
   const kName=kObj?kObj.title:(spObj?spObj.title:'Tüm Alanlar');
   el.textContent=`📚 ${kName} · ${n} kaynak${hasNote?' + aktif not':''}`;
   const s1=$('#scSrc'); if(s1) s1.textContent=`📚 ${kName}`;
+  const scSel=$('#scSrcSel');
+  if(scSel){
+    scSel.innerHTML=renderKasaGroupOptions(currentKasa==='all'?'':currentKasa,`Tüm Kasalar (${kasalarData.length})`).replace('value=""','value="all"');
+    scSel.value=(currentKasa!=='all'&&kasalarData.some(k=>k.key===currentKasa))?currentKasa:'all';
+  }
   const s2=$('#scN'); if(s2) s2.textContent=n+' kaynak';
   const stK=$('#stKasa');
   if(stK){
@@ -1223,6 +1228,8 @@ function selectSpaceFilter(spaceId,openHome=false){
   renderTree();
   updateRightProps();
   updateSideAiCtx();
+  renderStudio();
+  if(active==='studychat'&&$('#main')) renderStudyChat($('#main'));
   saveSessionTabs();
   if(openHome){
     layoutMode('kasalar');
@@ -1253,6 +1260,8 @@ function selectKasaFilter(val){
   renderTree();
   updateRightProps();
   updateSideAiCtx();
+  renderStudio();
+  if(active==='studychat'&&$('#main')) renderStudyChat($('#main'));
   saveSessionTabs();
   scheduleRecordNavState();
 }
@@ -2039,8 +2048,7 @@ let blankN=0;
 function newBlankTab(){
   blankN++;
   const id='blank:'+blankN;
-  const i=openTabs.indexOf(active);
-  openTabs.splice(i===-1?openTabs.length:i+1,0,id);
+  openTabs.push(id);
   openPage(id);
 }
 function syncTreeActiveHighlight(){
@@ -2088,7 +2096,7 @@ function openPage(id,forceTab=false,opts={}){
       syncPaneBtns();
     }
   }
-  else if(id==='studychat'){if(ai.src_ai)ai.src_ai.unread=false;if(curMode!=='study') layoutMode('study');}
+  else if(id==='studychat'){const ss=getStudySess();if(ss)ss.unread=false;if(curMode!=='study') layoutMode('study');}
   else if(id!=='kasalar'&&id!=='studychat'&&id!=='cal'&&!isAI(id)&&curMode!=='write') layoutMode('write');
   syncPdfSlotsWithTabs();
   renderTabs();
@@ -2356,7 +2364,7 @@ function renderTabs(){
     const d=document.createElement('div'); d.className='tab'+(id===active?' on':'');
     d.draggable=false;
     d.dataset.tabId=id;
-    const s=isAI(id)?ai[id]:(id==='studychat'?ai.src_ai:null);
+    const s=isAI(id)?ai[id]:(id==='studychat'?getStudySess():null);
     const info=pg(id);
     const shortcutHint=idx<8?` (Ctrl+${idx+1})`:(idx===openTabs.length-1?' (Ctrl+9)':'');
     d.title=info.t+shortcutHint+' · Sürükleyerek sırasını değiştir, aşağı çekerek yeni pencereye ayır';
@@ -2565,7 +2573,15 @@ function renderTabs(){
 /* ---------- AI oturumları ---------- */
 const DEFAULT_AI_WELCOME='Merhaba, bu sekme tam ekran AI çalışma alanı. Aktif kasa kaynakların ve notların otomatik bağlıdır. Uzun bir görev verip başka sekmeye geçebilirsin.';
 const SIDE_IDS=['side_ai','src_ai'];
-function isSideId(id){ return SIDE_IDS.includes(id); }
+function isStudySessId(id){ return id==='src_ai'||String(id||'').startsWith('src_ai__'); }
+function isSideId(id){ return id==='side_ai'||isStudySessId(id); }
+function getStudyKasaKey(sid){ return String(sid||'').startsWith('src_ai__')?String(sid).slice(8):'all'; }
+function getStudySessId(kasaKey=currentKasa){ const k=(kasaKey&&kasaKey!=='all')?String(kasaKey):''; return k?'src_ai__'+k:'src_ai'; }
+function ensureStudySession(sid){
+  if(!ai[sid]) ai[sid]={title:'Kaynaklarla Çalış AI',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+  return ai[sid];
+}
+function getStudySess(){ return ensureStudySession(getStudySessId()); }
 const ai={
   src_ai:{title:'Kaynaklarla Çalış AI',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
   ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
@@ -2684,7 +2700,7 @@ function copyChatMsg(sessId,idx,btn){
   copyTextSafe(txt).then(()=>flashMsgBtn(btn)).catch(()=>toast('Kopyalama başarısız'));
 }
 function activeInputForSession(sessId){
-  if(sessId==='src_ai') return $('#scIn');
+  if(isStudySessId(sessId)) return $('#scIn');
   if(sessId==='side_ai') return $('#chatIn');
   return $('#aiInput');
 }
@@ -3044,11 +3060,13 @@ function clearSideAi(){
   renderSideAi();
 }
 function clearSrcAi(){
-  delete chatScrollMap.studychat;
-  api('/api/clear',{session:'src_ai'}).catch(()=>{});
-  ai.src_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
-  ai.src_ai.running=false; ai.src_ai.unread=false; ai.src_ai.pending=null; ai.src_ai.attachments=[];
-  renderChatAttachments('src_ai');
+  const sid=getStudySessId();
+  const s=ensureStudySession(sid);
+  delete chatScrollMap['studychat:'+sid];
+  api('/api/clear',{session:sid}).catch(()=>{});
+  s.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
+  s.running=false; s.unread=false; s.pending=null; s.attachments=[];
+  renderChatAttachments(sid);
   renderStudyChatBody();
   renderTabs();
 }
@@ -3109,8 +3127,8 @@ function renderChatAttachments(sessionId){
   }).join('');
   if(sessionId==='side_ai'){
     const a=$('#sideAttach'); if(a) a.innerHTML=html;
-  }else if(sessionId==='src_ai'){
-    const b=$('#scAttach'); if(b) b.innerHTML=html;
+  }else if(isStudySessId(sessionId)){
+    if(sessionId===getStudySessId()){ const b=$('#scAttach'); if(b) b.innerHTML=html; }
   }else if(active===sessionId){
     const c=$('#aiAttach'); if(c) c.innerHTML=html;
   }
@@ -3165,7 +3183,7 @@ function runMermaid(sel,force=false){
   }catch(e){}
 }
 function aiRefresh(id){
-  if(id==='src_ai'){ renderStudyChatBody(); renderTabs(); return; }
+  if(isStudySessId(id)){ if(id===getStudySessId()) renderStudyChatBody(); renderTabs(); return; }
   if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
   if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);if(!scrollChatToLastReply(c,ai[id])) c.scrollTop=c.scrollHeight;saveChatScroll(id);aiHead(id);runMermaid('#aichat .mermaid');}
   syncAllGemBoxes();
@@ -3357,7 +3375,7 @@ function startEvents(){
       const h=`${safe}<div class="route"><span class="chip ${c}">${r.label}</span>${effChip}<span>${r.reason}</span>${badge}${tok}${printBtn}</div>`;
       s.msgs.push({w:'a',h,raw:d.reply});
       s._scrollToLastReply=true;
-      if(d.session==='src_ai'&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe); studioPendingTitle=null; }
+      if(isStudySessId(d.session)&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe,getStudyKasaKey(d.session)); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(d.session==='side_ai' && $('#outs')){
         const outBox=document.createElement('div'); outBox.className='out';
@@ -3365,7 +3383,7 @@ function startEvents(){
         $('#outs').appendChild(outBox);
         runMermaid('#outs .mermaid');
       }
-      if(d.session==='src_ai'&&active!=='studychat'){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,'studychat');}
+      if(isStudySessId(d.session)&&active!=='studychat'){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,'studychat');}
       else if(!isSideId(d.session)&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
       aiRefresh(d.session);
       loadVault();
@@ -3413,7 +3431,10 @@ async function loadChats(){
     let changed=false;
     let activeChanged=false;
     Object.entries(all).forEach(([sid,msgs])=>{
-      if(!ai[sid]){ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; changed=true; }
+      if(!ai[sid]){
+        if(isStudySessId(sid)){ ensureStudySession(sid); changed=true; }
+        else{ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; changed=true; }
+      }
       if(ai[sid].running||ai[sid].pending) return;
       if(msgs&&msgs.length){
         const mapped=msgs.map(m=>({w:m.w,h:(m.w==='a'&&m.h&&!String(m.h).trim().startsWith('<'))?mdToHtml(m.h):m.h}));
@@ -3440,6 +3461,8 @@ async function loadChats(){
     if(isAI(active)&&activeChanged){
       if($('#aichat')) aiRefresh(active);
       else renderMain();
+    }else if(active==='studychat'&&$('#scChat')){
+      renderStudyChatBody();
     }
   }catch(e){}
 }
@@ -6593,12 +6616,12 @@ window.addEventListener('paste',e=>{
     e.preventDefault(); attachChatImages('side_ai',files); return;
   }
   if(aid==='scIn'||(ae&&ae.closest&&ae.closest('.sc-wrap'))){
-    e.preventDefault(); attachChatImages('src_ai',files); return;
+    e.preventDefault(); attachChatImages(getStudySessId(),files); return;
   }
   if(aid==='aiInput'||(ae&&ae.closest&&ae.closest('.aiwrap'))){
     e.preventDefault(); attachChatImages(active,files); return;
   }
-  if(active==='studychat'){ e.preventDefault(); attachChatImages('src_ai',files); return; }
+  if(active==='studychat'){ e.preventDefault(); attachChatImages(getStudySessId(),files); return; }
   if(isAI(active)){ e.preventDefault(); attachChatImages(active,files); return; }
   if(String(active).startsWith('note:')){ e.preventDefault(); dropImagesToNote(active,files); }
 });
@@ -6703,7 +6726,7 @@ function runSkill(k){
   if(curMode==='study'){ studioPendingTitle=s.h; if(active!=='studychat') openPage('studychat'); }
   rtab('ai');
   const promptText=s.prompt||(`/${k} — aktif not ve seçili kaynaklar üzerinde uygula.`);
-  aiSend(curMode==='study'?'src_ai':'side_ai',promptText,k);
+  aiSend(curMode==='study'?getStudySessId():'side_ai',promptText,k);
 }
 function wireDrop(){
   const dz=$('#drop'); if(!dz)return;
@@ -8897,15 +8920,19 @@ let studioNotes=[]; try{ studioNotes=JSON.parse(localStorage.getItem(STUDIO_KEY)
 let studioPendingTitle=null, studioOpenId=null;
 const STUDIO_TILES=[['ozet','☰'],['fisle','▤'],['whisper','✎'],['teardown','◈'],['spice','∿'],['pcb','▦']];
 function saveStudio(){ try{ localStorage.setItem(STUDIO_KEY,JSON.stringify(studioNotes.slice(0,100))); }catch(e){} }
-function studioAdd(title,md,html){
-  studioNotes.unshift({id:'sn'+Date.now(),t:title,md:md||'',h:html||mdToHtml(md||''),ts:Date.now()});
+function getScopedStudioNotes(){
+  const k=currentKasa||'all';
+  return studioNotes.filter(n=>(n.kasa||'all')===k);
+}
+function studioAdd(title,md,html,kasaKey=currentKasa){
+  studioNotes.unshift({id:'sn'+Date.now(),kasa:(kasaKey||'all'),t:title,md:md||'',h:html||mdToHtml(md||''),ts:Date.now()});
   saveStudio(); renderStudio();
 }
 function studioSaveMsg(i){
-  const m=ai.src_ai.msgs[i]; if(!m) return;
+  const m=getStudySess().msgs[i]; if(!m) return;
   const d=document.createElement('div'); d.innerHTML=m.h; d.querySelectorAll('.route').forEach(x=>x.remove());
   const txt=d.textContent.trim();
-  studioAdd(txt.slice(0,48)||'Not',txt,d.innerHTML);
+  studioAdd(txt.slice(0,48)||'Not',txt,d.innerHTML,currentKasa);
   toast('📌 Studio notlarına kaydedildi');
 }
 function studioDel(id){ studioNotes=studioNotes.filter(n=>n.id!==id); saveStudio(); renderStudio(); }
@@ -8913,27 +8940,35 @@ function studioCopy(id){ const n=studioNotes.find(x=>x.id===id); if(n&&navigator
 function studioToggle(id){ studioOpenId=(studioOpenId===id)?null:id; renderStudio(); }
 function renderStudio(){
   const b=$('#rb-studio'); if(!b) return;
-  b.innerHTML=`<div class="rview-head"><span>✦</span><b>Studio</b></div><div class="st-wrap">
+  const scoped=getScopedStudioNotes();
+  const kObj=kasalarData.find(k=>k.key===currentKasa);
+  const kName=kObj?kObj.title:'Tüm Kasalar';
+  b.innerHTML=`<div class="rview-head"><span>✦</span><b>Studio</b><span class="st-kasa-pill" title="${escAttr(kName)}">${escHtml(kName)}</span></div><div class="st-wrap">
     <div class="st-h"><span>Oluştur</span></div>
     <div class="st-grid">${STUDIO_TILES.map(([k,ic])=>`<button class="st-tile" onclick="runSkill('${k}')"><span class="ic">${ic}</span>${SK[k].h}</button>`).join('')}</div>
-    <div class="st-h"><span>Notlar</span><span>${studioNotes.length}</span></div>
-    ${studioNotes.length?studioNotes.map(n=>`<div class="st-card"><div class="t" onclick="studioToggle('${n.id}')">${studioOpenId===n.id?'▾':'▸'} ${n.t.replace(/</g,'&lt;')}</div>${studioOpenId===n.id?`<div class="full">${n.h}</div>`:`<div class="pv">${(n.md||'').replace(/[<#*]/g,'').slice(0,220)}</div>`}<div class="ft"><span>${new Date(n.ts).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span><span style="flex:1"></span><button onclick="studioCopy('${n.id}')" title="Kopyala">⧉</button><button onclick="studioDel('${n.id}')" title="Sil">🗑</button></div></div>`).join(''):`<div class="st-empty">Oluşturulan çıktılar ve 📌 ile kaydettiğin yanıtlar burada birikir.</div>`}
+    <div class="st-h"><span>Notlar</span><span>${scoped.length}</span></div>
+    ${scoped.length?scoped.map(n=>`<div class="st-card"><div class="t" onclick="studioToggle('${n.id}')">${studioOpenId===n.id?'▾':'▸'} ${n.t.replace(/</g,'&lt;')}</div>${studioOpenId===n.id?`<div class="full">${n.h}</div>`:`<div class="pv">${(n.md||'').replace(/[<#*]/g,'').slice(0,220)}</div>`}<div class="ft"><span>${new Date(n.ts).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span><span style="flex:1"></span><button onclick="studioCopy('${n.id}')" title="Kopyala">⧉</button><button onclick="studioDel('${n.id}')" title="Sil">🗑</button></div></div>`).join(''):`<div class="st-empty"><b>${escHtml(kName)}</b> kasası için oluşturulan çıktılar ve 📌 ile kaydettiğin yanıtlar burada birikir.</div>`}
   </div>`;
 }
 function studioSend(q){
   q=(q||'').trim();
-  if(!q&&!(ai.src_ai&&ai.src_ai.attachments&&ai.src_ai.attachments.length)) return;
-  studioPendingTitle=null; aiSend('src_ai',q);
+  const sid=getStudySessId();
+  const s=ensureStudySession(sid);
+  if(!q&&!(s&&s.attachments&&s.attachments.length)) return;
+  studioPendingTitle=null; aiSend(sid,q);
 }
 function renderStudyChat(m){
-  if(ai.src_ai) ai.src_ai.unread=false;
+  const sid=getStudySessId();
+  const s=ensureStudySession(sid);
+  s.unread=false;
   m.scrollTop=0;
-  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><span class="sc-src" id="scSrc"></span><span style="flex:1"></span><button class="hb" onclick="clearSrcAi()" title="Sohbeti sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop('src_ai')">■ Dur</button></div>
+  m.innerHTML=`<div class="sc-wrap"><div class="sc-head"><b>Sohbet</b><label class="sc-src-wrap" title="Kasa değiştir (her kasa kendi sohbetine ve Studio notlarına sahiptir)">📚 <select class="sc-src-sel" id="scSrcSel" onchange="selectKasaFilter(this.value)"></select><svg class="sc-src-chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></label><span style="flex:1"></span><button class="hb" onclick="clearSrcAi()" title="Bu kasanın sohbetini sıfırla">🧹 Temizle</button><button class="hb stop" id="scStop" style="display:none" onclick="aiStop(getStudySessId())">■ Dur</button></div>
     <div class="sc-body" id="scChat"></div>
-    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-foot-in">${gemComposerHtml({sessId:'src_ai',inputId:'scIn',sendId:'scGo',attachId:'scAttach',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
+    <div class="sc-foot"><div class="sc-chips" id="scChips"></div><div class="sc-foot-in">${gemComposerHtml({sessId:sid,inputId:'scIn',sendId:'scGo',attachId:'scAttach',placeholder:"Kaynaklarınıza ve AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
   const i=$('#scIn'), go=()=>{
-    const cur=ai.src_ai;
-    if(cur&&(cur.running||cur.pending)){ aiStop('src_ai'); return; }
+    const curSid=getStudySessId();
+    const cur=ensureStudySession(curSid);
+    if(cur&&(cur.running||cur.pending)){ aiStop(curSid); return; }
     const v=i.value;
     if(!v.trim()&&!(cur&&cur.attachments&&cur.attachments.length)) return;
     i.value=''; autoGrow(i); syncGemBoxState(i); studioSend(v);
@@ -8942,41 +8977,44 @@ function renderStudyChat(m){
   i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
   i.oninput=()=>{ autoGrow(i); syncGemBoxState(i); };
   wireAiSlash(i);
-  wireChatDrop(m.querySelector('.sc-wrap'),()=>'src_ai');
-  renderChatAttachments('src_ai');
+  wireChatDrop(m.querySelector('.sc-wrap'),()=>getStudySessId());
+  renderChatAttachments(sid);
   syncAllGemBoxes();
   updateSideAiCtx(); renderStudyChatBody(); i.focus();
 }
 function renderStudyChatBody(){
   const c=$('#scChat'); if(!c||active!=='studychat') return;
-  const s=ai.src_ai; if(!s) return;
+  const sid=getStudySessId();
+  const s=ensureStudySession(sid);
   const msgs=s.msgs.map((x,i)=>({x,i})).filter(o=>!(o.i===0&&o.x.w==='a'&&s.msgs.length===1));
   const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
   const prevScroll=c.scrollTop;
-  const isInitialMount=!c.dataset.rendered;
+  const isInitialMount=c.dataset.rendered!==sid;
   const nearBottom=!isInitialMount&&(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
   if(!c.dataset.scrollHooked){
     c.dataset.scrollHooked='1';
     c.addEventListener('scroll',()=>saveChatScroll('studychat'),{passive:true});
   }
   const n=getCheckedSources().length;
+  const kObj=kasalarData.find(k=>k.key===currentKasa);
+  const kName=kObj?kObj.title:'Tüm Kasalar';
   let h='';
   if(!msgs.length&&!s.running){
-    h=`<div class="sc-hero"><div class="big">Kaynaklarınla sohbet</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
+    h=`<div class="sc-hero"><div class="big">${escHtml(kName)}</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
   }else{
-    h=msgs.map(({x,i})=>renderMsgRowHtml('src_ai',x,i,true)).join('');
+    h=msgs.map(({x,i})=>renderMsgRowHtml(sid,x,i,true)).join('');
     if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
-  c.dataset.rendered='1';
+  c.dataset.rendered=sid;
   c.dataset.msgCount=String(msgs.length);
   if(scrollChatToLastReply(c,s)){
     saveChatScroll('studychat');
   }else if(isInitialMount){
-    const saved=chatScrollMap.studychat;
+    const saved=chatScrollMap['studychat:'+sid];
     if(saved&&!saved.atBottom){
       c.scrollTop=saved.top;
-      requestAnimationFrame(()=>{ if(active==='studychat'&&$('#scChat')) $('#scChat').scrollTop=saved.top; });
+      requestAnimationFrame(()=>{ if(active==='studychat'&&$('#scChat')&&getStudySessId()===sid) $('#scChat').scrollTop=saved.top; });
     }else{
       c.scrollTop=c.scrollHeight;
     }
@@ -9376,7 +9414,7 @@ function buildSkills(q=''){
       const d=document.createElement('div'); d.className='skill s'; d.draggable=true; d.dataset.skill=k;
       d.innerHTML=`<div class="ic">${ic}</div><div>${k.startsWith('caveman')||kind==='cmd'||['plan','goal','boost'].includes(k)?'/':''}${k}<small>${desc}</small></div><span class="tg">${kind==='cmd'?'KOMUT':kind==='mode'?'MOD':'ÇALIŞTIR'}</span>`;
       d.onclick=()=>{
-        const targetSess=isAI(active)?active:(active==='studychat'?'src_ai':'side_ai');
+        const targetSess=isAI(active)?active:(active==='studychat'?getStudySessId():'side_ai');
         if(kind==='cmd'||kind==='mode'){
           if(!isAI(active)) rtab('ai');
           aiSend(targetSess,'/'+k,k);
