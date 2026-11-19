@@ -167,6 +167,31 @@ def _mode_flags(mode: str) -> list[str]:
     return ["--mode", "accept-edits"]
 
 
+def _is_restricted_session(session: str) -> bool:
+    return session == "side_ai" or session == "src_ai" or session.startswith("src_ai__")
+
+
+def _drive_dir() -> Path | None:
+    env_d = os.environ.get("AIWS_DRIVE_DIR", "").strip()
+    if env_d and Path(env_d).exists():
+        return Path(env_d)
+    for cand in (r"G:\Drive'ım", r"G:\My Drive"):
+        p = Path(cand)
+        if p.exists():
+            return p
+    return None
+
+
+def _cli_workspace() -> Path:
+    env_w = os.environ.get("AIWS_CLI_WORKSPACE", "").strip()
+    if env_w and Path(env_w).exists():
+        return Path(env_w)
+    up = os.environ.get("USERPROFILE", "").strip()
+    if up and Path(up).exists():
+        return Path(up)
+    return WORKSPACE
+
+
 def _run_agy_sync(
     session: str,
     model: str,
@@ -175,7 +200,10 @@ def _run_agy_sync(
     mode: str,
     conv_id: str | None,
     on_step: Callable[[str], None] | None,
+    on_delta: Callable[[str], None] | None = None,
 ) -> tuple[str, int, bool, str | None]:
+    restricted = _is_restricted_session(session)
+    drive = _drive_dir()
     cmd = [
         AGY_BIN,
         "-p", prompt,
@@ -183,16 +211,30 @@ def _run_agy_sync(
         "--model", model,
         "--effort", effort,
         "--print-timeout", "300s",
-        *_mode_flags(mode),
     ]
-    if VAULT_DIR != WORKSPACE and VAULT_DIR.exists():
-        cmd.extend(["--add-dir", str(VAULT_DIR)])
+    env = os.environ.copy()
+    if restricted:
+        cmd.extend(["--mode", "accept-edits"])
+        env["AGYDESK_SCOPE"] = "restricted"
+        if drive:
+            cmd.extend(["--add-dir", str(drive)])
+        run_cwd = str(VAULT_DIR)
+    else:
+        cmd.extend(_mode_flags(mode))
+        env["AGYDESK_SCOPE"] = "full"
+        cli_ws = _cli_workspace()
+        if VAULT_DIR != cli_ws and VAULT_DIR.exists():
+            cmd.extend(["--add-dir", str(VAULT_DIR)])
+        if drive:
+            cmd.extend(["--add-dir", str(drive)])
+        run_cwd = str(cli_ws)
     if conv_id:
         cmd.extend(["--conversation", conv_id])
 
     proc = subprocess.Popen(
         cmd,
-        cwd=str(WORKSPACE),
+        cwd=run_cwd,
+        env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -209,6 +251,7 @@ def _run_agy_sync(
     final_resp: str | None = None
     agy_err: str | None = None
     tokens = 0
+    last_step_label = ""
     stderr_lines: list[str] = []
     got_output = threading.Event()
     done_ev = threading.Event()
@@ -262,8 +305,11 @@ def _run_agy_sync(
                 new_conv = su.get("conversation_id") or new_conv
                 stype = su.get("step_type", "")
                 delta = su.get("text_delta")
+                has_delta = bool(delta)
                 if delta:
                     chunks.append(delta)
+                    if on_delta:
+                        on_delta(delta)
                 err_txt = su.get("error")
                 if isinstance(err_txt, str) and err_txt.strip():
                     agy_err = err_txt.strip()
@@ -281,10 +327,14 @@ def _run_agy_sync(
                 if tlabel:
                     if tlabel not in tool_logs:
                         tool_logs.append(tlabel)
-                    if on_step:
+                    if on_step and last_step_label != tlabel:
+                        last_step_label = tlabel
                         on_step(tlabel)
-                elif on_step and stype:
-                    on_step(f"agy ({model}) · adım #{su.get('step_index', 0)}: {stype}")
+                elif not has_delta and on_step and stype:
+                    lbl = f"agy ({model}) · adım #{su.get('step_index', 0)}: {stype}"
+                    if last_step_label != lbl:
+                        last_step_label = lbl
+                        on_step(lbl)
                 u = su.get("usage") or {}
                 tokens = u.get("total_tokens") or tokens
             elif etype == "result":
@@ -331,6 +381,7 @@ async def complete(
     effort: str = "low",
     conv_id: str | None = None,
     on_step: Callable[[str], None] | None = None,
+    on_delta: Callable[[str], None] | None = None,
     on_failover: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, bool, str | None]:
     """(metin, token, gerçek_mi, conv_id)"""
@@ -354,7 +405,7 @@ async def complete(
         model = model_for(prov, eff)
         try:
             text, tokens, real, new_conv = await asyncio.to_thread(
-                _run_agy_sync, session, model, eff, prompt, mode, cur_conv, on_step
+                _run_agy_sync, session, model, eff, prompt, mode, cur_conv, on_step, on_delta
             )
             if idx > 0 and on_failover:
                 on_failover(prov, f"{PROVIDERS[provider]['label']} kotası doldu → {PROVIDERS[prov]['label']}")

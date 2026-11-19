@@ -1,5 +1,6 @@
 """Atölye backend: görev yönlendirme, kota, izinler, checkpoint, SSE olayları."""
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -17,25 +18,31 @@ from . import checkpoints, config, media, permissions, providers, router, store,
 from .config import PROVIDERS, ROOT, VAULT_DIR, WORKSPACE
 
 _WRITE_RULE = (
-    f"Yeni not (.md) oluşturman istenirse {VAULT_DIR}\\AgyDesk_Notlar\\<Kasa>\\ altına, "
-    f"belge/görsel (.pdf, .docx, .pptx, .png vb.) oluşturman istenirse {VAULT_DIR}\\AgyDesk_Dokuman\\<Kasa>\\ altına yaz."
+    f"Yeni not (.md) -> {VAULT_DIR}\\AgyDesk_Notlar\\<Kasa>\\, belge/görsel -> {VAULT_DIR}\\AgyDesk_Dokuman\\<Kasa>\\."
     if (VAULT_DIR / "AgyDesk_Notlar").is_dir() or (VAULT_DIR / "AgyDesk_Dokuman").is_dir()
-    else f"Yeni not oluşturman istenirse doğrudan {VAULT_DIR} altındaki ilgili kasa klasörüne .md dosyası olarak yaz."
+    else f"Yeni not -> {VAULT_DIR}\\<Kasa>\\*.md."
 )
-WS_HINT = (
-    f"[Atölye Çalışma İstasyonu — Gerçek Obsidian Kasası ({VAULT_DIR}) sol panelde ve sekmelerde zaten bağlıdır. "
-    "Ders Klasörleri ve Ana İndeksler: "
-    "[[00_DIFRANSIYEL_DENKLEMLER_ANA_INDEKS]] (Diferansiyel Denklemler: [[01_Birinci_Mertebeden_Dif_Denklemler_Tam_Rehber]], [[02_Yuksek_Mertebeden_Sabit_Katsayili_Lineer_Denklemler]], [[03_CIKMIS_VIZE_SORULARI_VE_HOCA_TUZAKLARI]], [[DIFRANSIYEL_DENKLEMLER_VIZE_TEK_PARCA_TAM_NOT]]), "
-    "[[00_LAB_CALISMA_PLANI]] (Elektrik Makinaları Lab: [[Deney_1_DC_Sont_Motor]], [[Deney_2_Tek_Fazli_Transformator]], [[Deney_3_Uc_Fazli_Transformator]], [[Quiz_Hoca_Tuzak_Sorulari_ve_Cozumler]]), "
-    "[[00_KSG_ANA_INDEKS]] (Kontrol Sistemlerine Giriş: [[01_Kontrol_Sistemlerine_Giris_ve_Temel_Kavramlar]], [[02_Laplace_Donusumu_ve_Transfer_Fonksiyonu_Modelleme]], [[03_Blok_Diyagramlari_Elemanlar_ve_Temel_Indirgeme_Kurallari]], [[04_Cok_Cevrimli_Sistemler_ve_Bozucu_Girisli_Blok_Indirgeme]], [[05_QUIZ_SORU_BANKASI_COZUMLU]], [[KSG_QUIZ_TEK_PARCA_TAM_NOT]]), "
-    "[[00_YUKSEK_GERILIM_ANA_INDEKS]] (Yüksek Gerilim Tekniği: [[01_YG_Giris_Trafo_Merkezi_ve_Temel_Elemanlar]], [[02_Ayiricilar_ve_Kesiciler_Manevra_Siralari]], [[03_Hatlar_Iletkenler_Direkler_Izolatorler_Kablolar_Baralar]], [[04_Olcme_Koruma_Kumanda_ve_Gerilim_Ayar_Elemanlari]], [[05_Desarj_Olaylari_Elektrot_Sistemleri_ve_Odev_Cozumleri]], [[06_QUIZ_SINIFLANDIRMA_VE_SIRALAMA_SORU_BANKASI]], [[YUKSEK_GERILIM_QUIZ_TEK_PARCA_TAM_NOT]]), "
-    "[[00_SECMELI_TASARIM_ANA_INDEKS]] (Seçmeli Tasarım: [[01_Termal_Kamera_Verileri_ve_Analizi_5N1K]], [[02_IHA_Goruntuleri_ile_Arazi_Analizi_5N1K]]). "
-    "ÖNEMLİ: Kullanıcı bir notu açmanı isterse disk taraması yapma veya frontend kodunu değiştirme; yalnızca yanıtında [[Dosya_Adi]] şeklinde yaz, arayüz o sekmeyi otomatik açar. "
-    f"{_WRITE_RULE} "
-    "GÖRSEL KURALLARI: Arayüz yanıtını markdown olarak çizer. Matematiği $...$ veya $$...$$ ile yaz (ör. $I_A$, $R_{fe}$). "
-    "ASCII sanat ÇİZME. Devre şemaları için şu hazır blokları kullan (blok içi boş kalabilir; arayüz gerçek direnç/bobin sembolleriyle çizer): ```sema trafo-esdeger``` (tam eşdeğer devre), ```sema trafo-bosta``` (boşta çalışma / demir kaybı), ```sema trafo-kisadevre``` (kısa devre / bakır kaybı), ```sema trafo-baglanti``` (tüm 3 fazlı Y/Δ grupları) veya ```sema trafo-baglanti-yy``` / ```-yd``` / ```-dy``` / ```-dd```, ```sema dc-sont``` (DC şönt motor). Kod bloklarında dili belirt (ör. ```c, ```python). "
-    "Diğer akış/blok şemalarını ```mermaid``` bloğu ile ver; düğüm etiketlerinde indis için alt çizgi kullanma, düz yaz (ör. IA, RF).]\n\n"
-)
+
+
+def _is_restricted_session(session: str) -> bool:
+    return session == "side_ai" or session == "src_ai" or session.startswith("src_ai__")
+
+
+def _ws_hint_for(session: str) -> str:
+    if not _is_restricted_session(session):
+        return f"[AgyAI CLI: tam erişim aktif. Kasa: {VAULT_DIR}. Not açmak için [[Dosya_Adi]] yaz.]\n\n"
+    drive_rule = ""
+    for cand in (r"G:\Drive'ım", r"G:\My Drive"):
+        if Path(cand).exists():
+            drive_rule = (
+                f" Drive okuma: {cand}; Drive yedekleme/yazma: yalnızca {cand}\\AgyDesk_Belgeler. "
+                "Drive'a yazmadan önce aynı dosyanın Drive'da var olup olmadığını kontrol et (çift kopya oluşturma, mevcut dosyayı güncelle)."
+            )
+            break
+    return (
+        f"[AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama; proje/shell kapalı). Kasa: {VAULT_DIR}. {_WRITE_RULE}{drive_rule} "
+        "Not açmak için [[Dosya_Adi]] yaz. Matematik: $...$/$$...$$. ASCII çizme; devre için ```sema trafo-esdeger|trafo-bosta|trafo-kisadevre|trafo-baglanti|dc-sont```, akış için ```mermaid``` (alt çizgisiz etiket) kullan.]\n\n"
+    )
 
 app = FastAPI(title="Atölye")
 app.add_middleware(
@@ -49,6 +56,7 @@ store.init()
 _subs: list[asyncio.Queue] = []
 _tasks: dict[str, asyncio.Task] = {}
 _steps: dict[str, str] = {}
+_src_hashes: dict[str, str] = {}
 _auth_needed = False
 _auth_running = False
 
@@ -497,12 +505,18 @@ async def events():
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
+async def _refresh_quota_bg():
+    try:
+        fresh = await asyncio.to_thread(store.quota_status, True, True)
+        emit("quota", quota=fresh)
+    except Exception:
+        pass
+
+
 async def _job(r: RunReq, dec: router.Decision):
     global _auth_needed
     loop = asyncio.get_running_loop()
     try:
-        emit("step", session=r.session, win_id=r.win_id, step=f"Yönlendiriliyor → {dec.label}")
-        await asyncio.sleep(0.2)
         init_step = (
             f"{dec.label} çalışıyor… ({dec.reason})"
             if dec.provider == "local"
@@ -510,7 +524,14 @@ async def _job(r: RunReq, dec: router.Decision):
         )
         emit("step", session=r.session, win_id=r.win_id, step=init_step)
         conv_id = store.get_conv_id(r.session)
-        src_ctx = await asyncio.to_thread(vault.build_context_from_sources, r.sources, r.active_note)
+        raw_src_ctx = await asyncio.to_thread(vault.build_context_from_sources, r.sources, r.active_note)
+        if raw_src_ctx:
+            h = hashlib.sha256(raw_src_ctx.encode("utf-8", errors="ignore")).hexdigest()
+            unchanged = bool(conv_id) and _src_hashes.get(r.session) == h
+            _src_hashes[r.session] = h
+            src_ctx = "" if unchanged else raw_src_ctx
+        else:
+            src_ctx = ""
         img_paths = await asyncio.to_thread(vault.resolve_chat_images, r.images)
         img_ctx = vault.build_image_prompt_block(img_paths)
         user_text = "Eklenen görseli incele ve içeriğini açıkla." if (not r.text.strip() and img_paths) else r.text
@@ -522,7 +543,7 @@ async def _job(r: RunReq, dec: router.Decision):
                     f"[Önceki Sohbetin Sıkıştırılmış Özeti]\n{compact_ctx}\n\n"
                     f"[Yeni Kullanıcı İsteği]\n{base_prompt}"
                 )
-        prompt = f"{WS_HINT}{base_prompt}" if not conv_id else base_prompt
+        prompt = f"{_ws_hint_for(r.session)}{base_prompt}" if not conv_id else base_prompt
         log_text = f"[{len(img_paths)} görsel]" if (not r.text.strip() and img_paths) else r.text
 
         def _on_failover(new_prov: str, why: str):
@@ -540,6 +561,7 @@ async def _job(r: RunReq, dec: router.Decision):
             effort=r.effort,
             conv_id=conv_id,
             on_step=lambda st: loop.call_soon_threadsafe(lambda s=st: emit("step", session=r.session, win_id=r.win_id, step=s)),
+            on_delta=lambda d: loop.call_soon_threadsafe(lambda txt=d: emit("delta", session=r.session, win_id=r.win_id, delta=txt)),
             on_failover=_on_failover,
         )
         used_effort = None if dec.provider == "local" else config.effective_effort(dec.provider, r.effort)
@@ -552,10 +574,11 @@ async def _job(r: RunReq, dec: router.Decision):
         store.add_log(r.session, f"✓ Tamamlandı ({dec.label}{'' if real else ', DEMO'}): {log_text}", "ok")
         if not _subs:
             store.add_chat_msg(r.session, "a", text)
-        fresh_quota = await asyncio.to_thread(store.quota_status, True, True)
+        cached_quota = store.quota_status()
         emit("done", session=r.session, win_id=r.win_id, reply=text, real=real, tokens=tokens,
-             conv_id=new_conv, route=dec.dict(), effort=used_effort, quota=fresh_quota)
+             conv_id=new_conv, route=dec.dict(), effort=used_effort, quota=cached_quota)
         emit("log")
+        asyncio.create_task(_refresh_quota_bg())
     except asyncio.CancelledError:
         providers.kill_session_proc(r.session)
         raise
@@ -567,7 +590,7 @@ async def _job(r: RunReq, dec: router.Decision):
             _auth_needed = True
             ollama_ok = await providers.ollama_alive()
         store.add_log(r.session, f"✗ Hata ({dec.label}): {err_str}", "w")
-        fresh_quota = await asyncio.to_thread(store.quota_status, True, True)
+        cached_quota = store.quota_status()
         emit(
             "error",
             session=r.session,
@@ -575,9 +598,10 @@ async def _job(r: RunReq, dec: router.Decision):
             error=err_str,
             code="auth_required" if auth_req else "provider_error",
             ollama_available=ollama_ok,
-            quota=fresh_quota,
+            quota=cached_quota,
         )
         emit("log")
+        asyncio.create_task(_refresh_quota_bg())
     finally:
         _tasks.pop(r.session, None)
         _steps.pop(r.session, None)
@@ -598,7 +622,7 @@ async def run(r: RunReq):
     if r.mode == "r" and risk == "risky":
         store.add_log(r.session, f"⚠ YOLO: riskli işlem onaysız çalıştı: {log_text}", "w")
     cp = None
-    if risk != "safe":
+    if risk != "safe" and not _is_restricted_session(r.session):
         ref = await asyncio.to_thread(checkpoints.snapshot, WORKSPACE)
         if ref:
             store.add_checkpoint(r.session, ref, log_text)
@@ -615,7 +639,7 @@ async def run(r: RunReq):
         )
     else:
         if providers.agy_available():
-            await asyncio.to_thread(store.fetch_agy_usage, False)
+            asyncio.create_task(asyncio.to_thread(store.fetch_agy_usage, False))
         dec = router.route(r.text, r.skill, store.used_pct, has_images=bool(r.images))
     store.add_log(r.session, f"İş başladı → {dec.label}: {log_text}")
     _tasks[r.session] = asyncio.create_task(_job(r, dec))
@@ -640,6 +664,7 @@ async def clear_session(r: SessionReq):
     store.set_conv_id(r.session, None)
     store.set_compact_ctx(r.session, None)
     store.clear_chat_msgs(r.session)
+    _src_hashes.pop(r.session, None)
     store.add_log(r.session, "🧹 Oturum bağlamı sıfırlandı", "m")
     emit("log")
     return {"cleared": True}

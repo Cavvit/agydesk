@@ -54,6 +54,22 @@ pub static WORKSPACE: Lazy<PathBuf> = Lazy::new(|| {
         .unwrap_or_else(|_| ROOT.clone())
 });
 
+/// Full-access CLI workspace for AgyAI sessions (defaults to USERPROFILE so AgyAI can access all projects & system files).
+pub static CLI_WORKSPACE: Lazy<PathBuf> = Lazy::new(|| {
+    if let Ok(v) = env::var("AIWS_CLI_WORKSPACE") {
+        if !v.trim().is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    if let Ok(up) = env::var("USERPROFILE") {
+        let p = PathBuf::from(up);
+        if p.exists() {
+            return p;
+        }
+    }
+    WORKSPACE.clone()
+});
+
 pub static VAULT_DIR: Lazy<PathBuf> = Lazy::new(|| {
     if let Ok(v) = env::var("AIWS_VAULT") {
         if !v.trim().is_empty() {
@@ -71,6 +87,41 @@ pub static VAULT_DIR: Lazy<PathBuf> = Lazy::new(|| {
     }
     ROOT.join("notes")
 });
+
+/// Optional Google Drive root (read-only for AgyNote/AgyStudy, full for AgyAI).
+pub static DRIVE_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
+    if let Ok(v) = env::var("AIWS_DRIVE_DIR") {
+        if !v.trim().is_empty() {
+            let p = PathBuf::from(v);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    for candidate in [r"G:\Drive'ım", r"G:\My Drive"] {
+        let p = PathBuf::from(candidate);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+});
+
+/// Google Drive mirror folder where AgyNote/AgyStudy may write/sync AgyDesk notes & documents.
+pub static DRIVE_VAULT_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
+    if let Ok(v) = env::var("AIWS_DRIVE_VAULT") {
+        if !v.trim().is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    DRIVE_DIR.as_ref().map(|d| d.join("AgyDesk_Belgeler"))
+});
+
+/// AgyNote (`side_ai`) and AgyStudy (`src_ai`, `src_ai__*`) run in restricted vault/Drive scope.
+/// AgyAI (`ai1`, `ai2`, ...) runs in full CLI scope.
+pub fn is_restricted_session(session: &str) -> bool {
+    session == "side_ai" || session == "src_ai" || session.starts_with("src_ai__")
+}
 
 pub static AGY_BIN: Lazy<String> = Lazy::new(|| {
     if let Ok(b) = env::var("AGY_BIN") {

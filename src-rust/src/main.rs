@@ -3,11 +3,13 @@
 mod checkpoints;
 mod config;
 mod media;
+mod memory_graph;
 mod permissions;
 mod providers;
 mod router;
 mod store;
 mod vault;
+mod vault_guard;
 
 use axum::{
     body::Bytes,
@@ -26,8 +28,9 @@ use futures_util::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
+    collections::{hash_map::DefaultHasher, HashMap},
     convert::Infallible,
+    hash::{Hash, Hasher},
     net::TcpStream,
     os::windows::process::CommandExt,
     path::Path,
@@ -87,8 +90,16 @@ struct AppState {
     tx: broadcast::Sender<Value>,
     tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     steps: Arc<Mutex<HashMap<String, String>>>,
+    src_hashes: Arc<Mutex<HashMap<String, u64>>>,
+    mem_hashes: Arc<Mutex<HashMap<String, u64>>>,
     auth_needed: Arc<AtomicBool>,
     auth_running: Arc<AtomicBool>,
+}
+
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 impl AppState {
@@ -110,27 +121,32 @@ impl AppState {
     }
 }
 
-fn ws_hint() -> String {
+fn ws_hint_for(session: &str) -> String {
     let vd = VAULT_DIR.to_string_lossy();
+    if !config::is_restricted_session(session) {
+        return format!(
+            "[AgyAI CLI: tam erişim aktif. Kasa: {vd}. Not açmak için [[Dosya_Adi]] yaz.]\n\n"
+        );
+    }
     let write_rule = if vault::is_split_vault() {
         format!(
-            "Yeni not (.md) oluşturman istenirse {vd}\\AgyDesk_Notlar\\<Kasa>\\ altına, belge/görsel (.pdf, .docx, .pptx, .png vb.) oluşturman istenirse {vd}\\AgyDesk_Dokuman\\<Kasa>\\ altına yaz."
+            "Yeni not (.md) -> {vd}\\AgyDesk_Notlar\\<Kasa>\\, belge/görsel -> {vd}\\AgyDesk_Dokuman\\<Kasa>\\."
         )
     } else {
-        format!("Yeni not oluşturman istenirse doğrudan {vd} altındaki ilgili kasa klasörüne .md dosyası olarak yaz.")
+        format!("Yeni not -> {vd}\\<Kasa>\\*.md.")
+    };
+    let drive_rule = match (&*config::DRIVE_DIR, &*config::DRIVE_VAULT_DIR) {
+        (Some(dr), Some(dv)) => format!(
+            " Drive okuma: {}; Drive yedekleme/yazma: yalnızca {}. Drive'a yazmadan önce aynı dosyanın Drive'da var olup olmadığını kontrol et (çift kopya oluşturma, mevcut dosyayı güncelle).",
+            dr.to_string_lossy(),
+            dv.to_string_lossy()
+        ),
+        _ => String::new(),
     };
     format!(
-        "[Atölye Çalışma İstasyonu — Gerçek Obsidian Kasası ({vd}) sol panelde ve sekmelerde zaten bağlıdır. \
-Ders Klasörleri ve Ana İndeksler: \
-[[00_DIFRANSIYEL_DENKLEMLER_ANA_INDEKS]] (Diferansiyel Denklemler: [[01_Birinci_Mertebeden_Dif_Denklemler_Tam_Rehber]], [[02_Yuksek_Mertebeden_Sabit_Katsayili_Lineer_Denklemler]], [[03_CIKMIS_VIZE_SORULARI_VE_HOCA_TUZAKLARI]], [[DIFRANSIYEL_DENKLEMLER_VIZE_TEK_PARCA_TAM_NOT]]), \
-[[00_LAB_CALISMA_PLANI]] (Elektrik Makinaları Lab: [[Deney_1_DC_Sont_Motor]], [[Deney_2_Tek_Fazli_Transformator]], [[Deney_3_Uc_Fazli_Transformator]], [[Quiz_Hoca_Tuzak_Sorulari_ve_Cozumler]]), \
-[[00_KSG_ANA_INDEKS]] (Kontrol Sistemlerine Giriş: [[01_Kontrol_Sistemlerine_Giris_ve_Temel_Kavramlar]], [[02_Laplace_Donusumu_ve_Transfer_Fonksiyonu_Modelleme]], [[03_Blok_Diyagramlari_Elemanlar_ve_Temel_Indirgeme_Kurallari]], [[04_Cok_Cevrimli_Sistemler_ve_Bozucu_Girisli_Blok_Indirgeme]], [[05_QUIZ_SORU_BANKASI_COZUMLU]], [[KSG_QUIZ_TEK_PARCA_TAM_NOT]]), \
-[[00_YUKSEK_GERILIM_ANA_INDEKS]] (Yüksek Gerilim Tekniği: [[01_YG_Giris_Trafo_Merkezi_ve_Temel_Elemanlar]], [[02_Ayiricilar_ve_Kesiciler_Manevra_Siralari]], [[03_Hatlar_Iletkenler_Direkler_Izolatorler_Kablolar_Baralar]], [[04_Olcme_Koruma_Kumanda_ve_Gerilim_Ayar_Elemanlari]], [[05_Desarj_Olaylari_Elektrot_Sistemleri_ve_Odev_Cozumleri]], [[06_QUIZ_SINIFLANDIRMA_VE_SIRALAMA_SORU_BANKASI]], [[YUKSEK_GERILIM_QUIZ_TEK_PARCA_TAM_NOT]]), \
-[[00_SECMELI_TASARIM_ANA_INDEKS]] (Seçmeli Tasarım: [[01_Termal_Kamera_Verileri_ve_Analizi_5N1K]], [[02_IHA_Goruntuleri_ile_Arazi_Analizi_5N1K]]). \
-ÖNEMLİ: Kullanıcı bir notu açmanı isterse disk taraması yapma veya frontend kodunu değiştirme; yalnızca yanıtında [[Dosya_Adi]] şeklinde yaz, arayüz o sekmeyi otomatik açar. {write_rule} \
-GÖRSEL KURALLARI: Arayüz yanıtını markdown olarak çizer. Matematiği $...$ veya $$...$$ ile yaz (ör. $I_A$, $R_{{fe}}$). \
-ASCII sanat ÇİZME. Devre şemaları için şu hazır blokları kullan (blok içi boş kalabilir; arayüz gerçek direnç/bobin sembolleriyle çizer): ```sema trafo-esdeger``` (tam eşdeğer devre), ```sema trafo-bosta``` (boşta çalışma / demir kaybı), ```sema trafo-kisadevre``` (kısa devre / bakır kaybı), ```sema trafo-baglanti``` (tüm 3 fazlı Y/Δ grupları) veya ```sema trafo-baglanti-yy``` / ```-yd``` / ```-dy``` / ```-dd```, ```sema dc-sont``` (DC şönt motor). Kod bloklarında dili belirt (ör. ```c, ```python). \
-Diğer akış/blok şemalarını ```mermaid``` bloğu ile ver; düğüm etiketlerinde indis için alt çizgi kullanma, düz yaz (ör. IA, RF).]\n\n"
+        "[AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/PDF üretimi; proje/genel shell kapalı). Kasa: {vd}. {write_rule}{drive_rule} \
+PDF oluşturmak için önce kasaya .md veya .html yaz, sonra run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --md-to-pdf \"<girdi.md>\" \"<cikti.pdf>\" (veya --html-to-pdf) çalıştır. \
+Not açmak için [[Dosya_Adi]] yaz. Matematik: $...$/$$...$$. ASCII çizme; devre için ```sema trafo-esdeger|trafo-bosta|trafo-kisadevre|trafo-baglanti|dc-sont```, akış için ```mermaid``` (alt çizgisiz etiket) kullan.]\n\n"
     )
 }
 
@@ -332,6 +348,8 @@ async fn health_ep(State(st): State<AppState>) -> Json<Value> {
         "git_checkpoints": checkpoints::available(&WORKSPACE),
         "vault": VAULT_DIR.to_string_lossy(),
         "running": running,
+        "warm_procs": providers::warm_pool_count(),
+        "memory_graph": memory_graph::get_stats(),
         "auth_needed": st.auth_needed.load(Ordering::Relaxed),
         "auth_running": st.auth_running.load(Ordering::Relaxed)
     }))
@@ -553,6 +571,8 @@ async fn save_note_ep(
 ) -> Response {
     match vault::write_note(&r.rel, &r.content) {
         Ok(res) => {
+            let rel_idx = r.rel.clone();
+            std::thread::spawn(move || memory_graph::index_single_note(&rel_idx));
             store::add_log("vault", &format!("💾 Not kaydedildi: {}", r.rel), "ok");
             st.emit("log", json!({}));
             Json(res).into_response()
@@ -567,7 +587,11 @@ async fn create_note_ep(
 ) -> Response {
     match vault::create_note(&r.kasa, &r.title, &r.content) {
         Ok(res) => {
-            let rel = res.get("rel").and_then(|v| v.as_str()).unwrap_or("");
+            let rel = res.get("rel").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !rel.is_empty() {
+                let rel_idx = rel.clone();
+                std::thread::spawn(move || memory_graph::index_single_note(&rel_idx));
+            }
             store::add_log("vault", &format!("📝 Yeni not oluşturuldu: {}", rel), "ok");
             st.emit("log", json!({}));
             Json(res).into_response()
@@ -582,6 +606,8 @@ async fn delete_note_ep(
 ) -> Response {
     match vault::delete_note(&q.rel) {
         Ok(res) => {
+            let rel_idx = q.rel.clone();
+            std::thread::spawn(move || memory_graph::index_single_note(&rel_idx));
             store::add_log("vault", &format!("🗑 Not silindi: {}", q.rel), "w");
             st.emit("log", json!({}));
             Json(res).into_response()
@@ -725,14 +751,6 @@ async fn events_ep(
 
 async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
     let sess = r.session.clone();
-    st.emit(
-        "step",
-        json!({
-            "session": sess,
-            "step": format!("Yönlendiriliyor → {}", dec.label)
-        }),
-    );
-    tokio::time::sleep(Duration::from_millis(120)).await;
     let init_step = if dec.provider == "local" {
         format!("{} çalışıyor… ({})", dec.label, dec.reason)
     } else {
@@ -748,16 +766,71 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
     );
 
     let conv_id = store::get_conv_id(&sess);
+    let restricted_sess = config::is_restricted_session(&sess);
     let sources_c = r.sources.clone();
     let active_c = r.active_note.clone();
     let images_c = r.images.clone();
-    let (src_ctx, img_paths) = tokio::task::spawn_blocking(move || {
+    let query_c = r.text.clone();
+    let (raw_src_ctx, img_paths, raw_mem_ctx) = tokio::task::spawn_blocking(move || {
         let sc = vault::build_context_from_sources(&sources_c, active_c.as_deref());
         let imgs = vault::resolve_chat_images(&images_c);
-        (sc, imgs)
+        let mc = if restricted_sess {
+            memory_graph::query_memory_context(&query_c, active_c.as_deref(), 1400)
+        } else {
+            String::new()
+        };
+        (sc, imgs, mc)
     })
     .await
     .unwrap_or_default();
+
+    // Token guard: skip resending identical source context when continuing an existing conversation.
+    let src_ctx = if raw_src_ctx.is_empty() {
+        String::new()
+    } else {
+        let h = hash_str(&raw_src_ctx);
+        let unchanged = if conv_id.is_some() {
+            st.src_hashes
+                .lock()
+                .ok()
+                .and_then(|m| m.get(&sess).copied())
+                == Some(h)
+        } else {
+            false
+        };
+        if let Ok(mut m) = st.src_hashes.lock() {
+            m.insert(sess.clone(), h);
+        }
+        if unchanged {
+            String::new()
+        } else {
+            raw_src_ctx
+        }
+    };
+
+    // Token guard: skip resending identical memory graph block on consecutive turns.
+    let mem_ctx = if raw_mem_ctx.is_empty() {
+        String::new()
+    } else {
+        let h = hash_str(&raw_mem_ctx);
+        let unchanged = if conv_id.is_some() {
+            st.mem_hashes
+                .lock()
+                .ok()
+                .and_then(|m| m.get(&sess).copied())
+                == Some(h)
+        } else {
+            false
+        };
+        if let Ok(mut m) = st.mem_hashes.lock() {
+            m.insert(sess.clone(), h);
+        }
+        if unchanged {
+            String::new()
+        } else {
+            raw_mem_ctx
+        }
+    };
 
     let img_ctx = vault::build_image_prompt_block(&img_paths);
     let user_text = if r.text.trim().is_empty() && !img_paths.is_empty() {
@@ -765,9 +838,9 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
     } else {
         r.text.clone()
     };
-    let base_prompt = format!("{}{}{}", src_ctx, img_ctx, user_text);
+    let base_prompt = format!("{}{}{}{}", mem_ctx, src_ctx, img_ctx, user_text);
     let prompt = if conv_id.is_none() {
-        format!("{}{}", ws_hint(), base_prompt)
+        format!("{}{}", ws_hint_for(&sess), base_prompt)
     } else {
         base_prompt
     };
@@ -789,6 +862,18 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
         );
     };
 
+    let st_delta = st.clone();
+    let sess_delta = sess.clone();
+    let on_delta = move |d: String| {
+        st_delta.emit(
+            "delta",
+            json!({
+                "session": sess_delta,
+                "delta": d
+            }),
+        );
+    };
+
     let mut failover_prov: Option<(String, String)> = None;
     let res = providers::complete(
         dec.provider.clone(),
@@ -799,6 +884,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
         r.effort.clone(),
         conv_id,
         on_step,
+        on_delta,
         |new_p, why| {
             failover_prov = Some((new_p, why));
         },
@@ -828,6 +914,15 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
             }
             if real {
                 store::record_usage(&dec.provider, tokens, true);
+                if restricted_sess {
+                    let s_m = sess.clone();
+                    let u_m = user_text.clone();
+                    let a_m = text.clone();
+                    let n_m = r.active_note.clone();
+                    std::thread::spawn(move || {
+                        memory_graph::record_turn_memory(&s_m, &u_m, &a_m, n_m.as_deref());
+                    });
+                }
             }
             let demo_suffix = if real { "" } else { ", DEMO" };
             store::add_log(
@@ -838,9 +933,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
             if st.tx.receiver_count() == 0 {
                 store::add_chat_msg(&sess, "a", &text);
             }
-            let fresh_quota = tokio::task::spawn_blocking(|| store::quota_status_with(true, true))
-                .await
-                .unwrap_or_default();
+            let cached_quota = store::quota_status();
             st.emit(
                 "done",
                 json!({
@@ -851,10 +944,16 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                     "conv_id": new_conv,
                     "route": dec,
                     "effort": used_effort,
-                    "quota": fresh_quota
+                    "quota": cached_quota
                 }),
             );
             st.emit("log", json!({}));
+            let st_q = st.clone();
+            tokio::spawn(async move {
+                if let Ok(fresh) = tokio::task::spawn_blocking(|| store::quota_status_with(true, true)).await {
+                    st_q.emit("quota", json!({ "quota": fresh }));
+                }
+            });
         }
         Err(e) => {
             let auth_req = providers::is_auth_error(&e);
@@ -865,9 +964,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                 false
             };
             store::add_log(&sess, &format!("✗ Hata ({}): {}", dec.label, e), "w");
-            let fresh_quota = tokio::task::spawn_blocking(|| store::quota_status_with(true, true))
-                .await
-                .unwrap_or_default();
+            let cached_quota = store::quota_status();
             st.emit(
                 "error",
                 json!({
@@ -875,10 +972,16 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                     "error": e,
                     "code": if auth_req { "auth_required" } else { "provider_error" },
                     "ollama_available": ollama_ok,
-                    "quota": fresh_quota
+                    "quota": cached_quota
                 }),
             );
             st.emit("log", json!({}));
+            let st_q = st.clone();
+            tokio::spawn(async move {
+                if let Ok(fresh) = tokio::task::spawn_blocking(|| store::quota_status_with(true, true)).await {
+                    st_q.emit("quota", json!({ "quota": fresh }));
+                }
+            });
         }
     }
 
@@ -924,7 +1027,7 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
             "w",
         );
     }
-    if risk != "safe" {
+    if risk != "safe" && !config::is_restricted_session(&r.session) {
         let ws = WORKSPACE.clone();
         let snap = tokio::task::spawn_blocking(move || checkpoints::snapshot(&ws))
             .await
@@ -956,7 +1059,9 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
         }
     } else {
         if providers::agy_available() {
-            let _ = tokio::task::spawn_blocking(|| store::fetch_agy_usage(false)).await;
+            tokio::spawn(async {
+                let _ = tokio::task::spawn_blocking(|| store::fetch_agy_usage(false)).await;
+            });
         }
         router::route(&r.text, r.skill.as_deref(), !r.images.is_empty(), store::used_pct)
     };
@@ -1005,11 +1110,47 @@ async fn stop_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json<
 }
 
 async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json<Value> {
+    providers::kill_session_proc(&r.session);
     store::set_conv_id(&r.session, None);
     store::clear_chat_msgs(&r.session);
+    if let Ok(mut m) = st.src_hashes.lock() {
+        m.remove(&r.session);
+    }
+    if let Ok(mut m) = st.mem_hashes.lock() {
+        m.remove(&r.session);
+    }
     store::add_log(&r.session, "🧹 Oturum bağlamı sıfırlandı", "m");
     st.emit("log", json!({}));
     Json(json!({ "cleared": true }))
+}
+
+#[derive(Deserialize)]
+struct MemoryQueryParams {
+    #[serde(default)]
+    q: String,
+    #[serde(default)]
+    active: Option<String>,
+}
+
+async fn memory_stats_ep() -> Json<Value> {
+    Json(memory_graph::get_stats())
+}
+
+async fn memory_reindex_ep() -> Json<Value> {
+    match tokio::task::spawn_blocking(memory_graph::sync_vault_index).await {
+        Ok(Ok(stats)) => Json(json!({ "ok": true, "stats": stats })),
+        Ok(Err(e)) => Json(json!({ "ok": false, "error": e })),
+        Err(e) => Json(json!({ "ok": false, "error": e.to_string() })),
+    }
+}
+
+async fn memory_query_ep(Query(p): Query<MemoryQueryParams>) -> Json<Value> {
+    let res = tokio::task::spawn_blocking(move || {
+        memory_graph::debug_query(&p.q, p.active.as_deref())
+    })
+    .await
+    .unwrap_or_else(|e| json!({ "ok": false, "error": e.to_string() }));
+    Json(res)
 }
 
 #[derive(Deserialize)]
@@ -1682,8 +1823,16 @@ fn is_port_listening() -> bool {
 
 fn build_router() -> Router {
     store::init();
+    memory_graph::init_memory_graph();
     std::thread::spawn(|| {
         let _ = store::fetch_agy_usage(true);
+    });
+    std::thread::spawn(|| {
+        let _ = memory_graph::sync_vault_index();
+    });
+    std::thread::spawn(|| loop {
+        std::thread::sleep(Duration::from_secs(60));
+        let _ = providers::reap_idle_procs(Duration::from_secs(600));
     });
 
     let (tx, _rx) = broadcast::channel::<Value>(256);
@@ -1691,6 +1840,8 @@ fn build_router() -> Router {
         tx,
         tasks: Arc::new(Mutex::new(HashMap::new())),
         steps: Arc::new(Mutex::new(HashMap::new())),
+        src_hashes: Arc::new(Mutex::new(HashMap::new())),
+        mem_hashes: Arc::new(Mutex::new(HashMap::new())),
         auth_needed: Arc::new(AtomicBool::new(false)),
         auth_running: Arc::new(AtomicBool::new(false)),
     };
@@ -1728,6 +1879,9 @@ fn build_router() -> Router {
         .route("/api/media/status", get(media_status_ep))
         .route("/api/media/cmd", post(media_cmd_ep))
         .route("/api/open", post(open_target_ep))
+        .route("/api/memory/stats", get(memory_stats_ep))
+        .route("/api/memory/reindex", post(memory_reindex_ep))
+        .route("/api/memory/query", get(memory_query_ep))
         .fallback_service(ServeDir::new(frontend_dir).append_index_html_on_directories(true))
         .layer(middleware::from_fn(no_cache_mw))
         .layer(CorsLayer::permissive())
@@ -1735,8 +1889,11 @@ fn build_router() -> Router {
 }
 
 fn main() {
-    disable_windows_power_throttling();
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--vault-guard") {
+        std::process::exit(vault_guard::run_cli_guard());
+    }
+    disable_windows_power_throttling();
     let daemon_only = args.iter().any(|a| a == "--daemon-only");
 
     if daemon_only {
@@ -1772,4 +1929,5 @@ fn main() {
     }
 
     run_native_window();
+    providers::kill_all_procs();
 }

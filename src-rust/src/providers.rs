@@ -1,5 +1,6 @@
 use crate::config::{
-    effective_effort, model_for, provider_spec, AGY_BIN, OLLAMA_URL, VAULT_DIR, WORKSPACE,
+    effective_effort, is_restricted_session, model_for, provider_spec, AGY_BIN, CLI_WORKSPACE,
+    DRIVE_DIR, OLLAMA_URL, VAULT_DIR, WORKSPACE,
 };
 use crate::router::CLOUD_CHAIN;
 use crate::store;
@@ -7,19 +8,53 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+type StepCallback = Arc<dyn Fn(String) + Send + Sync>;
+
+struct WarmAgyProc {
+    child: Child,
+    pid: u32,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    model: String,
+    effort: String,
+    mode: String,
+    restricted: bool,
+    conv_id: Option<String>,
+    last_used: Instant,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
+    auth_cb: Arc<Mutex<Option<StepCallback>>>,
+}
+
+impl WarmAgyProc {
+    fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    fn kill_now(mut self) {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &self.pid.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 static PROCS: Lazy<Mutex<HashMap<String, u32>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static WARM_PROCS: Lazy<Mutex<HashMap<String, WarmAgyProc>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static RESET_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)Resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?").unwrap());
 
@@ -55,15 +90,78 @@ pub async fn ollama_alive() -> bool {
 }
 
 pub fn kill_session_proc(session: &str) -> bool {
+    let warm = WARM_PROCS.lock().ok().and_then(|mut m| m.remove(session));
     let pid = PROCS.lock().ok().and_then(|mut m| m.remove(session));
+    let mut killed = false;
+    if let Some(wp) = warm {
+        wp.kill_now();
+        killed = true;
+    }
     if let Some(p) = pid {
         let _ = Command::new("taskkill")
             .args(["/F", "/T", "/PID", &p.to_string()])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
-        return true;
+        killed = true;
     }
-    false
+    killed
+}
+
+pub fn reap_idle_procs(max_idle: Duration) -> usize {
+    let mut stale: Vec<(String, WarmAgyProc)> = Vec::new();
+    if let Ok(mut map) = WARM_PROCS.lock() {
+        let keys: Vec<String> = map
+            .iter_mut()
+            .filter_map(|(k, wp)| {
+                if wp.last_used.elapsed() >= max_idle || !wp.is_alive() {
+                    Some(k.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for k in keys {
+            if let Some(wp) = map.remove(&k) {
+                stale.push((k, wp));
+            }
+        }
+    }
+    let count = stale.len();
+    for (sess, wp) in stale {
+        if let Ok(mut pm) = PROCS.lock() {
+            if pm.get(&sess).copied() == Some(wp.pid) {
+                pm.remove(&sess);
+            }
+        }
+        wp.kill_now();
+    }
+    count
+}
+
+pub fn kill_all_procs() {
+    let all_warm: Vec<WarmAgyProc> = WARM_PROCS
+        .lock()
+        .ok()
+        .map(|mut m| m.drain().map(|(_, v)| v).collect())
+        .unwrap_or_default();
+    for wp in all_warm {
+        wp.kill_now();
+    }
+    let all_pids: Vec<u32> = PROCS
+        .lock()
+        .ok()
+        .map(|mut m| m.drain().map(|(_, v)| v).collect())
+        .unwrap_or_default();
+    for p in all_pids {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &p.to_string()])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+}
+
+pub fn warm_pool_count() -> usize {
+    WARM_PROCS.lock().map(|m| m.len()).unwrap_or(0)
 }
 
 async fn mock_reply(provider: &str, prompt: &str, why: &str) -> (String, i64, bool, Option<String>) {
@@ -246,23 +344,18 @@ pub fn run_agy_login_sync() -> Result<(), String> {
     ))
 }
 
-fn run_agy_sync<F>(
+fn spawn_warm_proc(
     session: &str,
     model: &str,
     effort: &str,
-    prompt: &str,
     mode: &str,
+    restricted: bool,
     conv_id: Option<&str>,
-    on_step: &F,
-) -> Result<(String, i64, bool, Option<String>), String>
-where
-    F: Fn(String) + Send + Sync,
-{
+) -> Result<WarmAgyProc, String> {
     let mut cmd = agy_command();
-
     cmd.args([
-        "-p",
-        prompt,
+        "--input-format",
+        "stream-json",
         "--output-format",
         "stream-json",
         "--model",
@@ -271,15 +364,37 @@ where
         effort,
         "--print-timeout",
         "300s",
+        "-p=",
     ]);
 
-    if mode == "r" || mode == "y" {
+    if restricted {
+        // Hard security boundary is enforced by PreToolUse hook (agydesk-guard.exe, matcher="*").
+        // Use --dangerously-skip-permissions so whitelisted tools (incl. sandboxed PDF export)
+        // execute without headless print-mode interactive approval cancellation.
         cmd.arg("--dangerously-skip-permissions");
+        cmd.env("AGYDESK_SCOPE", "restricted");
+        if let Some(ref drive) = *DRIVE_DIR {
+            if drive.exists() {
+                cmd.arg("--add-dir").arg(drive);
+            }
+        }
+        cmd.current_dir(&*VAULT_DIR);
     } else {
-        cmd.args(["--mode", "accept-edits"]);
-    }
-    if *VAULT_DIR != *WORKSPACE && VAULT_DIR.exists() {
-        cmd.arg("--add-dir").arg(&*VAULT_DIR);
+        if mode == "r" || mode == "y" {
+            cmd.arg("--dangerously-skip-permissions");
+        } else {
+            cmd.args(["--mode", "accept-edits"]);
+        }
+        cmd.env("AGYDESK_SCOPE", "full");
+        if *VAULT_DIR != *CLI_WORKSPACE && VAULT_DIR.exists() {
+            cmd.arg("--add-dir").arg(&*VAULT_DIR);
+        }
+        if let Some(ref drive) = *DRIVE_DIR {
+            if drive.exists() {
+                cmd.arg("--add-dir").arg(drive);
+            }
+        }
+        cmd.current_dir(&*CLI_WORKSPACE);
     }
     if let Some(cid) = conv_id {
         if !cid.is_empty() {
@@ -287,56 +402,116 @@ where
         }
     }
 
-    cmd.current_dir(&*WORKSPACE)
-        .stdin(Stdio::null())
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW);
 
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
     let pid = child.id();
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "agy stdin alınamadı".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "agy stdout alınamadı".to_string())?;
+    let stderr_pipe = child.stderr.take();
+
     if let Ok(mut m) = PROCS.lock() {
         m.insert(session.to_string(), pid);
     }
 
-    let mut new_conv = conv_id.map(|s| s.to_string());
+    let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let auth_cb: Arc<Mutex<Option<StepCallback>>> = Arc::new(Mutex::new(None));
+
+    if let Some(se) = stderr_pipe {
+        let se_lines = Arc::clone(&stderr_lines);
+        let se_cb = Arc::clone(&auth_cb);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(se);
+            for line in reader.lines().flatten() {
+                let t = line.trim().to_string();
+                if t.is_empty() {
+                    continue;
+                }
+                if let Some(hint) = detect_auth_hint(&t) {
+                    if let Ok(guard) = se_cb.lock() {
+                        if let Some(ref cb) = *guard {
+                            cb(hint);
+                        }
+                    }
+                }
+                if let Ok(mut buf) = se_lines.lock() {
+                    if buf.len() >= 60 {
+                        buf.remove(0);
+                    }
+                    buf.push(t);
+                }
+            }
+        });
+    }
+
+    Ok(WarmAgyProc {
+        child,
+        pid,
+        stdin,
+        stdout: BufReader::new(stdout),
+        model: model.to_string(),
+        effort: effort.to_string(),
+        mode: mode.to_string(),
+        restricted,
+        conv_id: conv_id.map(|s| s.to_string()),
+        last_used: Instant::now(),
+        stderr_lines,
+        auth_cb,
+    })
+}
+
+fn run_turn_on_warm<F, FD>(
+    wp: &mut WarmAgyProc,
+    prompt: &str,
+    on_step: &F,
+    on_delta: &FD,
+) -> (Result<(String, i64, bool, Option<String>), String>, bool, bool)
+where
+    F: Fn(String) + Send + Sync + Clone + 'static,
+    FD: Fn(String) + Send + Sync,
+{
+    if let Ok(mut buf) = wp.stderr_lines.lock() {
+        buf.clear();
+    }
+    let step_arc: StepCallback = Arc::new(on_step.clone());
+    if let Ok(mut guard) = wp.auth_cb.lock() {
+        *guard = Some(Arc::clone(&step_arc));
+    }
+
+    let payload = json!({
+        "event": "user",
+        "message": { "content": prompt }
+    });
+    let write_res = writeln!(wp.stdin, "{}", payload).and_then(|_| wp.stdin.flush());
+    if let Err(e) = write_res {
+        if let Ok(mut guard) = wp.auth_cb.lock() {
+            *guard = None;
+        }
+        return (Err(format!("agy stdin hatası: {}", e)), false, true);
+    }
+
+    let mut new_conv = wp.conv_id.clone();
     let mut chunks: Vec<String> = Vec::new();
     let mut tool_logs: Vec<String> = Vec::new();
     let mut final_resp: Option<String> = None;
     let mut agy_err: Option<String> = None;
     let mut tokens: i64 = 0;
+    let mut last_step_label = String::new();
+    let mut got_result = false;
 
     let got_json = Arc::new(AtomicBool::new(false));
     let done_flag = Arc::new(AtomicBool::new(false));
-    let stderr_lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let stderr_pipe = child.stderr.take();
-    let stdout_pipe = child.stdout.take();
 
     std::thread::scope(|scope| {
-        if let Some(se) = stderr_pipe {
-            let se_lines = Arc::clone(&stderr_lines);
-            let se_got = Arc::clone(&got_json);
-            scope.spawn(move || {
-                let reader = BufReader::new(se);
-                for line in reader.lines().flatten() {
-                    let t = line.trim().to_string();
-                    if t.is_empty() {
-                        continue;
-                    }
-                    if let Some(hint) = detect_auth_hint(&t) {
-                        se_got.store(true, Ordering::Relaxed);
-                        on_step(hint);
-                    }
-                    if let Ok(mut buf) = se_lines.lock() {
-                        if buf.len() >= 60 {
-                            buf.remove(0);
-                        }
-                        buf.push(t);
-                    }
-                }
-            });
-        }
-
         let wd_got = Arc::clone(&got_json);
         let wd_done = Arc::clone(&done_flag);
         scope.spawn(move || {
@@ -353,138 +528,172 @@ where
             }
         });
 
-        if let Some(stdout) = stdout_pipe {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().flatten() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match wp.stdout.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Err(_) => break,
+                Ok(_) => {}
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !trimmed.starts_with('{') {
+                if let Some(hint) = detect_auth_hint(trimmed) {
+                    got_json.store(true, Ordering::Relaxed);
+                    on_step(hint);
                 }
-                if !trimmed.starts_with('{') {
-                    if let Some(hint) = detect_auth_hint(trimmed) {
-                        got_json.store(true, Ordering::Relaxed);
-                        on_step(hint);
+                continue;
+            }
+            let Ok(ev) = serde_json::from_str::<Value>(trimmed) else {
+                continue;
+            };
+            got_json.store(true, Ordering::Relaxed);
+            let etype = ev.get("event").and_then(|v| v.as_str()).unwrap_or("");
+            match etype {
+                "init" => {
+                    if let Some(cid) = ev.get("conversation_id").and_then(|v| v.as_str()) {
+                        new_conv = Some(cid.to_string());
                     }
-                    continue;
                 }
-                let Ok(ev) = serde_json::from_str::<Value>(trimmed) else {
-                    continue;
-                };
-                got_json.store(true, Ordering::Relaxed);
-                let etype = ev.get("event").and_then(|v| v.as_str()).unwrap_or("");
-                match etype {
-                    "init" => {
-                        if let Some(cid) = ev.get("conversation_id").and_then(|v| v.as_str()) {
+                "step_update" => {
+                    if let Some(su) = ev.get("step_update") {
+                        if let Some(cid) = su.get("conversation_id").and_then(|v| v.as_str()) {
                             new_conv = Some(cid.to_string());
                         }
-                    }
-                    "step_update" => {
-                        if let Some(su) = ev.get("step_update") {
-                            if let Some(cid) = su.get("conversation_id").and_then(|v| v.as_str()) {
-                                new_conv = Some(cid.to_string());
-                            }
-                            let stype = su.get("step_type").and_then(|v| v.as_str()).unwrap_or("");
-                            if let Some(delta) = su.get("text_delta").and_then(|v| v.as_str()) {
+                        let stype = su.get("step_type").and_then(|v| v.as_str()).unwrap_or("");
+                        let mut has_delta = false;
+                        if let Some(delta) = su.get("text_delta").and_then(|v| v.as_str()) {
+                            if !delta.is_empty() {
+                                has_delta = true;
                                 chunks.push(delta.to_string());
+                                on_delta(delta.to_string());
                             }
-                            if let Some(err) = su.get("error").and_then(|v| v.as_str()) {
-                                if !err.trim().is_empty() {
-                                    agy_err = Some(err.trim().to_string());
+                        }
+                        if let Some(err) = su.get("error").and_then(|v| v.as_str()) {
+                            if !err.trim().is_empty() {
+                                agy_err = Some(err.trim().to_string());
+                            }
+                        } else if let Some(terr) = su
+                            .get("tool_info")
+                            .and_then(|ti| ti.get("error"))
+                            .and_then(|e| e.get("message"))
+                            .and_then(|v| v.as_str())
+                        {
+                            let t = terr.trim();
+                            if !t.is_empty() {
+                                let msg = format!("⚠ Araç engellendi/hata: {}", t);
+                                if !tool_logs.contains(&msg) {
+                                    tool_logs.push(msg);
                                 }
                             }
-                            let mut tlabel = String::new();
-                            let pick_label = |tname: &str, obj: Option<&Value>| {
-                                let tsum = obj
-                                    .and_then(|o| {
-                                        o.get("toolSummary")
-                                            .or_else(|| o.get("Path"))
-                                            .and_then(|v| v.as_str())
-                                    })
-                                    .unwrap_or(tname)
-                                    .trim_matches('"');
-                                format!("🛠 {}: {}", tname, tsum)
-                            };
-                            if let Some(t0) = su
-                                .get("tool_calls")
-                                .and_then(|v| v.as_array())
-                                .and_then(|a| a.first())
-                            {
-                                let tname = t0.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
-                                tlabel = pick_label(tname, t0.get("args"));
-                            } else if let Some(tname) = su.get("tool_name").and_then(|v| v.as_str()) {
-                                tlabel = pick_label(
-                                    tname,
-                                    su.get("tool_info").and_then(|i| i.get("parameters")),
-                                );
+                        }
+                        let mut tlabel = String::new();
+                        let pick_label = |tname: &str, obj: Option<&Value>| {
+                            let tsum = obj
+                                .and_then(|o| {
+                                    o.get("toolSummary")
+                                        .or_else(|| o.get("Path"))
+                                        .and_then(|v| v.as_str())
+                                })
+                                .unwrap_or(tname)
+                                .trim_matches('"');
+                            format!("🛠 {}: {}", tname, tsum)
+                        };
+                        if let Some(t0) = su
+                            .get("tool_calls")
+                            .and_then(|v| v.as_array())
+                            .and_then(|a| a.first())
+                        {
+                            let tname = t0.get("name").and_then(|v| v.as_str()).unwrap_or("tool");
+                            tlabel = pick_label(tname, t0.get("args"));
+                        } else if let Some(tname) = su.get("tool_name").and_then(|v| v.as_str()) {
+                            tlabel = pick_label(
+                                tname,
+                                su.get("tool_info").and_then(|i| i.get("parameters")),
+                            );
+                        }
+                        if !tlabel.is_empty() {
+                            if !tool_logs.contains(&tlabel) {
+                                tool_logs.push(tlabel.clone());
                             }
-                            if !tlabel.is_empty() {
-                                if !tool_logs.contains(&tlabel) {
-                                    tool_logs.push(tlabel.clone());
-                                }
+                            if last_step_label != tlabel {
+                                last_step_label = tlabel.clone();
                                 on_step(tlabel);
-                            } else if !stype.is_empty() {
-                                let sidx = su.get("step_index").and_then(|v| v.as_i64()).unwrap_or(0);
-                                on_step(format!("agy ({}) · adım #{}: {}", model, sidx, stype));
                             }
-                            if let Some(tot) = su
-                                .get("usage")
-                                .and_then(|u| u.get("total_tokens"))
-                                .and_then(|v| v.as_i64())
-                            {
-                                tokens = tot;
+                        } else if !has_delta && !stype.is_empty() {
+                            let sidx = su.get("step_index").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let lbl = format!("agy ({}) · adım #{}: {}", wp.model, sidx, stype);
+                            if last_step_label != lbl {
+                                last_step_label = lbl.clone();
+                                on_step(lbl);
                             }
                         }
-                    }
-                    "result" => {
-                        if let Some(res) = ev.get("result") {
-                            if let Some(cid) = res.get("conversation_id").and_then(|v| v.as_str()) {
-                                new_conv = Some(cid.to_string());
-                            }
-                            if let Some(rtxt) = res.get("response").and_then(|v| v.as_str()) {
-                                final_resp = Some(rtxt.to_string());
-                            }
-                            if let Some(err) = res.get("error").and_then(|v| v.as_str()) {
-                                if !err.trim().is_empty() {
-                                    agy_err = Some(err.trim().to_string());
-                                }
-                            } else if res
-                                .get("status")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s != "SUCCESS")
-                                .unwrap_or(false)
-                            {
-                                let st = res.get("status").and_then(|v| v.as_str()).unwrap_or("ERROR");
-                                if agy_err.is_none() {
-                                    agy_err = Some(format!("agy durum: {}", st));
-                                }
-                            }
-                            if let Some(tot) = res
-                                .get("usage")
-                                .and_then(|u| u.get("total_tokens"))
-                                .and_then(|v| v.as_i64())
-                            {
-                                tokens = tot;
-                            }
+                        if let Some(tot) = su
+                            .get("usage")
+                            .and_then(|u| u.get("total_tokens"))
+                            .and_then(|v| v.as_i64())
+                        {
+                            tokens = tot;
                         }
                     }
-                    _ => {}
                 }
+                "result" => {
+                    got_result = true;
+                    if let Some(res) = ev.get("result") {
+                        if let Some(cid) = res.get("conversation_id").and_then(|v| v.as_str()) {
+                            new_conv = Some(cid.to_string());
+                        }
+                        if let Some(rtxt) = res.get("response").and_then(|v| v.as_str()) {
+                            final_resp = Some(rtxt.to_string());
+                        }
+                        if let Some(err) = res.get("error").and_then(|v| v.as_str()) {
+                            if !err.trim().is_empty() {
+                                agy_err = Some(err.trim().to_string());
+                            }
+                        } else if res
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s != "SUCCESS")
+                            .unwrap_or(false)
+                        {
+                            let st = res.get("status").and_then(|v| v.as_str()).unwrap_or("ERROR");
+                            if agy_err.is_none() {
+                                agy_err = Some(format!("agy durum: {}", st));
+                            }
+                        }
+                        if let Some(tot) = res
+                            .get("usage")
+                            .and_then(|u| u.get("total_tokens"))
+                            .and_then(|v| v.as_i64())
+                        {
+                            tokens = tot;
+                        }
+                    }
+                    break;
+                }
+                _ => {}
             }
         }
         done_flag.store(true, Ordering::Relaxed);
     });
 
-    let status = child.wait();
-    if let Ok(mut m) = PROCS.lock() {
-        m.remove(session);
+    if let Ok(mut guard) = wp.auth_cb.lock() {
+        *guard = None;
     }
+
+    let keep_alive = got_result && agy_err.is_none() && wp.is_alive();
+    wp.conv_id = new_conv.clone();
+    wp.last_used = Instant::now();
 
     let mut text = final_resp
         .unwrap_or_else(|| chunks.join(""))
         .trim()
         .to_string();
     if text.is_empty() && agy_err.is_some() {
-        return Err(agy_err.unwrap());
+        return (Err(agy_err.unwrap()), keep_alive, false);
     }
     if text.is_empty() && !tool_logs.is_empty() {
         let start = tool_logs.len().saturating_sub(8);
@@ -495,24 +704,93 @@ where
         text = format!("✓ Tamamlanan işlemler:\n{}", items.join("\n"));
     }
     if text.is_empty() {
-        let code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        let err_str = stderr_lines
+        let code = wp.child.try_wait().ok().flatten().and_then(|s| s.code()).unwrap_or(-1);
+        let err_str = wp
+            .stderr_lines
             .lock()
             .map(|v| v.join("\n"))
             .unwrap_or_default();
         let msg = err_str.trim();
-        if code != 0 || !msg.is_empty() {
-            return Err(if msg.is_empty() {
-                format!("agy çıkış kodu: {}", code)
-            } else {
-                msg.to_string()
-            });
+        if !got_result || code != 0 || !msg.is_empty() {
+            return (
+                Err(if msg.is_empty() {
+                    format!("agy çıkış kodu: {}", code)
+                } else {
+                    msg.to_string()
+                }),
+                false,
+                !got_result && chunks.is_empty(),
+            );
         }
     }
-    Ok((text, tokens, true, new_conv))
+    (Ok((text, tokens, true, new_conv)), keep_alive, false)
 }
 
-pub async fn complete<FS, FF>(
+fn run_agy_sync<F, FD>(
+    session: &str,
+    model: &str,
+    effort: &str,
+    prompt: &str,
+    mode: &str,
+    conv_id: Option<&str>,
+    on_step: &F,
+    on_delta: &FD,
+) -> Result<(String, i64, bool, Option<String>), String>
+where
+    F: Fn(String) + Send + Sync + Clone + 'static,
+    FD: Fn(String) + Send + Sync,
+{
+    let restricted = is_restricted_session(session);
+    let mut reused = false;
+
+    let mut wp = if let Some(mut existing) = WARM_PROCS.lock().ok().and_then(|mut m| m.remove(session)) {
+        let config_match = existing.model == model
+            && existing.effort == effort
+            && existing.mode == mode
+            && existing.restricted == restricted
+            && conv_id.is_some()
+            && existing.conv_id.as_deref() == conv_id;
+        if config_match && existing.is_alive() {
+            reused = true;
+            existing
+        } else {
+            existing.kill_now();
+            spawn_warm_proc(session, model, effort, mode, restricted, conv_id)?
+        }
+    } else {
+        spawn_warm_proc(session, model, effort, mode, restricted, conv_id)?
+    };
+
+    let (mut res, mut keep_alive, retryable) = run_turn_on_warm(&mut wp, prompt, on_step, on_delta);
+
+    // If a reused warm process died before producing output, transparently respawn once.
+    if reused && retryable && res.is_err() {
+        wp.kill_now();
+        wp = spawn_warm_proc(session, model, effort, mode, restricted, conv_id)?;
+        let (r2, ka2, _) = run_turn_on_warm(&mut wp, prompt, on_step, on_delta);
+        res = r2;
+        keep_alive = ka2;
+    }
+
+    if keep_alive {
+        if let Ok(mut m) = WARM_PROCS.lock() {
+            m.insert(session.to_string(), wp);
+        } else {
+            wp.kill_now();
+        }
+    } else {
+        if let Ok(mut pm) = PROCS.lock() {
+            if pm.get(session).copied() == Some(wp.pid) {
+                pm.remove(session);
+            }
+        }
+        wp.kill_now();
+    }
+
+    res
+}
+
+pub async fn complete<FS, FD, FF>(
     mut provider: String,
     prompt: String,
     image_paths: Vec<PathBuf>,
@@ -521,10 +799,12 @@ pub async fn complete<FS, FF>(
     effort: String,
     conv_id: Option<String>,
     on_step: FS,
+    on_delta: FD,
     mut on_failover: FF,
 ) -> Result<(String, i64, bool, Option<String>), String>
 where
     FS: Fn(String) + Send + Sync + Clone + 'static,
+    FD: Fn(String) + Send + Sync + Clone + 'static,
     FF: FnMut(String, String) + Send,
 {
     if provider == "local" {
@@ -564,6 +844,7 @@ where
         let mode_c = mode.clone();
         let conv_c = cur_conv.clone();
         let step_cb = on_step.clone();
+        let delta_cb = on_delta.clone();
 
         let res = tokio::task::spawn_blocking(move || {
             run_agy_sync(
@@ -574,6 +855,7 @@ where
                 &mode_c,
                 conv_c.as_deref(),
                 &step_cb,
+                &delta_cb,
             )
         })
         .await

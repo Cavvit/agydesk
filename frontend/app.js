@@ -3611,7 +3611,8 @@ function aiHeroHtml(){
 function aiBody(id){
   const s=ai[id];
   if(isEmptyAiWelcome(id)) return aiHeroHtml();
-  return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+
+  const live=(s.running&&s.streamText)?`<div class="msg-row a"><div class="msg a live-stream" data-sid="${escAttr(id)}">${escHtml(s.streamText)}</div></div>`:'';
+  return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+live+
     (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
 }
 function scrollChatToLastReply(c,s){
@@ -3639,7 +3640,7 @@ function renderSideAi(){
 function clearSideAi(){
   api('/api/clear',{session:'side_ai'}).catch(()=>{});
   ai.side_ai.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
-  ai.side_ai.running=false; ai.side_ai.pending=null; ai.side_ai.attachments=[];
+  ai.side_ai.running=false; ai.side_ai.streamText=''; ai.side_ai.pending=null; ai.side_ai.attachments=[];
   renderChatAttachments('side_ai');
   renderSideAi();
 }
@@ -3649,7 +3650,7 @@ function clearSrcAi(){
   delete chatScrollMap['studychat:'+sid];
   api('/api/clear',{session:sid}).catch(()=>{});
   s.msgs=[{w:'a',h:'🧹 Sohbet bağlamı sıfırlandı. Seçili kaynaklarınla yeni bir soru sorabilirsin.'}];
-  s.running=false; s.unread=false; s.pending=null; s.attachments=[];
+  s.running=false; s.streamText=''; s.unread=false; s.pending=null; s.attachments=[];
   renderChatAttachments(sid);
   renderStudyChatBody();
   renderTabs();
@@ -3900,7 +3901,7 @@ async function aiUndo(id){ const s=ai[id]; if(!s.checkpoints)return;
   try{ const r=await api('/api/undo',{session:id}); s.checkpoints=0; s.msgs.push({w:'a',h:`↶ ${r.undone} checkpoint geri alındı. İzlenen dosyalar önceki duruma döndü.`}); }
   catch(e){ s.msgs.push({w:'a',h:'⚠ Geri alma başarısız: '+e.message}); }
   aiRefresh(id); }
-async function aiStop(id){ const s=ai[id]; try{await api('/api/stop',{session:id});}catch(e){} s.pending=null; s.msgs=s.msgs.filter(m=>!m.ap); s.running=false; s.msgs.push({w:'a',h:'■ Durduruldu. Çalışan iş kesildi.'}); aiRefresh(id); }
+async function aiStop(id){ const s=ai[id]; try{await api('/api/stop',{session:id});}catch(e){} s.pending=null; s.msgs=s.msgs.filter(m=>!m.ap); s.running=false; s.streamText=''; s.msgs.push({w:'a',h:'■ Durduruldu. Çalışan iş kesildi.'}); aiRefresh(id); }
 function approve(id,yes){
   const s=ai[id],p=s.pending; if(!p)return;
   const alw=document.getElementById('alw-'+id); if(yes&&alw&&alw.checked){s.allow[p.risk]=true;}
@@ -4005,6 +4006,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     : getCheckedSources();
   s._scrollToLastReply=false;
   s.running=true;
+  s.streamText='';
   s.step='İstek gönderiliyor…';
   aiRefresh(id);
   let res;
@@ -4040,9 +4042,24 @@ function startEvents(){
   es.onmessage=e=>{
     const d=JSON.parse(e.data), s=ai[d.session];
     if(d.win_id&&d.win_id!==WIN_ID) return;
-    if(d.event==='step'&&s){s.step=d.step;aiRefresh(d.session);}
+    if(d.event==='quota'){ if(d.quota)applyQuota(d.quota); }
+    else if(d.event==='delta'&&s){
+      s.streamText=(s.streamText||'')+(d.delta||'');
+      const liveEls=document.querySelectorAll('.live-stream');
+      let hit=false;
+      liveEls.forEach(el=>{
+        if(el.dataset.sid!==d.session) return;
+        hit=true;
+        const sc=el.closest('#aichat, #chat, #scChat');
+        const atBottom=!sc||(sc.scrollHeight-sc.clientHeight-sc.scrollTop)<120;
+        el.textContent=s.streamText;
+        if(sc&&atBottom) sc.scrollTop=sc.scrollHeight;
+      });
+      if(!hit) aiRefresh(d.session);
+    }
+    else if(d.event==='step'&&s){s.step=d.step;aiRefresh(d.session);}
     else if(d.event==='done'&&s){
-      s.running=false; if(d.quota)applyQuota(d.quota);
+      s.running=false; s.streamText=''; if(d.quota)applyQuota(d.quota);
       linkifyAndOpen(d.reply);
       const r=d.route, c=r.provider==='local'?'l':'c', safe=mdToHtml(d.reply);
       const effChip=d.effort?`<span class="chip">${d.effort}</span>`:'';
@@ -4074,7 +4091,7 @@ function startEvents(){
       else if(d.status==='failed'){ toast('⚠ Oturum açılamadı: '+(d.error||'Zaman aşımı')); }
     }
     else if(d.event==='error'&&s){
-      s.running=false; if(d.quota)applyQuota(d.quota);
+      s.running=false; s.streamText=''; if(d.quota)applyQuota(d.quota);
       const errEsc=String(d.error).replace(/</g,'&lt;');
       if(d.code==='auth_required'){
         lastHealthData.auth_needed=true; renderHealthBar(lastHealthData);
@@ -9830,6 +9847,7 @@ function renderStudyChatBody(){
     h=`<div class="sc-hero"><div class="big">${escHtml(kName)}</div><div class="sub">${n} kaynak seçili · soru sor ya da sağdaki Studio'dan çıktı oluştur</div></div>`;
   }else{
     h=msgs.map(({x,i})=>renderMsgRowHtml(sid,x,i,true)).join('');
+    if(s.running&&s.streamText) h+=`<div class="sc-msg a live-stream" data-sid="${escAttr(sid)}">${escHtml(s.streamText)}</div>`;
     if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
@@ -10601,21 +10619,108 @@ const FONTS=[
 const TZ_MIN=0.8, TZ_MAX=1.8;
 let curFont=localStorage.getItem('agydesk_font')||'sans';
 let curTz=parseFloat(localStorage.getItem('agydesk_tz'))||1;
+let appliedTz=null;
 let fullW=localStorage.getItem('agydesk_fullw')==='1';
+const TZ_SCROLL_SEL='.main,.main .aichat,.main .sc-body,.main .pptx-stage,.main .img-studio';
+const TZ_BLK_SEL='p,h1,h2,h3,h4,h5,h6,li,tr,pre,blockquote,hr,.msg-row,.sc-msg,.out,.callout,.katex-display';
+let _tzSaveTimer=null;
+let _mainAnchor=null;
+let _mainAnchorTimer=null;
+function probeCenterAnchor(el){
+  const sh=el.scrollHeight, ch=el.clientHeight;
+  if(sh<=ch+4||el.scrollTop<=2) return null;
+  const r=el.getBoundingClientRect();
+  if(r.width<40||r.height<40) return null;
+  const midY=r.top+r.height*0.5;
+  const hit=document.elementFromPoint(r.left+r.width*0.5,midY);
+  let blk=null, offVp=0;
+  if(hit&&el.contains(hit)){
+    const cand=hit.closest(TZ_BLK_SEL)||hit;
+    if(cand&&cand!==el&&el.contains(cand)){
+      blk=cand;
+      offVp=cand.getBoundingClientRect().top-midY;
+    }
+  }
+  return {el,blk,offVp,ratio:(el.scrollTop+ch*0.5)/sh};
+}
+function applyCenterAnchor(s){
+  if(!s||!s.el||!s.el.isConnected) return;
+  const el=s.el, sh=el.scrollHeight, ch=el.clientHeight;
+  if(sh<=ch) return;
+  if(s.blk&&s.blk.isConnected&&el.contains(s.blk)){
+    const r=el.getBoundingClientRect();
+    const midY=r.top+r.height*0.5;
+    const newOffVp=s.blk.getBoundingClientRect().top-midY;
+    const scale=(el.classList.contains('main')||+curTz===1)?1:curTz;
+    const dy=(newOffVp-s.offVp)/scale;
+    if(Number.isFinite(dy)){
+      el.scrollTop=Math.max(0,Math.min(sh-ch,el.scrollTop+dy));
+      return;
+    }
+  }
+  el.scrollTop=Math.max(0,Math.min(sh-ch,s.ratio*sh-ch*0.5));
+}
+function captureTzCenters(){
+  const snaps=[];
+  document.querySelectorAll(TZ_SCROLL_SEL).forEach(el=>{
+    const s=probeCenterAnchor(el);
+    if(s) snaps.push(s);
+  });
+  return snaps;
+}
+function restoreTzCenters(snaps){
+  for(const s of snaps) applyCenterAnchor(s);
+}
+function initMainResizeAnchor(){
+  const main=document.querySelector('.main');
+  if(!main||main._tzResizeInit) return;
+  main._tzResizeInit=true;
+  let lastW=main.clientWidth;
+  const refreshAnchor=()=>{
+    _mainAnchorTimer=null;
+    _mainAnchor=probeCenterAnchor(main);
+  };
+  main.addEventListener('scroll',()=>{
+    if(!_mainAnchorTimer) _mainAnchorTimer=setTimeout(refreshAnchor,100);
+  },{passive:true});
+  if(typeof ResizeObserver!=='undefined'){
+    const ro=new ResizeObserver(()=>{
+      const w=main.clientWidth;
+      if(Math.abs(w-lastW)<2) return;
+      lastW=w;
+      if(_mainAnchor&&_mainAnchor.el===main){
+        applyCenterAnchor(_mainAnchor);
+      }
+    });
+    ro.observe(main);
+  }
+}
 function applyTextPrefs(persist=true){
   curTz=Math.min(TZ_MAX,Math.max(TZ_MIN,Math.round(curTz*20)/20));
+  const tzChanged=appliedTz!==null&&Math.abs(curTz-appliedTz)>1e-6;
+  const snaps=tzChanged?captureTzCenters():[];
   const f=FONTS.find(x=>x.id===curFont)||FONTS[0];
   document.documentElement.style.setProperty('--cfont',f.v);
   document.documentElement.style.setProperty('--tz',curTz);document.documentElement.classList.toggle('tz-on',+curTz!==1);
   document.body.classList.toggle('fw-full',fullW);
-  if(persist){
-    persistUiState({
-      agydesk_font:f.id,
-      agydesk_tz:String(curTz),
-      agydesk_fullw:fullW?'1':'0'
-    },true);
+  appliedTz=curTz;
+  if(snaps.length){
+    restoreTzCenters(snaps);
+    const main=document.querySelector('.main');
+    if(main) _mainAnchor=probeCenterAnchor(main);
   }
-  renderFontPop();
+  if(persist){
+    clearTimeout(_tzSaveTimer);
+    _tzSaveTimer=setTimeout(()=>{
+      persistUiState({
+        agydesk_font:f.id,
+        agydesk_tz:String(curTz),
+        agydesk_fullw:fullW?'1':'0'
+      },true);
+    },250);
+  }
+  const pop=$('#fpop');
+  if(pop&&pop.classList.contains('show')) renderFontPop();
 }
 function setFont(id){curFont=id;applyTextPrefs(true);}
 function setTz(v){curTz=+v;applyTextPrefs(true);}
@@ -10637,6 +10742,7 @@ function renderFontPop(){
 }
 function initTextPrefs(){
   applyTextPrefs(false);
+  initMainResizeAnchor();
   const b=$('#fontBtn');
   if(b) b.onclick=e=>{e.stopPropagation();$('#tpop')?.classList.remove('show');$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');renderFontPop();$('#fpop').classList.toggle('show');};
   const fp=$('#fpop'); if(fp) fp.addEventListener('click',e=>e.stopPropagation());

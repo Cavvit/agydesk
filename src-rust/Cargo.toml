@@ -8,6 +8,10 @@ description = "AgyDesk - EEM Calisma Istasyonu (Native Rust Engine & Desktop App
 name = "AgyDesk"
 path = "src/main.rs"
 
+[[bin]]
+name = "agydesk-guard"
+path = "src/guard_bin.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
