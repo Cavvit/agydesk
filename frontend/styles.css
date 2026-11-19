@@ -1429,3 +1429,7 @@ body.fw-full .doc.notion-doc{max-width:none;padding-left:64px;padding-right:64px
 .gmm-sub{grid-column:1;grid-row:2;font:10.8px/1.3 var(--sans);color:var(--mut);margin-top:1px}
 .gmm-chk{grid-column:2;grid-row:1/3;font:700 13px var(--sans);color:var(--cu);width:14px;text-align:center}
 @media print{.pomo-done-banner,.agy-ctx-menu,.notion-topbar,.nblock-gutter,.notion-tail,.notion-minimap,.notion-float-lock,.notion-bubble,.notion-slash,.notion-math-pop,.n-table-bar,.n-mb-hint,.msg-act,.sc-act,.gem-wrap,.gem-side-foot,.gem-plus-menu,.ai-slash,.ai-drawer,.aihead{display:none!important}.nblock{margin:0!important;padding:2px 0!important}.nblock-h1,.nblock-h2,.nblock-h3,.n-callout,.n-math-block,.n-table-wrap{break-inside:avoid}}
+
+/* ---- perf: gizli panelleri ve ekran disi mesajlari render disinda tut ---- */
+.app.no-right #right,.app.no-left #left{content-visibility:hidden;contain:strict}
+.msg-row:not(:last-child){content-visibility:auto;contain-intrinsic-size:auto 300px}

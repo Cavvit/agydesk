@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -240,9 +241,27 @@ async def set_ui_state_ep(req: Request):
     return {"ok": True}
 
 
+_VAULT_CACHE = {"t": 0.0, "v": None, "k": None}
+_VAULT_TTL = 3.0  # sn; harici (Obsidian vb.) degisiklikler en gec bu surede yansir
+
+
+def _vault_snapshot():
+    now = time.monotonic()
+    v = _VAULT_CACHE["v"]
+    key = str(vault.VAULT_DIR)
+    if v is not None and _VAULT_CACHE["k"] == key and now - _VAULT_CACHE["t"] < _VAULT_TTL:
+        return v
+    v = vault.scan_vault()
+    _VAULT_CACHE["v"] = v
+    _VAULT_CACHE["k"] = key
+    _VAULT_CACHE["t"] = time.monotonic()
+    return v
+
+
 @app.get("/api/vault")
 async def get_vault():
-    return vault.scan_vault()
+    # Tarama olay dongusunu bloklamasin (medya/pil/SSE istekleri takilmasin)
+    return await asyncio.to_thread(_vault_snapshot)
 
 
 @app.post("/api/kasa")
@@ -784,8 +803,12 @@ async def open_target_ep(r: OpenTargetReq):
 @app.middleware("http")
 async def _no_cache(request, call_next):
     resp = await call_next(request)
-    if not request.url.path.startswith("/api/"):
-        resp.headers["Cache-Control"] = "no-store"
+    path = request.url.path
+    if not path.startswith("/api/"):
+        # no-cache: ETag ile dogrula (degismediyse 304), her seferinde 570 KB indirme yok
+        resp.headers["Cache-Control"] = "no-cache"
+    elif request.method not in ("GET", "HEAD", "OPTIONS"):
+        _VAULT_CACHE["v"] = None  # yazma sonrasi kasa onbellegini gecersiz kil
     return resp
 
 app.mount("/", StaticFiles(directory=ROOT / "frontend", html=True), name="ui")
