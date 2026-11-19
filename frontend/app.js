@@ -724,6 +724,7 @@ const WIN_ID=(()=>{
 })();
 const TAB_STORE_KEY='agydesk_tabs_v1';
 const LAST_CLOSED_WIN_KEY='agydesk_last_closed_tabs_v1';
+const CLOSED_WINS_KEY='agydesk_closed_wins_v1';
 const NOTE_SCROLL_KEY='agydesk_note_scrolls_v1';
 const IMG_ROT_KEY='agydesk_img_rot_v1';
 const AI_META_KEY='agydesk_ai_meta_v1';
@@ -732,6 +733,7 @@ const UI_SYNC_KEYS=[
   'agydesk_theme',
   TAB_STORE_KEY,
   LAST_CLOSED_WIN_KEY,
+  CLOSED_WINS_KEY,
   CLOSED_TABS_KEY,
   NOTE_SCROLL_KEY,
   IMG_ROT_KEY,
@@ -922,6 +924,15 @@ function saveSessionTabs(isClosing=false){
     if(isClosing){
       try{ localStorage.setItem(LAST_CLOSED_WIN_KEY,raw); }catch(e){}
       persistUiState({[LAST_CLOSED_WIN_KEY]:raw},false);
+      try{
+        let lst=[]; try{ lst=JSON.parse(localStorage.getItem(CLOSED_WINS_KEY)||'[]'); }catch(e){}
+        if(!Array.isArray(lst)) lst=[];
+        lst=lst.filter(x=>x&&x.id!==TAB_DOCK_WIN_ID);
+        if(payload.openTabs.length) lst.unshift({id:TAB_DOCK_WIN_ID,ts:Date.now(),p:payload});
+        const out=JSON.stringify(lst.slice(0,3));
+        localStorage.setItem(CLOSED_WINS_KEY,out);
+        persistUiState({[CLOSED_WINS_KEY]:out},false);
+      }catch(e){}
     }
     if(!window.__IS_DETACHED_WIN){
       localStorage.setItem(TAB_STORE_KEY,raw);
@@ -967,6 +978,17 @@ function restoreSessionTabs(){
       }
       openTabs=[detachTab];
       active=detachTab;
+      const rs=handoff&&handoff.restore;
+      if(rs&&Array.isArray(rs.openTabs)){
+        const cl=[];
+        rs.openTabs.forEach(t=>{
+          if(typeof t!=='string'||!t||cl.includes(t)) return;
+          if(t.startsWith('blank:')){ const n=parseInt(t.slice(6),10); if(Number.isFinite(n)&&n>blankN) blankN=n; }
+          else if(t.startsWith('ai')&&t!=='side_ai'){ const n=parseInt(t.slice(2),10); if(Number.isFinite(n)&&n>aiN) aiN=n; if(!ai[t]) ai[t]={title:'Yeni Sohbet',msgs:[],sources:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; }
+          cl.push(t);
+        });
+        if(cl.length){ openTabs=cl; active=(typeof rs.active==='string'&&cl.includes(rs.active))?rs.active:cl[0]; if(typeof rs.currentSpace==='string'&&rs.currentSpace) currentSpace=rs.currentSpace; if(typeof rs.currentKasa==='string'&&rs.currentKasa) currentKasa=rs.currentKasa; }
+      }
       const targetMode=active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write')));
       layoutMode(targetMode);
       syncPdfSlotsWithTabs();
@@ -11812,6 +11834,7 @@ function initNoteContextMenu(){
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
 initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initAppBattery(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
+let _bootFresh=false; try{ _bootFresh=!sessionStorage.getItem(TAB_STORE_KEY)&&!new URLSearchParams(location.search).get('detach_tab'); }catch(e){}
 if(!restoreSessionTabs()){
   _restoringSession=true;
   setMode('kasalar');
@@ -11832,6 +11855,22 @@ document.addEventListener('visibilitychange',()=>{
     flushUiStateRemote(true);
   }
 });
+function spawnClosedWins(){
+  try{
+    if(!_bootFresh||window.__IS_DETACHED_WIN||!window.ipc||typeof window.ipc.postMessage!=='function') return;
+    let lst=[]; try{ lst=JSON.parse(localStorage.getItem(CLOSED_WINS_KEY)||'[]'); }catch(e){}
+    if(!Array.isArray(lst)||lst.length<2) return;
+    localStorage.setItem(CLOSED_WINS_KEY,'[]'); persistUiState({[CLOSED_WINS_KEY]:'[]'},false);
+    lst.slice(1,3).forEach((e,i)=>{
+      const p=e&&e.p; if(!p||!Array.isArray(p.openTabs)||!p.openTabs.length) return;
+      const token=Date.now().toString(36)+Math.random().toString(36).slice(2,7)+i;
+      localStorage.setItem('agy_detach_'+token,JSON.stringify({tabId:p.openTabs[0],currentSpace:p.currentSpace,currentKasa:p.currentKasa,restore:p}));
+      const off=(i+1)*40;
+      setTimeout(()=>window.ipc.postMessage('detach:'+JSON.stringify({tab:p.openTabs[0],token,x:60+off,y:50+off,w:Math.min(window.outerWidth||1180,1240),h:Math.min(window.outerHeight||780,820)})),700*(i+1));
+    });
+  }catch(e){}
+}
 hydrateUiState().finally(()=>{
+  spawnClosedWins();
   loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
 });
