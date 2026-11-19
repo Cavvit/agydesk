@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=ctx14">
+<link rel="stylesheet" href="/styles.css?v=ctx19">
 </head>
 <body>
 <div class="app" id="app">
@@ -43,10 +43,26 @@
 
   <!-- SOL -->
   <aside class="left" id="left"><div class="pane-in">
-    <div class="sswitch" id="spaceSwitchWrap" aria-label="Çalışma Alanları"></div>
+    <div class="sswitch-wrap">
+      <div class="agydrop" id="spaceSwitchWrap" aria-label="Çalışma Alanları">
+        <button type="button" class="agydrop-btn" id="spaceDropBtn" onclick="toggleAgyDrop('space',event)" title="Çalışma Alanı Seç" aria-haspopup="listbox" aria-expanded="false">
+          <span class="agydrop-ic" id="spaceDropIc">❖</span>
+          <span class="agydrop-lbl" id="spaceDropLbl">Tüm Alanlar</span>
+          <span class="agydrop-cnt" id="spaceDropCnt"></span>
+          <svg class="agydrop-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <button type="button" class="ph-btn" onclick="openSpaceModal()" title="Yeni Çalışma Alanı Oluştur">＋</button>
+      </div>
+    </div>
+    <div class="left-body" id="leftBody">
     <div class="kswitch" id="kasaSwitchWrap">
-      <span style="color:var(--cu);display:inline-flex;align-items:center">❖</span>
-      <select id="kasaSelect" onchange="selectKasaFilter(this.value)" title="Aktif Kasa Filtresi">
+      <button type="button" class="agydrop-btn" id="kasaDropBtn" onclick="toggleAgyDrop('kasa',event)" title="Aktif Kasa Filtresi" aria-haspopup="listbox" aria-expanded="false">
+        <span class="agydrop-ic" id="kasaDropIc" style="color:var(--cu)">❖</span>
+        <span class="agydrop-lbl" id="kasaDropLbl">Tüm Kasalar</span>
+        <span class="agydrop-cnt" id="kasaDropCnt"></span>
+        <svg class="agydrop-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <select id="kasaSelect" onchange="selectKasaFilter(this.value)" style="display:none" aria-hidden="true">
         <option value="all">Tüm Kasalar</option>
       </select>
       <button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Oluştur (Alt+N)">✎</button>
@@ -63,10 +79,11 @@
         <button class="ai-search-clr" id="aiSearchClr" style="display:none" onclick="clearAiSearch()" title="Aramayı temizle">✕</button>
       </div>
       <div class="sess" id="sessions" style="flex:none"></div>
-      <div class="ph" style="padding:10px 12px 4px;border-top:1px solid var(--line)"><span>Obsidian Notları</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan Belge / Fotoğraf Ekle">📎</button><button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Ekle (Alt+N)">＋</button></div></div>
+      <div class="ph" style="padding:10px 12px 4px;border-top:1px solid var(--line)"><span>AgyDesk Notları</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan Belge / Fotoğraf Ekle">📎</button><button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Ekle (Alt+N)">＋</button><button class="ph-btn" id="aiTreeTogBtn" onclick="toggleAllTreeFolders()" title="Tüm klasörleri aç/kapat">↕</button></div></div>
     </div>
     <div class="tree" id="tree"></div>
     <div id="sources" style="display:none"></div>
+    </div>
   </div></aside>
 
   <!-- ÜST ÇUBUK (OBSIDIAN TARZI ÇERÇEVESİZ BAŞLIK & SEKMELER) -->
@@ -80,6 +97,7 @@
     </div>
     <button class="zen-exit-btn" onclick="toggleZen()" title="Odak modundan çık (Ctrl+. veya Esc)">◐ Odaktan Çık</button>
     <div class="tabs" id="tabs"></div>
+    <button class="top-pomo" id="topPomo" style="display:none" onclick="togglePomoPop(event)" oncontextmenu="event.preventDefault();gcalPomoToggle()" title="Pomodoro · Tıkla: Mini kontrol · Sağ tık: Duraklat/Başlat"></button>
     <span class="top-bat" id="appBattery" style="display:none" title=""></span>
     <button class="top-clock" id="appClock" onclick="cycleClockFmt()" title="Yerel saat · Tarih veya saniye görünümü için tıkla"></button>
     <button class="pbtn" id="rightTog" onclick="togglePane('right')" title="Sağ paneli aç/kapat (Ctrl+J)">
@@ -184,7 +202,8 @@
 <!-- MODAL & MENÜ -->
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
+<div class="agydrop-pop" id="agyDropMenu" role="listbox"></div>
 
-<script src="/app.js?v=ctx15"></script>
+<script src="/app.js?v=ctx22"></script>
 </body>
 </html>

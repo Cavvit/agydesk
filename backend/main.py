@@ -85,6 +85,11 @@ class SessionReq(BaseModel):
     session: str
 
 
+class CompactReq(BaseModel):
+    session: str
+    recent_msgs: list[str] = []
+
+
 class NoteSaveReq(BaseModel):
     rel: str
     content: str
@@ -491,6 +496,13 @@ async def _job(r: RunReq, dec: router.Decision):
         img_ctx = vault.build_image_prompt_block(img_paths)
         user_text = "Eklenen görseli incele ve içeriğini açıkla." if (not r.text.strip() and img_paths) else r.text
         base_prompt = f"{src_ctx}{img_ctx}{user_text}"
+        if not conv_id:
+            compact_ctx = store.pop_compact_ctx(r.session)
+            if compact_ctx:
+                base_prompt = (
+                    f"[Önceki Sohbetin Sıkıştırılmış Özeti]\n{compact_ctx}\n\n"
+                    f"[Yeni Kullanıcı İsteği]\n{base_prompt}"
+                )
         prompt = f"{WS_HINT}{base_prompt}" if not conv_id else base_prompt
         log_text = f"[{len(img_paths)} görsel]" if (not r.text.strip() and img_paths) else r.text
 
@@ -607,10 +619,66 @@ async def stop(r: SessionReq):
 @app.post("/api/clear")
 async def clear_session(r: SessionReq):
     store.set_conv_id(r.session, None)
+    store.set_compact_ctx(r.session, None)
     store.clear_chat_msgs(r.session)
     store.add_log(r.session, "🧹 Oturum bağlamı sıfırlandı", "m")
     emit("log")
     return {"cleared": True}
+
+
+_COMPACT_PROMPT = (
+    "Bu sohbeti yeni ve temiz bir oturuma aktarmak için sıkıştırılmış teknik özet çıkar. "
+    "Sadece şunları kısa maddeler halinde yaz: "
+    "(1) Ana amaç ve çözülen konular, (2) Alınan kararlar ve değiştirilen dosya/sembol adları, "
+    "(3) Açık kalan işler veya önemli kısıtlar. Gereksiz sohbet cümlelerini atla."
+)
+
+
+@app.post("/api/compact")
+async def compact_session(r: CompactReq):
+    conv_id = store.get_conv_id(r.session)
+    if not conv_id:
+        recent = [m.strip() for m in r.recent_msgs if m and m.strip()][-5:]
+        summary = " · ".join(recent) if recent else "(henüz içerik yok)"
+        store.clear_chat_msgs(r.session)
+        return {
+            "compacted": True,
+            "real": False,
+            "summary": summary,
+            "label": "yerel özetleyici",
+            "tokens": 0,
+        }
+
+    dec = router.route("Bu konuşmayı özetle", "compact", store.used_pct, has_images=False)
+    try:
+        text, tokens, real, _ = await providers.complete(
+            dec.provider,
+            _COMPACT_PROMPT,
+            session=r.session,
+            mode="y",
+            effort="low",
+            conv_id=conv_id,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Bağlam sıkıştırma başarısız: {e}")
+
+    summary = (text or "").strip()
+    if not real or not summary:
+        raise HTTPException(502, "Modelden gerçek özet alınamadı; mevcut oturum korundu.")
+
+    store.record_usage(dec.provider, tokens, True)
+    store.set_conv_id(r.session, None)
+    store.set_compact_ctx(r.session, summary)
+    store.clear_chat_msgs(r.session)
+    store.add_log(r.session, f"🗜 Bağlam sıkıştırıldı ({dec.label})", "m")
+    emit("log")
+    return {
+        "compacted": True,
+        "real": True,
+        "summary": summary,
+        "label": dec.label,
+        "tokens": tokens,
+    }
 
 
 @app.post("/api/undo")

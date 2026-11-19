@@ -329,6 +329,33 @@ def set_conv_id(session: str, conv_id: str | None):
             )
 
 
+def get_compact_ctx(session: str) -> str | None:
+    key = f"compact_ctx:{session}"
+    with conn() as c:
+        r = c.execute("SELECT val FROM ui_state WHERE key=?", (key,)).fetchone()
+        return r["val"] if (r and r["val"]) else None
+
+
+def set_compact_ctx(session: str, summary: str | None):
+    key = f"compact_ctx:{session}"
+    with conn() as c:
+        if not summary:
+            c.execute("DELETE FROM ui_state WHERE key=?", (key,))
+        else:
+            c.execute(
+                "INSERT INTO ui_state(key,val,updated_ts) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET val=excluded.val, updated_ts=excluded.updated_ts",
+                (key, summary, time.time()),
+            )
+
+
+def pop_compact_ctx(session: str) -> str | None:
+    val = get_compact_ctx(session)
+    if val:
+        set_compact_ctx(session, None)
+    return val
+
+
 def record_usage(provider: str, tokens: int, real: bool):
     with conn() as c:
         c.execute("INSERT INTO usage(provider,ts,tokens,real) VALUES(?,?,?,?)",
