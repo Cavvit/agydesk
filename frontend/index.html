@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=ctx8">
+<link rel="stylesheet" href="/styles.css?v=ctx14">
 </head>
 <body>
 <div class="app" id="app">
@@ -55,8 +55,13 @@
     <input type="file" id="hiddenFileIn" multiple accept=".md,.txt,.html,.pdf,.docx,.doc,.pptx,.ppt,.xlsx,.xls,.csv,image/*" style="display:none" onchange="handleGlobalUpload(this.files)">
     <input type="file" id="chatImgIn" multiple accept="image/*" style="display:none" onchange="handleChatImgSelect(this.files)">
     <div class="ph"><span id="leftTitle">Kasalar</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="openNewKasaModal()" title="Yeni Açılır Kasa Oluştur">＋</button><button class="ph-btn" id="leftActBtn" onclick="leftHeaderAct()" title="Klasörleri daralt/genişlet">↕</button></div></div>
-    <div id="sessWrap" style="display:none;flex-direction:column;gap:4px;margin-bottom:4px">
-      <div class="newses" onclick="newSession()"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg><span>Yeni AI oturumu</span></div>
+    <div id="sessWrap" style="display:none;flex-direction:column;gap:5px;margin-bottom:4px">
+      <div class="newses" onclick="newSession()"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg><span>Yeni Sohbet</span></div>
+      <div class="ai-search-wrap ai-search-left">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="16.65" y2="16.65"/></svg>
+        <input id="aiSearchIn" class="ai-search" type="text" placeholder="Sohbetlerde ara…" autocomplete="off" oninput="onAiSearchInput(this.value)">
+        <button class="ai-search-clr" id="aiSearchClr" style="display:none" onclick="clearAiSearch()" title="Aramayı temizle">✕</button>
+      </div>
       <div class="sess" id="sessions" style="flex:none"></div>
       <div class="ph" style="padding:10px 12px 4px;border-top:1px solid var(--line)"><span>Obsidian Notları</span><div style="display:flex;gap:2px"><button class="ph-btn" onclick="triggerAssetUpload()" title="Dosyadan Belge / Fotoğraf Ekle">📎</button><button class="ph-btn" onclick="openNewNoteModal()" title="Yeni Not Ekle (Alt+N)">＋</button></div></div>
     </div>
@@ -180,6 +185,6 @@
 <div class="kmodal-bg" id="kasaModal"><div class="kmodal" id="kasaModalBox"></div></div>
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 
-<script src="/app.js?v=ctx8"></script>
+<script src="/app.js?v=ctx15"></script>
 </body>
 </html>

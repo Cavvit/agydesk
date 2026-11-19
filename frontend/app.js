@@ -726,6 +726,8 @@ const TAB_STORE_KEY='agydesk_tabs_v1';
 const LAST_CLOSED_WIN_KEY='agydesk_last_closed_tabs_v1';
 const NOTE_SCROLL_KEY='agydesk_note_scrolls_v1';
 const IMG_ROT_KEY='agydesk_img_rot_v1';
+const AI_META_KEY='agydesk_ai_meta_v1';
+const AI_DRAWER_KEY='agydesk_ai_drawer_v1';
 const UI_SYNC_KEYS=[
   'agydesk_theme',
   TAB_STORE_KEY,
@@ -733,6 +735,8 @@ const UI_SYNC_KEYS=[
   CLOSED_TABS_KEY,
   NOTE_SCROLL_KEY,
   IMG_ROT_KEY,
+  AI_META_KEY,
+  AI_DRAWER_KEY,
   'agydesk_font',
   'agydesk_tz',
   'agydesk_fullw',
@@ -957,7 +961,7 @@ function restoreSessionTabs(){
       }else if(detachTab.startsWith('ai')&&detachTab!=='side_ai'&&!ai[detachTab]){
         const num=parseInt(detachTab.slice(2),10);
         if(Number.isFinite(num)&&num>aiN) aiN=num;
-        ai[detachTab]={title:'AI Oturumu '+detachTab.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+        ai[detachTab]={title:'Yeni Sohbet',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
       }
       openTabs=[detachTab];
       active=detachTab;
@@ -999,7 +1003,7 @@ function restoreSessionTabs(){
         if(isFreshWindow) return; // Yeni pencere diger pencerenin AI oturumunu devralmasin
         const num=parseInt(t.slice(2),10);
         if(Number.isFinite(num)&&num>aiN) aiN=num;
-        if(!ai[t]) ai[t]={title:'AI Oturumu '+t.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+        if(!ai[t]) ai[t]={title:'Yeni Sohbet',msgs:[],sources:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
       }
       cleaned.push(t);
     });
@@ -2343,20 +2347,29 @@ function detachTabToWindow(id,screenX,screenY){
 }
 function closeTab(id,opts={}){
   if(!opts.skipWidthLock) maybeLockTabWidthsBeforeClose();
-  if(isAI(id)){ closeSession(id); return; }
   if(active===id) saveMainScroll();
   const idx=openTabs.indexOf(id);
   const pgTitle=(typeof pg==='function'?pg(id).t:id);
+  const closingAi=isAI(id);
+  const aiSnap=closingAi&&ai[id]?{...ai[id],running:false}:null;
   openTabs=openTabs.filter(t=>t!==id);
   unlockedNotes.delete(id);
   pruneUnlockedNotes();
   noteDomCache.delete(id);
+  if(closingAi&&ai[id]&&!hasUserMsgs(ai[id])&&!ai[id].running&&!ai[id].pending){
+    // Boş taslak oturumu bellekten temizle; kayıtlı sohbetlere ASLA dokunma!
+    delete ai[id];
+  }
   if(!openTabs.length)openTabs=['kasalar'];
-  if(active===id)active=openTabs[Math.min(idx,openTabs.length-1)];
+  if(active===id)active=openTabs[Math.min(Math.max(0,idx),openTabs.length-1)];
   if(active==='kasalar') layoutMode('kasalar');
+  else if(isAI(active)) layoutMode('ai');
+  else if(active==='cal') layoutMode('plan');
+  else if(active==='studychat') layoutMode('study');
+  else if(curMode==='ai') layoutMode('write');
   removePdfSlot(id);
-  if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'&&!isBlank(id)){
-    CLOSED_TABS.push({id,idx});
+  if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'&&!isBlank(id)&&(!closingAi||hasUserMsgs(aiSnap))){
+    CLOSED_TABS.push({id,idx,aiSnap:closingAi?aiSnap:null});
     if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
     saveClosedTabs();
     pushAppUndo({
@@ -2364,18 +2377,19 @@ function closeTab(id,opts={}){
       undo:async()=>{
         const ci=CLOSED_TABS.findLastIndex(x=>x&&x.id===id);
         if(ci!==-1){ CLOSED_TABS.splice(ci,1); saveClosedTabs(); }
+        if(closingAi&&!ai[id]&&aiSnap) ai[id]=aiSnap;
         if(!openTabs.includes(id)) openTabs.splice(Math.min(idx,openTabs.length),0,id);
         openPage(id,true);
       },
       redo:async()=>{ closeTab(id,{silentUndo:true}); }
     });
   }
-  renderTabs();syncTreeActiveHighlight();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
+  renderTabs();syncTreeActiveHighlight();renderSessions();if(typeof renderAiDrawer==='function')renderAiDrawer();renderMain();updateSideAiCtx();updateRightProps();syncPdfFocusMode();saveSessionTabs();
   scheduleRecordNavState();
 }
 const isAI=id=>id.startsWith('ai');
 pages.studychat={t:'Sohbet',i:'❖'};
-const pg=id=>isAI(id)?{t:(ai[id]?ai[id].title:id),i:'◆'}:(isBlank(id)?{t:'Yeni sekme',i:'📄'}:(pages[id]||{t:id,i:'📝'}));
+const pg=id=>isAI(id)?{t:(typeof getAiSessionTitle==='function'?getAiSessionTitle(id):(ai[id]?ai[id].title:'Yeni Sohbet')),i:'◆'}:(isBlank(id)?{t:'Yeni sekme',i:'📄'}:(pages[id]||{t:id,i:'📝'}));
 let draggedTabId=null, isTabDragging=false;
 function moveActiveTab(dir){
   const idx=openTabs.indexOf(active);
@@ -2629,82 +2643,344 @@ function ensureStudySession(sid){
 function getStudySess(){ return ensureStudySession(getStudySessId()); }
 const ai={
   src_ai:{title:'Kaynaklarla Çalış AI',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
-  ai1:{title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
+  ai1:{title:'Yeni Sohbet',msgs:[],sources:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]},
   side_ai:{title:'Sağ Panel AI',msgs:[{w:'a',h:'Merhaba! Açık olan notun ve sol panelde işaretli <b>Kasa kaynaklarının</b> gerçek içeriğine bağlıyım. Soru sorabilir, özet/sınav föyü isteyebilir veya sağdan bir <b>Skill</b> çalıştırabilirsin.'}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}
 };
 let aiN=1;
 function makeUniqueAiId(){
   return 'ai_'+WIN_ID.slice(-4)+'_'+Date.now().toString(36).slice(-4)+'_'+Math.random().toString(36).slice(2,5);
 }
-function ensureWindowAiSession(){
-  const existing=openTabs.find(isAI);
-  if(existing&&ai[existing]) return existing;
-  aiN++;
-  const id=makeUniqueAiId();
-  ai[id]={title:'AI Oturumu '+aiN,msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
-  return id;
+let aiMeta=(()=>{
+  try{
+    const raw=localStorage.getItem(AI_META_KEY);
+    const parsed=raw?JSON.parse(raw):null;
+    if(parsed&&typeof parsed==='object') return {lastActive:parsed.lastActive||null,items:(parsed.items&&typeof parsed.items==='object')?parsed.items:{}};
+  }catch(e){}
+  return {lastActive:null,items:{}};
+})();
+let aiDrawerOpen=(()=>{
+  try{
+    const v=localStorage.getItem(AI_DRAWER_KEY);
+    if(v==='0') return false;
+    if(v==='1') return true;
+  }catch(e){}
+  return window.innerWidth>=860;
+})();
+let aiSearchQuery='';
+let _aiDelConfirmId=null;
+let _aiDelConfirmTimer=null;
+let _aiRenamingId=null;
+
+function saveAiMeta(){
+  try{ persistUiState({[AI_META_KEY]:JSON.stringify(aiMeta)},false); }catch(e){}
 }
-function newSession(){
+function hasUserMsgs(s){
+  return Boolean(s&&Array.isArray(s.msgs)&&s.msgs.some(m=>m&&m.w==='me'));
+}
+function isSavedAiSession(id){
+  if(!id||isSideId(id)||!isAI(id)) return false;
+  const s=ai[id];
+  return Boolean(s&&(hasUserMsgs(s)||s.running||s.pending));
+}
+function stripHtmlCompact(html){
+  return String(html||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+}
+function deriveAiTitle(s){
+  if(!s||!Array.isArray(s.msgs)) return 'Yeni Sohbet';
+  const firstMe=s.msgs.find(m=>m&&m.w==='me');
+  if(!firstMe) return 'Yeni Sohbet';
+  const txt=stripHtmlCompact(firstMe.raw||firstMe.h).replace(/^Skill:\s*/i,'');
+  if(!txt) return 'Görsel analizi';
+  return txt.length>46?txt.slice(0,45).trimEnd()+'…':txt;
+}
+function getAiSessionTitle(id){
+  const m=aiMeta.items[id];
+  if(m&&m.customTitle&&m.title) return m.title;
+  const s=ai[id];
+  if(s&&hasUserMsgs(s)) return deriveAiTitle(s);
+  const raw=(m&&m.title)||(s&&s.title)||'';
+  if(!raw||raw.startsWith('AI Oturumu')) return 'Yeni Sohbet';
+  return raw;
+}
+function getAiSessionPreview(id){
+  const s=ai[id];
+  if(!s||!Array.isArray(s.msgs)||!s.msgs.length) return 'Henüz mesaj yok';
+  for(let i=s.msgs.length-1;i>=0;i--){
+    const msg=s.msgs[i];
+    if(!msg||msg.ap) continue;
+    const raw=msg.raw||stripHtmlCompact(msg.h);
+    if(!raw) continue;
+    if(i===0&&msg.w==='a'&&raw.includes('AgyDesk')) continue;
+    return raw.length>68?raw.slice(0,67).trimEnd()+'…':raw;
+  }
+  return 'Yeni sohbet başlat…';
+}
+function getAiMsgCount(id){
+  const s=ai[id];
+  if(!s||!Array.isArray(s.msgs)) return 0;
+  return s.msgs.filter((m,i)=>m&&!m.ap&&!(i===0&&m.w==='a'&&String(m.h||'').includes('AgyDesk'))).length;
+}
+function touchAiMeta(id,patch={}){
+  if(!id||isSideId(id)||!isAI(id)) return;
+  const prev=aiMeta.items[id]||{};
+  const next={...prev,...patch};
+  if(!next.updatedAt) next.updatedAt=Math.floor(Date.now()/1000);
+  if(!next.customTitle&&ai[id]&&hasUserMsgs(ai[id])) next.title=deriveAiTitle(ai[id]);
+  aiMeta.items[id]=next;
+  if(ai[id]&&next.title) ai[id].title=next.title;
+  if(patch.setLastActive!==false&&hasUserMsgs(ai[id])) aiMeta.lastActive=id;
+  saveAiMeta();
+}
+function getSortedAiSessions(includeActiveDraft=true){
+  const ids=Object.keys(ai).filter(id=>{
+    if(isSideId(id)||!isAI(id)) return false;
+    if(isSavedAiSession(id)) return true;
+    return includeActiveDraft&&id===active;
+  });
+  return ids.sort((a,b)=>{
+    const ma=aiMeta.items[a]||{}, mb=aiMeta.items[b]||{};
+    if(Boolean(ma.pinned)!==Boolean(mb.pinned)) return ma.pinned?-1:1;
+    const sa=ai[a]||{}, sb=ai[b]||{};
+    if(Boolean(sa.running)!==Boolean(sb.running)) return sa.running?-1:1;
+    return (mb.updatedAt||0)-(ma.updatedAt||0);
+  });
+}
+function pruneEmptyDraftSessions(keepId=null){
+  Object.keys(ai).forEach(k=>{
+    if(isSideId(k)||!isAI(k)||k===keepId||k===active||openTabs.includes(k)) return;
+    if(!hasUserMsgs(ai[k])&&!ai[k].running&&!ai[k].pending) delete ai[k];
+  });
+}
+function createFreshAiDraft(){
   aiN++;
   let id=makeUniqueAiId();
   while(ai[id]) id=makeUniqueAiId();
-  ai[id]={title:'AI Oturumu '+aiN,msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
-  openPage(id);
+  ai[id]={title:'Yeni Sohbet',msgs:[],sources:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+  return id;
 }
-function closeSession(id,ev){
-  if(ev) ev.stopPropagation();
-  if(isSideId(id)) return;
-  const s=ai[id];
-  if(s&&s.running) api('/api/stop',{session:id}).catch(()=>{});
-  api('/api/clear',{session:id}).catch(()=>{});
-  const tabIdx=openTabs.indexOf(id);
-  if(tabIdx!==-1){
-    CLOSED_TABS.push({id,idx:tabIdx,aiSnap:s?{...s,running:false}:null});
-    if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
-    saveClosedTabs();
+function ensureWindowAiSession(){
+  const existingOpen=openTabs.find(t=>isAI(t)&&ai[t]);
+  if(existingOpen) return existingOpen;
+  if(aiMeta.lastActive&&ai[aiMeta.lastActive]&&isSavedAiSession(aiMeta.lastActive)) return aiMeta.lastActive;
+  const saved=getSortedAiSessions(false);
+  if(saved.length) return saved[0];
+  return createFreshAiDraft();
+}
+function switchAiSession(id,opts={}){
+  if(!id||!ai[id]) return;
+  if(opts.newTab){
+    openPage(id,true,{newTab:true});
+    if(isSavedAiSession(id)){ aiMeta.lastActive=id; saveAiMeta(); }
+    return;
   }
-  openTabs=openTabs.filter(t=>t!==id);
-  unlockedNotes.delete(id);
-  pruneUnlockedNotes();
-  delete ai[id];
-  const realSessions=Object.keys(ai).filter(k=>!isSideId(k));
-  let _fb=realSessions[0];
-  if(!realSessions.length){
-    aiN=1;
-    _fb=makeUniqueAiId(); ai[_fb]={title:'AI Oturumu 1',msgs:[{w:'a',h:DEFAULT_AI_WELCOME}],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]};
+  if(openTabs.includes(id)){
+    openPage(id);
+    if(isSavedAiSession(id)){ aiMeta.lastActive=id; saveAiMeta(); }
+    return;
   }
-  if(!openTabs.length){
-    const fallback=(curMode==='ai')?_fb:'kasalar';
-    openTabs=[fallback];
-  }
-  if(active===id){
-    const nextInTabs=openTabs[Math.min(Math.max(0,tabIdx),openTabs.length-1)];
-    const remAI=openTabs.find(isAI)||_fb;
-    if(curMode==='ai'&&openTabs.some(isAI)){
-      active=openTabs.find(isAI);
-    }else if(curMode==='ai'&&!nextInTabs){
-      if(!openTabs.includes(remAI)) openTabs.push(remAI);
-      active=remAI;
-    }else{
-      active=nextInTabs||openTabs[openTabs.length-1];
-      if(!isAI(active)&&curMode==='ai') layoutMode(active==='kasalar'?'kasalar':'write');
+  const slotIdx=isAI(active)?openTabs.indexOf(active):openTabs.findIndex(isAI);
+  if(slotIdx!==-1){
+    const prevId=openTabs[slotIdx];
+    if(active===prevId) saveMainScroll();
+    openTabs[slotIdx]=id;
+    if(prevId!==id&&ai[prevId]&&!hasUserMsgs(ai[prevId])&&!ai[prevId].running&&!ai[prevId].pending){
+      delete ai[prevId];
     }
+    active=id;
+    if(isSavedAiSession(id)){ aiMeta.lastActive=id; saveAiMeta(); }
+    if(curMode!=='ai') layoutMode('ai');
+    renderTabs();
+    renderSessions();
+    renderAiDrawer();
+    renderMain();
+    updateSideAiCtx();
+    updateRightProps();
+    syncPdfFocusMode();
+    saveSessionTabs();
+    scheduleRecordNavState();
+    return;
   }
-  renderSessions(); renderTabs(); renderTree(); renderMain();
+  openPage(id);
+  if(isSavedAiSession(id)){ aiMeta.lastActive=id; saveAiMeta(); }
 }
-function renderSessions(){
-  const l=$('#sessions'); if(!l)return; l.innerHTML='';
-  Object.entries(ai).filter(([id])=>!isSideId(id)).forEach(([id,s])=>{
-    const d=document.createElement('div'); d.className='ses'+(id===active?' on':'');
-    d.title=s.title;
-    d.innerHTML=`<span class="sic">${svgIcon('◆')}</span><span class="st">${s.title}</span><small>${s.running?'<span class="spin"></span> çalışıyor':(s.unread?'● yeni sonuç':'boşta')}</small><button class="ses-x" title="Oturumu kapat" data-del="${id}">✕</button>`;
-    d.onclick=e=>{
-      if(e.target.closest('.ses-x')){ closeSession(id,e); return; }
-      openPage(id);
-    };
-    l.appendChild(d);
+function newSession(opts={}){
+  if(!opts.newTab&&isAI(active)&&ai[active]&&!hasUserMsgs(ai[active])&&!ai[active].running&&!ai[active].pending){
+    const inp=$('#aiInput');
+    if(inp) inp.focus();
+    toast('Zaten yeni bir sohbettesin');
+    return;
+  }
+  const id=createFreshAiDraft();
+  switchAiSession(id,opts);
+  requestAnimationFrame(()=>{ const inp=$('#aiInput'); if(inp) inp.focus(); });
+}
+function toggleAiDrawer(){
+  togglePane('left');
+  const btn=$('#aiDrawerTog');
+  if(btn) btn.classList.toggle('on',!app.classList.contains('no-left'));
+}
+function onAiSearchInput(val){
+  aiSearchQuery=String(val||'');
+  const clr=$('#aiSearchClr');
+  if(clr) clr.style.display=aiSearchQuery?'grid':'none';
+  renderSessions();
+}
+function clearAiSearch(){
+  aiSearchQuery='';
+  const inp=$('#aiSearchIn'), clr=$('#aiSearchClr');
+  if(inp){ inp.value=''; inp.focus(); }
+  if(clr) clr.style.display='none';
+  renderSessions();
+}
+function togglePinAiSession(id,ev){
+  if(ev) ev.stopPropagation();
+  if(!ai[id]) return;
+  const cur=Boolean(aiMeta.items[id]&&aiMeta.items[id].pinned);
+  touchAiMeta(id,{pinned:!cur,setLastActive:false});
+  renderAiDrawer();
+  renderSessions();
+  toast(cur?'Sabitleme kaldırıldı':'Sohbet sabitlendi');
+}
+function startRenameAiSession(id,ev){
+  if(ev) ev.stopPropagation();
+  if(!ai[id]) return;
+  _aiRenamingId=id;
+  renderAiDrawer();
+  requestAnimationFrame(()=>{
+    const inp=$(`.ai-rename-in[data-rid="${id}"]`);
+    if(inp){ inp.focus(); inp.select(); }
   });
 }
+function commitRenameAiSession(id,val){
+  _aiRenamingId=null;
+  const clean=String(val||'').trim().slice(0,80);
+  if(clean&&ai[id]){
+    touchAiMeta(id,{title:clean,customTitle:true,setLastActive:false});
+    ai[id].title=clean;
+  }
+  renderAiDrawer();
+  renderSessions();
+  renderTabs();
+  if(active===id) aiHead(id);
+}
+function deleteAiSession(id,ev){
+  if(ev) ev.stopPropagation();
+  if(isSideId(id)||!ai[id]) return;
+  if(_aiDelConfirmId!==id){
+    _aiDelConfirmId=id;
+    if(_aiDelConfirmTimer) clearTimeout(_aiDelConfirmTimer);
+    _aiDelConfirmTimer=setTimeout(()=>{ _aiDelConfirmId=null; renderAiDrawer(); renderSessions(); },3500);
+    renderAiDrawer();
+    renderSessions();
+    return;
+  }
+  _aiDelConfirmId=null;
+  if(_aiDelConfirmTimer){ clearTimeout(_aiDelConfirmTimer); _aiDelConfirmTimer=null; }
+  const s=ai[id];
+  const title=getAiSessionTitle(id);
+  if(s&&s.running) api('/api/stop',{session:id}).catch(()=>{});
+  api('/api/clear',{session:id}).catch(()=>{});
+  delete ai[id];
+  delete aiMeta.items[id];
+  if(aiMeta.lastActive===id) aiMeta.lastActive=null;
+  saveAiMeta();
+  const tabIdx=openTabs.indexOf(id);
+  const wasActive=(active===id);
+  if(tabIdx!==-1){
+    const nextSaved=getSortedAiSessions(false)[0];
+    if(wasActive&&curMode==='ai'){
+      const repl=nextSaved||createFreshAiDraft();
+      openTabs[tabIdx]=repl;
+      active=repl;
+    }else{
+      openTabs=openTabs.filter(t=>t!==id);
+      if(!openTabs.length) openTabs=['kasalar'];
+      if(wasActive) active=openTabs[Math.min(Math.max(0,tabIdx),openTabs.length-1)];
+    }
+  }
+  toast(`🗑 "${title}" kalıcı olarak silindi`);
+  renderAiDrawer(); renderSessions(); renderTabs(); renderMain(); saveSessionTabs();
+}
+function closeSession(id,ev){
+  // Geriye dönük uyumluluk: sekme kapatma sohbeti silmez, kalıcı silme deleteAiSession ile yapılır
+  deleteAiSession(id,ev);
+}
+function aiMatchesSearch(id,q){
+  if(!q) return true;
+  const lq=q.toLowerCase();
+  if(getAiSessionTitle(id).toLowerCase().includes(lq)) return true;
+  const s=ai[id];
+  if(!s||!Array.isArray(s.msgs)) return false;
+  return s.msgs.some(m=>m&&stripHtmlCompact(m.raw||m.h).toLowerCase().includes(lq));
+}
+function renderSessions(){
+  const list=$('#sessions');
+  const q=aiSearchQuery.trim();
+  const allSaved=getSortedAiSessions(false);
+  const headCnt=$('#aiHeadCount');
+  if(headCnt){
+    headCnt.textContent=allSaved.length?String(allSaved.length):'';
+    headCnt.style.display=allSaved.length?'':'none';
+  }
+  if(!list) return;
+  const filtered=allSaved.filter(id=>aiMatchesSearch(id,q));
+  const pinned=filtered.filter(id=>aiMeta.items[id]&&aiMeta.items[id].pinned);
+  const recent=filtered.filter(id=>!(aiMeta.items[id]&&aiMeta.items[id].pinned));
+  const renderItem=id=>{
+    const s=ai[id];
+    const meta=aiMeta.items[id]||{};
+    const isOn=(id===active);
+    const isDel=(_aiDelConfirmId===id);
+    const isRen=(_aiRenamingId===id);
+    const title=getAiSessionTitle(id);
+    const cnt=getAiMsgCount(id);
+    const rel=meta.updatedAt?fmtRelTime(meta.updatedAt):'';
+    const stateHtml=s.running?'<span class="spin"></span> yanıtlıyor':(s.unread?'<span class="ai-dot"></span> yeni yanıt':`${cnt} mesaj${rel?' · '+rel:''}`);
+    return `<div class="ai-hist-item${isOn?' on':''}${meta.pinned?' pinned':''}" data-sid="${escAttr(id)}">
+      <div class="ai-hist-top">
+        ${isRen
+          ? `<input class="ai-rename-in" data-rid="${escAttr(id)}" value="${escAttr(title)}" onkeydown="if(event.key==='Enter'){event.preventDefault();commitRenameAiSession('${escAttr(id)}',this.value)}else if(event.key==='Escape'){_aiRenamingId=null;renderSessions()}" onblur="commitRenameAiSession('${escAttr(id)}',this.value)" onclick="event.stopPropagation()">`
+          : `<span class="ai-hist-title" title="${escAttr(title)} · Tıkla: Geç · Ctrl+Tık: Yeni sekme">${meta.pinned?'<span class="ai-pin-ic">★</span>':''}${escHtml(title)}</span>`
+        }
+        <div class="ai-hist-acts${isDel?' show':''}">
+          <button class="ai-act-btn${meta.pinned?' on':''}" title="${meta.pinned?'Sabitlemeyi kaldır':'Sabitle'}" onclick="togglePinAiSession('${escAttr(id)}',event)">★</button>
+          <button class="ai-act-btn" title="Yeniden adlandır" onclick="startRenameAiSession('${escAttr(id)}',event)">✎</button>
+          <button class="ai-act-btn" title="Yeni sekmede aç" onclick="event.stopPropagation();switchAiSession('${escAttr(id)}',{newTab:true})">↗</button>
+          <button class="ai-act-btn ai-hist-del${isDel?' confirm':''}" title="${isDel?'Kalıcı silmek için tekrar tıkla':'Sohbeti kalıcı sil'}" onclick="deleteAiSession('${escAttr(id)}',event)">${isDel?'Sil?':'✕'}</button>
+        </div>
+      </div>
+      <div class="ai-hist-meta">${stateHtml}</div>
+    </div>`;
+  };
+  if(!filtered.length){
+    list.innerHTML=`<div class="ai-drawer-empty">${q?'Eşleşen sohbet yok.':'Kayıtlı sohbet yok.<br>Yazdığında otomatik kaydedilir.'}</div>`;
+    return;
+  }
+  let html='';
+  if(pinned.length){
+    html+=`<div class="ai-hist-sec">Sabitlenenler</div>`+pinned.map(renderItem).join('');
+  }
+  if(recent.length){
+    if(pinned.length) html+=`<div class="ai-hist-sec">Son Sohbetler</div>`;
+    html+=recent.map(renderItem).join('');
+  }
+  list.innerHTML=html;
+  list.querySelectorAll('.ai-hist-item').forEach(el=>{
+    const sid=el.dataset.sid;
+    el.onclick=e=>{
+      if(e.target.closest('.ai-hist-acts')||e.target.closest('.ai-rename-in')) return;
+      switchAiSession(sid,{newTab:e.ctrlKey||e.metaKey});
+    };
+    el.onauxclick=e=>{
+      if(e.button===1){ e.preventDefault(); switchAiSession(sid,{newTab:true}); }
+    };
+    el.ondblclick=e=>{
+      if(e.target.closest('.ai-hist-acts')||e.target.closest('.ai-rename-in')) return;
+      startRenameAiSession(sid,e);
+    };
+  });
+}
+function renderAiDrawer(){ renderSessions(); }
 const MSG_ICONS={
   copy:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
   check:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
@@ -2954,20 +3230,93 @@ function renderMsgRowHtml(sessId,x,i,isStudy){
   }
   return `<div class="${rowBase} a" data-sess="${sid}" data-idx="${i}"><div class="${clsAi}">${x.h}</div><div class="msg-act"><button type="button" class="mact" onclick="copyChatMsg('${sid}',${i},this)" title="Yanıtı kopyala">${MSG_ICONS.copy}</button><button type="button" class="mact" onclick="regenChatMsg('${sid}',${i})" title="Yanıtı yeniden üret">${MSG_ICONS.retry}</button><button type="button" class="mact" onclick="appendChatMsgToNote('${sid}',${i},this)" title="Açık olan nota ekle">${MSG_ICONS.note}</button><button type="button" class="mact" onclick="saveChatMsgToStudio('${sid}',${i},this)" title="Studio notlarına sabitle">${MSG_ICONS.pin}</button><button type="button" class="mact" onclick="speakChatMsg('${sid}',${i},this)" title="Sesli oku / durdur">${MSG_ICONS.speak}</button><button type="button" class="mact" onclick="printChatMsg('${sid}',${i})" title="A4 yazdır">${MSG_ICONS.print}</button></div></div>`;
 }
+function currentEffortLabel(){
+  const found=EFFORTS.find(e=>e.id===curEffort);
+  return found?found.label:'Low';
+}
+function syncUnifiedModelPills(){
+  const effTxt='Hydrogen · '+currentEffortLabel();
+  $$('.gem-unified-pill').forEach(btn=>{
+    const sid=btn.dataset.msess;
+    const m=(ai[sid]&&ai[sid].mode)||'y';
+    const eEl=btn.querySelector('.gem-u-eff');
+    const mEl=btn.querySelector('.gem-u-mode');
+    if(eEl) eEl.textContent=effTxt;
+    if(mEl){
+      mEl.textContent=(MODES[m]&&MODES[m].n)||'Akıllı';
+      mEl.className='gem-u-mode mode-'+m;
+    }
+    btn.title=`Düşünme: ${effTxt} · İzin: ${(MODES[m]&&MODES[m].d)||''} (Shift+Tab)`;
+  });
+}
+function closeGemModelMenu(){
+  const m=$('#gemModelMenu');
+  if(m) m.remove();
+}
+function toggleGemModelMenu(btn,sid,showMode=true){
+  const existing=$('#gemModelMenu');
+  if(existing){
+    const same=existing.dataset.sid===sid&&existing.dataset.sm===(showMode?'1':'0');
+    existing.remove();
+    if(same) return;
+  }
+  const curM=(ai[sid]&&ai[sid].mode)||'y';
+  const menu=document.createElement('div');
+  menu.id='gemModelMenu';
+  menu.className='gem-model-menu';
+  menu.dataset.sid=sid;
+  menu.dataset.sm=showMode?'1':'0';
+  menu.innerHTML=`
+    <div class="gmm-sec">Düşünme Derinliği</div>
+    ${EFFORTS.map(e=>`<button type="button" class="gmm-item${e.id===curEffort?' on':''}" onclick="setEffort('${e.id}');closeGemModelMenu()">
+      <span class="gmm-main">Hydrogen · ${e.label}</span>
+      <span class="gmm-sub">${e.tip}</span>
+      <span class="gmm-chk">${e.id===curEffort?'✓':''}</span>
+    </button>`).join('')}
+    ${showMode?`<div class="gmm-div"></div>
+    <div class="gmm-sec">İzin Modu</div>
+    ${Object.entries(MODES).map(([k,m])=>`<button type="button" class="gmm-item${k===curM?' on':''}" onclick="setMode2('${escAttr(sid)}','${k}');closeGemModelMenu()">
+      <span class="gmm-main mode-${k}">${m.n}</span>
+      <span class="gmm-sub">${m.d}</span>
+      <span class="gmm-chk mode-${k}">${k===curM?'✓':''}</span>
+    </button>`).join('')}`:''}
+  `;
+  document.body.appendChild(menu);
+  const r=btn.getBoundingClientRect();
+  const mw=menu.offsetWidth||256, mh=menu.offsetHeight||200;
+  const left=Math.max(10,Math.min(window.innerWidth-mw-10,r.right-mw));
+  const top=Math.max(10,r.top-mh-8);
+  menu.style.left=left+'px';
+  menu.style.top=top+'px';
+  setTimeout(()=>{
+    const onDoc=ev=>{
+      if(!menu.isConnected){ document.removeEventListener('mousedown',onDoc); document.removeEventListener('keydown',onKey); return; }
+      if(!menu.contains(ev.target)&&ev.target!==btn&&!btn.contains(ev.target)){ closeGemModelMenu(); document.removeEventListener('mousedown',onDoc); document.removeEventListener('keydown',onKey); }
+    };
+    const onKey=ev=>{
+      if(ev.key==='Escape'){ closeGemModelMenu(); document.removeEventListener('mousedown',onDoc); document.removeEventListener('keydown',onKey); }
+    };
+    document.addEventListener('mousedown',onDoc);
+    document.addEventListener('keydown',onKey);
+  },0);
+}
 function gemComposerHtml(opts){
   const sid=escAttr(opts.sessId);
   const cls='gem-box'+(opts.compact?' exp gem-compact':'');
   const att=opts.attachId?`<div class="chat-att-bar gem-att-bar" id="${escAttr(opts.attachId)}"></div>`:'';
+  const curM=(ai[opts.sessId]&&ai[opts.sessId].mode)||'y';
+  const showMode=Boolean(opts.showMode);
+  const effControl=`<button type="button" class="gem-eff-pill gem-unified-pill" data-msess="${sid}" data-showmode="${showMode?'1':'0'}" onclick="toggleGemModelMenu(this,'${sid}',${showMode})" title="${showMode?'Düşünme derinliği & İzin modu (Shift+Tab)':'Model & Düşünme Derinliği (Effort)'}"><span class="gem-u-eff">Hydrogen · ${currentEffortLabel()}</span>${showMode?`<span class="gem-u-sep">·</span><span class="gem-u-mode mode-${curM}">${(MODES[curM]&&MODES[curM].n)||'Akıllı'}</span>`:''}<svg class="gem-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>`;
   return `<div class="gem-wrap"><div class="${cls}" data-gem-sess="${sid}">
     ${att}
     <textarea id="${opts.inputId}" rows="1" placeholder="${escAttr(opts.placeholder||"AgyDesk'e sorun…")}"></textarea>
     <button class="gem-ic gem-plus" type="button" title="Ekle: Görsel, Skill veya Bağlam" onclick="toggleGemPlusMenu(this,'${sid}','${opts.inputId}')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
     <div class="gem-right">
-      <label class="gem-eff-pill" title="Model & Düşünme Derinliği (Effort)"><select class="eff-sel gem-eff" onchange="setEffort(this.value)">${effortOptionsHtml()}</select><svg class="gem-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></label>
+      ${effControl}
       <button class="gem-ic gem-mic" type="button" title="Sesle yaz (Türkçe dikte)" onclick="toggleGemMic(this,'${opts.inputId}')"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4M8 21h8"/></svg></button>
       <button class="gem-send" id="${opts.sendId}" type="button" title="Gönder (Enter)"><svg class="ic-up" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg><svg class="ic-stop" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg></button>
     </div>
-  </div>${opts.showDisclaimer?'<div class="gem-note">AgyDesk yerel not ve kaynaklarla çalışır · Ctrl+V görsel · / komut</div>':''}</div>`;
+  </div>${opts.showDisclaimer?`<div class="gem-note">${opts.disclaimer||'AgyDesk yerel not ve kaynaklarla çalışır · Ctrl+V görsel · / komut'}</div>`:''}</div>`;
 }
 let _gemMeasureCtx=null;
 function measureGemTextWidth(inputEl,text){
@@ -2985,7 +3334,7 @@ function syncGemBoxState(inputEl){
   if(!inputEl) return;
   const box=inputEl.closest('.gem-box'); if(!box) return;
   const sid=box.dataset.gemSess, s=ai[sid];
-  const hasAtt=Boolean(s&&s.attachments&&s.attachments.length);
+  const hasAtt=Boolean(s&&((s.attachments&&s.attachments.length)||(s.sources&&s.sources.length)));
   const val=inputEl.value||'';
   const hasVal=val.trim().length>0||hasAtt;
   const isCompact=box.classList.contains('gem-compact');
@@ -3076,8 +3425,21 @@ function toggleGemMic(btn,inputId){
   };
   try{ rec.start(); }catch(e){ btn.classList.remove('recording'); _gemRec=null; _gemRecBtn=null; }
 }
+function isEmptyAiWelcome(id){
+  if(!id||isSideId(id)||!isAI(id)) return false;
+  const s=ai[id];
+  return Boolean(s&&!hasUserMsgs(s)&&!s.running&&!s.pending);
+}
+function aiHeroHtml(){
+  return `<div class="ai-hero">
+    <div class="ai-hero-mark" aria-hidden="true">◆</div>
+    <h1 class="ai-hero-title">Tekrar hoş geldin, Cavit</h1>
+    <p class="ai-hero-sub">CLI çalışma alanı · Kaynak eklemek için sol panelden dosya sürükleyip bırak</p>
+  </div>`;
+}
 function aiBody(id){
   const s=ai[id];
+  if(isEmptyAiWelcome(id)) return aiHeroHtml();
   return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+
     (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
 }
@@ -3162,6 +3524,33 @@ async function attachChatImages(sessionId,fileList){
   }
   renderChatAttachments(sessionId);
 }
+function addChatSource(sessionId,item){
+  const s=ai[sessionId]; if(!s||!item) return;
+  if(!Array.isArray(s.sources)) s.sources=[];
+  const addOne=(rel,label)=>{
+    if(!rel) return false;
+    if(s.sources.some(x=>x.rel===rel)) return false;
+    s.sources.push({rel,label:label||rel.split('/').pop()});
+    return true;
+  };
+  let added=0;
+  if(item.kind==='file'&&item.rel){
+    if(addOne(item.rel,item.label)) added=1;
+  }else if((item.kind==='folder'||item.kind==='kasa')&&item.rel){
+    const prefix=item.rel.replace(/\/+$/,'')+'/';
+    const matches=Object.values(pages).filter(p=>p&&p.rel&&(p.rel===item.rel||p.rel.startsWith(prefix))).slice(0,25);
+    matches.forEach(p=>{ if(addOne(p.rel,p.t||p.rel.split('/').pop())) added++; });
+  }
+  renderChatAttachments(sessionId);
+  if(added>1) toast(`📎 ${added} kaynak sohbete eklendi`);
+  else if(added===1) toast(`📎 "${item.label||item.rel.split('/').pop()}" sohbete eklendi`);
+  else toast('Bu kaynak zaten sohbete bağlı');
+}
+function removeChatSource(sessionId,idx){
+  const s=ai[sessionId]; if(!s||!Array.isArray(s.sources)) return;
+  s.sources.splice(idx,1);
+  renderChatAttachments(sessionId);
+}
 function removeChatAttachment(sessionId,idx){
   const s=ai[sessionId]; if(!s||!s.attachments) return;
   s.attachments.splice(idx,1);
@@ -3170,12 +3559,20 @@ function removeChatAttachment(sessionId,idx){
 function renderChatAttachments(sessionId){
   const s=ai[sessionId];
   const list=(s&&s.attachments)||[];
-  const html=list.map((im,i)=>{
+  const srcs=(s&&Array.isArray(s.sources))?s.sources:[];
+  const imgHtml=list.map((im,i)=>{
     const sn=escAttr(im.name||'Görsel');
     const sr=escAttr(im.rel||'');
     const su=escAttr(im.url||('/api/raw/'+encodeURI(im.rel||'')));
     return `<div class="att-chip"><img src="${su}" alt="${sn}" title="Önizle: ${sn}" data-rel="${sr}" data-name="${sn}" onclick="openRightViewer(this.dataset.rel,this.dataset.name)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.name)"><button class="att-x" type="button" data-sess="${escAttr(sessionId)}" onclick="removeChatAttachment(this.dataset.sess,${i})" title="Görseli kaldır">✕</button></div>`;
   }).join('');
+  const srcHtml=srcs.map((sc,i)=>{
+    const nm=escHtml(sc.label||sc.rel.split('/').pop());
+    const sr=escAttr(sc.rel);
+    const sn=escAttr(sc.label||sc.rel.split('/').pop());
+    return `<div class="att-src-chip" title="Bağlı kaynak: ${sr} · Tıkla: Önizle"><span class="att-src-ic">📄</span><span class="att-src-nm" data-rel="${sr}" data-name="${sn}" onclick="openRightViewer(this.dataset.rel,this.dataset.name)">${nm}</span><button class="att-src-x" type="button" data-sess="${escAttr(sessionId)}" onclick="removeChatSource(this.dataset.sess,${i})" title="Kaynağı kaldır">✕</button></div>`;
+  }).join('');
+  const html=srcHtml+imgHtml;
   if(sessionId==='side_ai'){
     const a=$('#sideAttach'); if(a) a.innerHTML=html;
   }else if(isStudySessId(sessionId)){
@@ -3187,10 +3584,12 @@ function renderChatAttachments(sessionId){
 }
 function wireChatDrop(el,getSessionId,onSkill){
   if(!el) return;
-  const isSkillOk=ev=>onSkill&&!hasFiles(ev)&&ev.dataTransfer&&[...ev.dataTransfer.types].includes('text/plain');
+  const isTreeOk=ev=>(typeof isTreeDragging!=='undefined'&&isTreeDragging&&draggedTreeItem)||(ev.dataTransfer&&[...ev.dataTransfer.types].includes('application/x-agydesk-tree'));
+  const isSkillOk=ev=>onSkill&&!hasFiles(ev)&&!isTreeOk(ev)&&ev.dataTransfer&&[...ev.dataTransfer.types].includes('text/plain');
   ['dragenter','dragover'].forEach(evName=>el.addEventListener(evName,ev=>{
-    if(!hasFiles(ev)&&!isSkillOk(ev)) return;
+    if(!hasFiles(ev)&&!isTreeOk(ev)&&!isSkillOk(ev)) return;
     ev.preventDefault();
+    if(isTreeOk(ev)&&ev.dataTransfer) ev.dataTransfer.dropEffect='copy';
     el.classList.add('chat-hot');
     if(el.id==='aidrop') el.classList.add('hot');
   }));
@@ -3201,11 +3600,20 @@ function wireChatDrop(el,getSessionId,onSkill){
   });
   el.addEventListener('drop',ev=>{
     el.classList.remove('chat-hot','hot');
+    if(isTreeOk(ev)){
+      ev.preventDefault(); ev.stopPropagation();
+      let item=draggedTreeItem;
+      if(!item&&ev.dataTransfer){
+        try{ const raw=ev.dataTransfer.getData('application/x-agydesk-tree'); if(raw) item=JSON.parse(raw); }catch(e){}
+      }
+      if(item) addChatSource(getSessionId(),item);
+      return;
+    }
     if(hasFiles(ev)){
       ev.preventDefault(); ev.stopPropagation();
       const imgs=[...(ev.dataTransfer.files||[])].filter(isChatImageFile);
       if(imgs.length) attachChatImages(getSessionId(),imgs);
-      else toast('Sohbete yalnızca görsel dosyaları bırakılabilir (notlara belge eklemek için 📎 kullan)');
+      else toast('Sohbete görsel veya sol panelden kasa dosyası bırakabilirsin');
       return;
     }
     if(isSkillOk(ev)){
@@ -3236,9 +3644,13 @@ function runMermaid(sel,force=false){
 function aiRefresh(id){
   if(isStudySessId(id)){ if(id===getStudySessId()) renderStudyChatBody(); renderTabs(); return; }
   if(id==='side_ai'){ renderSideAi(); renderTabs(); return; }
-  if(active===id&&$('#aichat')){const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);if(!scrollChatToLastReply(c,ai[id])) c.scrollTop=c.scrollHeight;saveChatScroll(id);aiHead(id);runMermaid('#aichat .mermaid');}
+  if(active===id&&$('#aichat')){
+    const mainEl=$('#aiMain');
+    if(mainEl) mainEl.classList.toggle('ai-empty',isEmptyAiWelcome(id));
+    const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);if(!scrollChatToLastReply(c,ai[id])) c.scrollTop=c.scrollHeight;saveChatScroll(id);aiHead(id);runMermaid('#aichat .mermaid');
+  }
   syncAllGemBoxes();
-  renderTabs(); renderSessions();
+  renderTabs(); renderSessions(); renderAiDrawer();
 }
 /* ---------- İzin modları ---------- */
 const MODES={g:{n:'Onaylı',i:'🟢',d:'Her yazma/silme/komut için sorar'},y:{n:'Akıllı',i:'🟡',d:'Güvenli işleri sormadan yapar, riskli işte durur'},r:{n:'Tam otomatik',i:'🔴',d:'Hiçbir şey sormaz (agya)'}};
@@ -3272,6 +3684,7 @@ function syncEffortSelects(){
     if(!el.options.length) el.innerHTML=effortOptionsHtml();
     el.value=curEffort;
   });
+  syncUnifiedModelPills();
 }
 function setEffort(val){
   if(!EFFORTS.some(e=>e.id===val)) return;
@@ -3279,14 +3692,29 @@ function setEffort(val){
   persistUiState({agydesk_effort:val});
   syncEffortSelects();
 }
-function setMode2(id,m){ ai[id].mode=m; logAct(id,`İzin modu → ${MODES[m].i} ${MODES[m].n}`,'m'); aiHead(id); renderTabs(); }
+function setMode2(id,m){
+  if(!ai[id]||!MODES[m]) return;
+  ai[id].mode=m;
+  logAct(id,`İzin modu → ${MODES[m].n}`,'m');
+  syncUnifiedModelPills();
+  aiHead(id);
+  renderTabs();
+}
 function cycleMode(id){ const o=['g','y','r']; setMode2(id,o[(o.indexOf(ai[id].mode)+1)%3]); }
 function aiHead(id){
-  const h=$('#aihead'); if(!h)return; const s=ai[id];
-  h.innerHTML=`<div class="seg">${Object.entries(MODES).map(([k,m])=>`<button class="${s.mode===k?'on '+k:''}" onclick="setMode2('${id}','${k}')" title="${m.d}">${m.i} ${m.n}</button>`).join('')}</div>
-   <span class="mdesc">${MODES[s.mode].d}</span><span style="flex:1"></span>
-   <button class="hb" ${s.checkpoints?'':'disabled'} onclick="aiUndo('${id}')">↶ Geri al (${s.checkpoints})</button>
-   <button class="hb stop" ${s.running||s.pending?'':'disabled'} onclick="aiStop('${id}')">■ Dur</button>`;
+  const h=$('#aihead'); if(!h)return; const s=ai[id]; if(!s) return;
+  const savedCnt=getSortedAiSessions(false).length;
+  const title=getAiSessionTitle(id);
+  const leftOpen=!app.classList.contains('no-left');
+  h.innerHTML=`<button class="hb ai-drawer-tog${leftOpen?' on':''}" id="aiDrawerTog" onclick="toggleAiDrawer()" title="Sol paneli (sohbetler & notlar) aç/kapat (Ctrl+B)">
+     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+     <span>Sohbetler</span>${savedCnt?`<span class="ai-cnt-pill" id="aiHeadCount">${savedCnt}</span>`:`<span class="ai-cnt-pill" id="aiHeadCount" style="display:none"></span>`}
+   </button>
+   <button class="ai-title-btn" onclick="if(app.classList.contains('no-left'))toggleAiDrawer();startRenameAiSession('${escAttr(id)}',event)" title="Sohbet başlığını düzenle">${escHtml(title)}</button>
+   <span style="flex:1"></span>
+   ${s.checkpoints?`<button class="hb" onclick="aiUndo('${id}')">↶ Geri al (${s.checkpoints})</button>`:''}
+   ${(s.running||s.pending)?`<button class="hb stop" onclick="aiStop('${id}')">■ Dur</button>`:''}
+   <button class="hb" onclick="newSession()" title="Yeni sohbet başlat">＋ Yeni</button>`;
 }
 async function aiUndo(id){ const s=ai[id]; if(!s.checkpoints)return;
   try{ const r=await api('/api/undo',{session:id}); s.checkpoints=0; s.msgs.push({w:'a',h:`↶ ${r.undone} checkpoint geri alındı. İzlenen dosyalar önceki duruma döndü.`}); }
@@ -3302,14 +3730,20 @@ function approve(id,yes){
 }
 const chatDrafts={};
 function renderAI(m){
-  const s=ai[active]; s.unread=false;
+  const s=ai[active]; if(!s) return; s.unread=false;
   const prevInp=$('#aiInput');
   if(prevInp&&prevInp.dataset&&prevInp.dataset.sessId&&prevInp.value) chatDrafts[prevInp.dataset.sessId]=prevInp.value;
   m.scrollTop=0;
-  m.innerHTML=`<div class="aiwrap"><div class="aihead" id="aihead"></div><div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
-   <div class="aiin" id="aidrop"><div class="col">
-   ${gemComposerHtml({sessId:active,inputId:'aiInput',sendId:'aiSend',attachId:'aiAttach',placeholder:"AgyDesk'e sorun…",compact:false,showDisclaimer:true})}</div></div></div>`;
+  m.innerHTML=`<div class="aiwrap ai-shell">
+    <div class="ai-main${isEmptyAiWelcome(active)?' ai-empty':''}" id="aiMain">
+      <div class="aihead" id="aihead"></div>
+      <div class="aichat" id="aichat"><div class="col">${aiBody(active)}</div></div>
+      <div class="aiin" id="aidrop"><div class="col">
+      ${gemComposerHtml({sessId:active,inputId:'aiInput',sendId:'aiSend',attachId:'aiAttach',placeholder:"AgyDesk'e sorun…",compact:false,showMode:true,showDisclaimer:true,disclaimer:'Sadece sol panelden sürüklediğin kaynaklar bağlanır · Ctrl+V görsel · / komut'})}</div></div>
+    </div>
+  </div>`;
   aiHead(active);
+  renderSessions();
   const inp=$('#aiInput'),go=()=>{
     const cur=ai[active];
     if(cur&&(cur.running||cur.pending)){ aiStop(active); return; }
@@ -3377,11 +3811,18 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.msgs.push({w:'me',h:msgHtml,raw:rawText});
     api('/api/chats',{session:id,w:'me',h:msgHtml}).catch(()=>{});
   }
-  if(!isSideId(id)&&s.title.startsWith('AI Oturumu')){
-    const ttl=(rawText||(imgs[0]&&imgs[0].name)||'Görsel analizi').replace(/^Skill: /,'');
-    s.title=ttl.slice(0,22);
+  if(!isSideId(id)){
+    const meta=aiMeta.items[id];
+    if(!(meta&&meta.customTitle)&&(s.title==='Yeni Sohbet'||s.title.startsWith('AI Oturumu'))){
+      s.title=deriveAiTitle(s);
+    }
+    touchAiMeta(id,{updatedAt:Math.floor(Date.now()/1000)});
   }
-  const actNote=String(active).startsWith('note:')?active.slice(5):null;
+  const isAgyCli=!isSideId(id);
+  const actNote=isAgyCli?null:(String(active).startsWith('note:')?active.slice(5):null);
+  const reqSources=isAgyCli
+    ? (Array.isArray(s.sources)?s.sources.map(x=>x.rel).filter(Boolean):[])
+    : getCheckedSources();
   s._scrollToLastReply=false;
   s.running=true;
   s.step='İstek gönderiliyor…';
@@ -3397,7 +3838,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
       effort:curEffort,
       allow:s.allow,
       approved:!!ok,
-      sources:getCheckedSources(),
+      sources:reqSources,
       active_note:actNote,
       force_provider:(extraOpts&&extraOpts.force_provider)||null,
       win_id:WIN_ID
@@ -3433,6 +3874,7 @@ function startEvents(){
       s._scrollToLastReply=true;
       if(isStudySessId(d.session)&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe,getStudyKasaKey(d.session)); studioPendingTitle=null; }
       api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
+      if(!isSideId(d.session)&&isAI(d.session)) touchAiMeta(d.session,{updatedAt:Math.floor(Date.now()/1000),setLastActive:d.session===active});
       if(d.session==='side_ai' && $('#outs')){
         const outBox=document.createElement('div'); outBox.className='out';
         outBox.innerHTML=`<div class="oh"><span>◆ AI Çıktısı · ${r.label}</span><span><button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="appendReplyToNote(this)" data-md="${encodeURIComponent(d.reply)}">📝 Nota Ekle</button> <button class="hb" style="padding:1px 7px;font-size:10.5px" onclick="window.print()">🖨 Canon A4 Yazdır</button></span></div><div class="ob">${safe}</div>`;
@@ -3486,10 +3928,12 @@ async function loadChats(){
     const all=await api('/api/chats');
     let changed=false;
     let activeChanged=false;
-    Object.entries(all).forEach(([sid,msgs])=>{
+    const nowSec=Math.floor(Date.now()/1000);
+    const entries=Object.entries(all);
+    entries.forEach(([sid,msgs],idx)=>{
       if(!ai[sid]){
         if(isStudySessId(sid)){ ensureStudySession(sid); changed=true; }
-        else{ aiN++; ai[sid]={title:'AI Oturumu '+sid.replace('ai',''),msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; changed=true; }
+        else{ aiN++; ai[sid]={title:'Yeni Sohbet',msgs:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; changed=true; }
       }
       if(ai[sid].running||ai[sid].pending) return;
       if(msgs&&msgs.length){
@@ -3503,17 +3947,21 @@ async function loadChats(){
           if(sid===active) activeChanged=true;
         }
         if(!isSideId(sid)){
-          const firstMe=msgs.find(m=>m.w==='me');
-          if(firstMe){
-            const stripped=firstMe.h.replace(/<[^>]+>/g,'').trim();
-            const nextTitle=(stripped||'Görsel analizi').slice(0,22);
-            if(ai[sid].title!==nextTitle){ ai[sid].title=nextTitle; changed=true; }
+          const meta=aiMeta.items[sid]||{};
+          if(!meta.updatedAt){
+            aiMeta.items[sid]={...meta,updatedAt:nowSec-(entries.length-idx)*60};
           }
+          const nextTitle=getAiSessionTitle(sid);
+          if(ai[sid].title!==nextTitle){ ai[sid].title=nextTitle; changed=true; }
         }
       }
     });
+    if(ai.ai1&&!hasUserMsgs(ai.ai1)&&!openTabs.includes('ai1')&&active!=='ai1'&&getSortedAiSessions(false).length){
+      delete ai.ai1;
+      changed=true;
+    }
     if(!changed) return;
-    renderSessions(); renderTabs(); renderSideAi();
+    renderSessions(); renderAiDrawer(); renderTabs(); renderSideAi();
     if(isAI(active)&&activeChanged){
       if($('#aichat')) aiRefresh(active);
       else renderMain();
@@ -9353,7 +9801,7 @@ function layoutMode(m){
   if(m==='write'){app.classList.toggle('no-left',!!writeNoLeft);app.classList.toggle('no-right',!!writeNoRight);show(1,0,0,'Kasa Notları');}
   if(m==='study'){app.classList.remove('no-left','no-right');show(0,1,0,'Kaynaklar');renderStudio();rtab('studio');}
   if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
-  if(m==='ai'){app.classList.add('no-left','no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
+  if(m==='ai'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
   syncPaneBtns();
   saveSessionTabs();
   scheduleRecordNavState();
@@ -10808,6 +11256,18 @@ async function hydrateUiState(){
         const saved=JSON.parse(srv.agydesk_rail);
         if(Array.isArray(saved)) applyRailOrder(saved);
       }catch(e){}
+    }
+    if(typeof srv[AI_META_KEY]==='string'){
+      try{
+        const am=JSON.parse(srv[AI_META_KEY]);
+        if(am&&typeof am==='object'){
+          if(am.lastActive) aiMeta.lastActive=am.lastActive;
+          if(am.items&&typeof am.items==='object') aiMeta.items={...aiMeta.items,...am.items};
+        }
+      }catch(e){}
+    }
+    if(typeof srv[AI_DRAWER_KEY]==='string'){
+      aiDrawerOpen=srv[AI_DRAWER_KEY]==='1';
     }
     if(typeof srv[CLOSED_TABS_KEY]==='string'&&!CLOSED_TABS.length){
       try{
