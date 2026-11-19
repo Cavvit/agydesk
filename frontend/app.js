@@ -917,7 +917,8 @@ function saveSessionTabs(isClosing=false){
       studyNoRight:typeof studyNoRight==='boolean'?studyNoRight:false,
       leftW:typeof leftW==='number'?leftW:248,
       rightW:typeof rightW==='number'?rightW:340,
-      rightTab:curRt?curRt.dataset.rt:'ai'
+      rightTab:curRt?curRt.dataset.rt:'ai',
+      theme:curTheme
     };
     const raw=JSON.stringify(payload);
     try{ sessionStorage.setItem(TAB_STORE_KEY,raw); }catch(e){}
@@ -987,6 +988,7 @@ function restoreSessionTabs(){
           else if(t.startsWith('ai')&&t!=='side_ai'){ const n=parseInt(t.slice(2),10); if(Number.isFinite(n)&&n>aiN) aiN=n; if(!ai[t]) ai[t]={title:'Yeni Sohbet',msgs:[],sources:[],running:false,unread:false,step:'',mode:'y',allow:{},checkpoints:0,timers:[],pending:null,attachments:[]}; }
           cl.push(t);
         });
+        if(typeof rs.theme==='string'&&rs.theme){ try{ sessionStorage.setItem('agydesk_win_theme',rs.theme); }catch(e){} applyTheme(rs.theme,false); }
         if(cl.length){ openTabs=cl; active=(typeof rs.active==='string'&&cl.includes(rs.active))?rs.active:cl[0]; if(typeof rs.currentSpace==='string'&&rs.currentSpace) currentSpace=rs.currentSpace; if(typeof rs.currentKasa==='string'&&rs.currentKasa) currentKasa=rs.currentKasa; }
       }
       const targetMode=active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write')));
@@ -1037,6 +1039,7 @@ function restoreSessionTabs(){
       saved.active=freshId;
     }
     if(!cleaned.length){ _restoringSession=false; return false; }
+    if(typeof saved.theme==='string'&&saved.theme){ try{ sessionStorage.setItem('agydesk_win_theme',saved.theme); }catch(e){} applyTheme(saved.theme,false); }
     openTabs=cleaned;
     active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
     const targetMode=saved.curMode||(active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write'))));
@@ -10524,7 +10527,7 @@ function applyTheme(themeId, persist=true) {
   curTheme = t.id;
   document.body.setAttribute('data-theme', curTheme);
   document.documentElement.style.colorScheme = t.cat === 'light' ? 'light' : 'dark';
-  if (persist) persistUiState({ agydesk_theme: curTheme }, true);
+  if (persist) { try{ sessionStorage.setItem('agydesk_win_theme',curTheme); }catch(e){} persistUiState({ agydesk_theme: curTheme }, true); saveSessionTabs(); }
   noteDomCache.clear();
   renderThemePop();
   if (active === 'sim' || active === 'trafo') renderMain();
@@ -11544,7 +11547,8 @@ async function hydrateUiState(){
     UI_SYNC_KEYS.forEach(k=>{
       if(typeof srv[k]==='string') localStorage.setItem(k,srv[k]);
     });
-    if(typeof srv.agydesk_theme==='string'){
+    let _hasWinTheme=false; try{ _hasWinTheme=!!sessionStorage.getItem('agydesk_win_theme'); }catch(e){}
+    if(typeof srv.agydesk_theme==='string'&&!_hasWinTheme){
       applyTheme(srv.agydesk_theme,false);
     }
     let textChanged=false;
