@@ -199,6 +199,21 @@ pub struct KasaOverride {
     pub desc: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RootDocScopeCfg {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedRootScope {
+    pub space: String,
+    pub spaces: Vec<String>,
+    pub global: bool,
+    pub source: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SpacesCfg {
     #[serde(default = "def_version")]
@@ -207,6 +222,8 @@ pub struct SpacesCfg {
     pub spaces: Vec<SpaceDef>,
     #[serde(default)]
     pub assignments: HashMap<String, String>,
+    #[serde(default)]
+    pub root_doc_spaces: HashMap<String, RootDocScopeCfg>,
     #[serde(default)]
     pub kasa_meta: HashMap<String, KasaOverride>,
     #[serde(default)]
@@ -254,6 +271,7 @@ fn load_spaces_cfg() -> SpacesCfg {
             .iter()
             .map(|k| ((*k).to_string(), "donem_7".to_string()))
             .collect(),
+        root_doc_spaces: HashMap::new(),
         kasa_meta: HashMap::new(),
         tree_order: HashMap::new(),
     };
@@ -271,6 +289,34 @@ fn load_spaces_cfg() -> SpacesCfg {
             for (k, v) in parsed.assignments {
                 if !k.trim().is_empty() && !v.trim().is_empty() {
                     cfg.assignments.insert(k, v);
+                }
+            }
+            for (k, v) in parsed.root_doc_spaces {
+                let ck = k.trim().to_string();
+                if ck.is_empty() {
+                    continue;
+                }
+                match v {
+                    RootDocScopeCfg::Single(s) => {
+                        let cs = s.trim().to_string();
+                        if !cs.is_empty() {
+                            cfg.root_doc_spaces.insert(ck, RootDocScopeCfg::Single(cs));
+                        }
+                    }
+                    RootDocScopeCfg::Multiple(list) => {
+                        let clean: Vec<String> = list
+                            .into_iter()
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        if clean.len() == 1 {
+                            cfg.root_doc_spaces
+                                .insert(ck, RootDocScopeCfg::Single(clean[0].clone()));
+                        } else if !clean.is_empty() {
+                            cfg.root_doc_spaces
+                                .insert(ck, RootDocScopeCfg::Multiple(clean));
+                        }
+                    }
                 }
             }
             cfg.kasa_meta = parsed.kasa_meta;
@@ -360,6 +406,253 @@ fn resolve_kasa_space(key: &str, cfg: &SpacesCfg) -> String {
         .unwrap_or_else(|| "donem_7".to_string())
 }
 
+fn strip_yaml_frontmatter(text: &str) -> (&str, Option<&str>) {
+    let s = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let after_open = if let Some(rest) = s.strip_prefix("---\r\n") {
+        rest
+    } else if let Some(rest) = s.strip_prefix("---\n") {
+        rest
+    } else {
+        return (text, None);
+    };
+    let mut offset = 0usize;
+    let mut has_kv = false;
+    let mut line_count = 0usize;
+    for chunk in after_open.split_inclusive('\n') {
+        line_count += 1;
+        if line_count > 64 {
+            return (text, None);
+        }
+        let trimmed = chunk.trim();
+        if trimmed == "---" || trimmed == "..." {
+            if !has_kv {
+                return (text, None);
+            }
+            let fm = &after_open[..offset];
+            let body = &after_open[offset + chunk.len()..];
+            return (body, Some(fm));
+        }
+        if !trimmed.is_empty() && !trimmed.starts_with('#') && trimmed.contains(':') {
+            has_kv = true;
+        }
+        offset += chunk.len();
+    }
+    (text, None)
+}
+
+fn is_global_scope_token(tok: &str) -> bool {
+    matches!(
+        tok.trim().to_lowercase().as_str(),
+        "all" | "global" | "*" | "tum" | "tüm" | "herkes"
+    )
+}
+
+fn match_space_token(tok: &str, cfg: &SpacesCfg) -> Option<String> {
+    let clean = tok
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim();
+    if clean.is_empty() {
+        return None;
+    }
+    if is_global_scope_token(clean) {
+        return Some("all".to_string());
+    }
+    let low = clean.to_lowercase();
+    if let Some(sp) = cfg.spaces.iter().find(|s| s.id.to_lowercase() == low) {
+        return Some(sp.id.clone());
+    }
+    let slug = slugify(clean).to_lowercase();
+    if let Some(sp) = cfg.spaces.iter().find(|s| {
+        s.id.to_lowercase() == slug || slugify(&s.title).to_lowercase() == slug
+    }) {
+        return Some(sp.id.clone());
+    }
+    None
+}
+
+fn normalize_scope_tokens(
+    tokens: &[String],
+    cfg: &SpacesCfg,
+    source: &'static str,
+) -> Option<ResolvedRootScope> {
+    let mut matched: Vec<String> = Vec::new();
+    for t in tokens {
+        if let Some(m) = match_space_token(t, cfg) {
+            if m == "all" {
+                return Some(ResolvedRootScope {
+                    space: "all".to_string(),
+                    spaces: vec!["all".to_string()],
+                    global: true,
+                    source,
+                });
+            }
+            if !matched.contains(&m) {
+                matched.push(m);
+            }
+        }
+    }
+    if matched.is_empty() {
+        None
+    } else {
+        Some(ResolvedRootScope {
+            space: matched[0].clone(),
+            spaces: matched,
+            global: false,
+            source,
+        })
+    }
+}
+
+fn parse_yaml_inline_values(val: &str) -> Vec<String> {
+    let mut s = val.trim();
+    if let Some(inner) = s.strip_prefix('[').and_then(|x| x.strip_suffix(']')) {
+        s = inner;
+    }
+    s.split(',')
+        .map(|part| {
+            part.trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .trim()
+                .to_string()
+        })
+        .filter(|part| !part.is_empty())
+        .collect()
+}
+
+fn extract_frontmatter_scope_tokens(md_text: &str) -> Option<Vec<String>> {
+    let (_, Some(fm)) = strip_yaml_frontmatter(md_text) else {
+        return None;
+    };
+    let mut tokens: Vec<String> = Vec::new();
+    let mut collecting_list = false;
+    for raw_line in fm.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if collecting_list {
+            if let Some(item) = trimmed.strip_prefix('-') {
+                let v = item
+                    .trim()
+                    .trim_matches(|c| c == '"' || c == '\'')
+                    .trim();
+                if !v.is_empty() {
+                    tokens.push(v.to_string());
+                }
+                continue;
+            }
+            if !raw_line.starts_with(' ') && !raw_line.starts_with('\t') {
+                collecting_list = false;
+            }
+        }
+        let Some((k_raw, v_raw)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = k_raw.trim().to_lowercase();
+        let val = v_raw.trim();
+        match key.as_str() {
+            "global" => {
+                if matches!(val.to_lowercase().as_str(), "true" | "yes" | "1") {
+                    return Some(vec!["all".to_string()]);
+                }
+            }
+            "space" | "spaces" | "workspace" | "workspaces" | "scope" | "donem" | "dönem" => {
+                if val.is_empty() {
+                    collecting_list = true;
+                } else {
+                    tokens.extend(parse_yaml_inline_values(val));
+                }
+            }
+            _ => {}
+        }
+    }
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens)
+    }
+}
+
+fn root_doc_cfg_key_match(key: &str, fname: &str, stem: &str) -> bool {
+    key.eq_ignore_ascii_case(fname) || (!stem.is_empty() && key.eq_ignore_ascii_case(stem))
+}
+
+fn lookup_root_doc_cfg<'a>(fname: &str, cfg: &'a SpacesCfg) -> Option<&'a RootDocScopeCfg> {
+    if let Some(v) = cfg.root_doc_spaces.get(fname) {
+        return Some(v);
+    }
+    let stem = Path::new(fname)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(fname);
+    cfg.root_doc_spaces
+        .iter()
+        .find(|(k, _)| root_doc_cfg_key_match(k, fname, stem))
+        .map(|(_, v)| v)
+}
+
+fn remove_root_doc_cfg(fname: &str, cfg: &mut SpacesCfg) -> bool {
+    let stem = Path::new(fname)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(fname);
+    let keys: Vec<String> = cfg
+        .root_doc_spaces
+        .keys()
+        .filter(|k| root_doc_cfg_key_match(k, fname, stem))
+        .cloned()
+        .collect();
+    let changed = !keys.is_empty();
+    for k in keys {
+        cfg.root_doc_spaces.remove(&k);
+    }
+    changed
+}
+
+pub fn resolve_root_doc_scope(
+    fname: &str,
+    md_text: &str,
+    cfg: &SpacesCfg,
+) -> ResolvedRootScope {
+    if let Some(entry) = lookup_root_doc_cfg(fname, cfg) {
+        let raw_tokens: Vec<String> = match entry {
+            RootDocScopeCfg::Single(s) => vec![s.clone()],
+            RootDocScopeCfg::Multiple(list) => list.clone(),
+        };
+        if let Some(res) = normalize_scope_tokens(&raw_tokens, cfg, "config") {
+            return res;
+        }
+    }
+    if !md_text.is_empty() {
+        if let Some(fm_tokens) = extract_frontmatter_scope_tokens(md_text) {
+            if let Some(res) = normalize_scope_tokens(&fm_tokens, cfg, "frontmatter") {
+                return res;
+            }
+        }
+    }
+    let stem = Path::new(fname)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(fname);
+    if stem.eq_ignore_ascii_case("00_LAB_ORTAK_TAKVIM")
+        && cfg.spaces.iter().any(|s| s.id == "donem_7")
+    {
+        return ResolvedRootScope {
+            space: "donem_7".to_string(),
+            spaces: vec!["donem_7".to_string()],
+            global: false,
+            source: "default",
+        };
+    }
+    ResolvedRootScope {
+        space: "all".to_string(),
+        spaces: vec!["all".to_string()],
+        global: true,
+        source: "default",
+    }
+}
+
 static H1_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?m)^#\s+(.+)$").unwrap());
 static WIKI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]").unwrap());
 static NUM_PREFIX_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+_").unwrap());
@@ -415,7 +708,8 @@ fn folder_meta_for(key: &str, cfg: Option<&SpacesCfg>) -> FolderMeta {
 
 fn clean_title(p: &Path, text: &str) -> String {
     if !text.is_empty() {
-        if let Some(cap) = H1_RE.captures(text) {
+        let (body, _) = strip_yaml_frontmatter(text);
+        if let Some(cap) = H1_RE.captures(body) {
             if let Some(m) = cap.get(1) {
                 let raw = m.as_str().trim();
                 let trimmed = raw
@@ -487,8 +781,34 @@ fn join_rel_parts(base: &Path, clean: &str) -> PathBuf {
     p
 }
 
+fn normalize_rel_input(rel: &str) -> String {
+    let mut clean = rel.trim().to_string();
+    let low_init = clean.to_lowercase();
+    if low_init.starts_with("file:///") {
+        clean = clean[8..].to_string();
+    } else if low_init.starts_with("file://") {
+        clean = clean[7..].to_string();
+    }
+    clean = clean.replace('\\', "/").trim_start_matches('/').to_string();
+    let low = clean.to_lowercase();
+    for marker in ["/agydesk_dokuman/", "/agydesk_notlar/", "/agydesk_belgeler/"] {
+        if let Some(idx) = low.rfind(marker) {
+            clean = clean[idx + marker.len()..].to_string();
+            break;
+        }
+    }
+    while clean.starts_with("../") || clean.starts_with("./") {
+        if clean.starts_with("../") {
+            clean = clean[3..].to_string();
+        } else {
+            clean = clean[2..].to_string();
+        }
+    }
+    clean.trim_start_matches('/').to_string()
+}
+
 pub fn safe_path(rel: &str) -> Result<PathBuf, String> {
-    let clean = rel.replace('\\', "/").trim_start_matches('/').to_string();
+    let clean = normalize_rel_input(rel);
     if clean.contains("..") {
         return Err("Geçersiz dosya yolu".to_string());
     }
@@ -943,7 +1263,7 @@ pub fn scan_vault() -> Value {
         if ext == ".md" {
             if let Ok(bytes) = fs::read(&f) {
                 full_md = String::from_utf8_lossy(&bytes).to_string();
-                head = full_md.chars().take(400).collect();
+                head = full_md.chars().take(1200).collect();
             }
         }
         let title = clean_title(&f, &head);
@@ -966,18 +1286,7 @@ pub fn scan_vault() -> Value {
             "📄"
         };
         let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let stem_up = stem.to_uppercase();
-        let root_space = if stem_up.contains("LAB") || stem_up.contains("TAKVIM") {
-            if cfg.spaces.iter().any(|s| s.id == "donem_7") {
-                "donem_7".to_string()
-            } else {
-                cfg.spaces.first().map(|s| s.id.clone()).unwrap_or_else(|| "donem_7".to_string())
-            }
-        } else if cfg.spaces.iter().any(|s| s.id == "belgeler") {
-            "belgeler".to_string()
-        } else {
-            cfg.spaces.first().map(|s| s.id.clone()).unwrap_or_else(|| "donem_7".to_string())
-        };
+        let scope = resolve_root_doc_scope(&fname, &full_md, &cfg);
         pages.insert(
             nid.clone(),
             json!({
@@ -986,7 +1295,10 @@ pub fn scan_vault() -> Value {
                 "rel": fname,
                 "folder": "Ortak Belgeler",
                 "kasa": "",
-                "space": root_space,
+                "space": scope.space,
+                "spaces": scope.spaces,
+                "global": scope.global,
+                "scope_source": scope.source,
                 "ext": ext,
                 "mtime": mt
             }),
@@ -1001,7 +1313,10 @@ pub fn scan_vault() -> Value {
             "title": title,
             "icon": icon,
             "ext": ext,
-            "space": root_space,
+            "space": scope.space,
+            "spaces": scope.spaces,
+            "global": scope.global,
+            "scope_source": scope.source,
             "mtime": mt
         }));
     }
@@ -1137,14 +1452,23 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
     } else {
         folder_meta_for(&f_key, Some(&cfg)).label
     };
-    let space_id = if f_key.is_empty() {
-        "donem_7".to_string()
-    } else {
-        resolve_kasa_space(&f_key, &cfg)
-    };
     let mtime = mtime_of(&p);
+    let fname = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(virt_rel)
+        .to_string();
     if ext == ".pdf" {
-        return Ok(json!({
+        let root_scope = if f_key.is_empty() {
+            Some(resolve_root_doc_scope(&fname, "", &cfg))
+        } else {
+            None
+        };
+        let space_id = root_scope
+            .as_ref()
+            .map(|s| s.space.clone())
+            .unwrap_or_else(|| resolve_kasa_space(&f_key, &cfg));
+        let mut obj = json!({
             "rel": rel,
             "ext": ext,
             "kasa": f_key,
@@ -1153,12 +1477,27 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
             "title": clean_title(&p, ""),
             "content": "",
             "mtime": mtime
-        }));
+        });
+        if let (Some(map), Some(rs)) = (obj.as_object_mut(), root_scope) {
+            map.insert("spaces".to_string(), json!(rs.spaces));
+            map.insert("global".to_string(), json!(rs.global));
+            map.insert("scope_source".to_string(), json!(rs.source));
+        }
+        return Ok(obj);
     }
     let bytes = fs::read(&p).map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&bytes).to_string();
+    let root_scope = if f_key.is_empty() {
+        Some(resolve_root_doc_scope(&fname, if ext == ".md" { &text } else { "" }, &cfg))
+    } else {
+        None
+    };
+    let space_id = root_scope
+        .as_ref()
+        .map(|s| s.space.clone())
+        .unwrap_or_else(|| resolve_kasa_space(&f_key, &cfg));
     let title = clean_title(&p, if ext == ".md" { &text } else { "" });
-    Ok(json!({
+    let mut obj = json!({
         "rel": rel,
         "ext": ext,
         "kasa": f_key,
@@ -1167,7 +1506,13 @@ pub fn read_note(rel: &str) -> Result<Value, String> {
         "title": title,
         "content": text,
         "mtime": mtime
-    }))
+    });
+    if let (Some(map), Some(rs)) = (obj.as_object_mut(), root_scope) {
+        map.insert("spaces".to_string(), json!(rs.spaces));
+        map.insert("global".to_string(), json!(rs.global));
+        map.insert("scope_source".to_string(), json!(rs.source));
+    }
+    Ok(obj)
 }
 
 pub fn write_note(rel: &str, content: &str) -> Result<Value, String> {
@@ -1498,10 +1843,94 @@ pub fn delete_space(space_id: &str) -> Result<Value, String> {
             *v = fallback.clone();
         }
     }
+    for v in cfg.root_doc_spaces.values_mut() {
+        match v {
+            RootDocScopeCfg::Single(s) => {
+                if s == clean_id {
+                    *s = fallback.clone();
+                }
+            }
+            RootDocScopeCfg::Multiple(list) => {
+                list.retain(|s| s != clean_id);
+                if list.is_empty() {
+                    *v = RootDocScopeCfg::Single(fallback.clone());
+                } else if list.len() == 1 {
+                    *v = RootDocScopeCfg::Single(list[0].clone());
+                }
+            }
+        }
+    }
     save_spaces_cfg(&cfg)?;
     Ok(json!({
         "deleted": clean_id,
         "fallback": fallback
+    }))
+}
+
+pub fn update_root_doc_space(
+    rel: &str,
+    space: Option<&str>,
+    spaces: Option<&[String]>,
+) -> Result<Value, String> {
+    let clean_rel = strip_split_prefix(&clean_rel_str(rel)).to_string();
+    if clean_rel.is_empty() || clean_rel.contains('/') {
+        return Err("Yalnızca kök belgelerin çalışma alanı kapsamı güncellenebilir".to_string());
+    }
+    let p = safe_path(&clean_rel)?;
+    if !p.exists() || p.is_dir() {
+        return Err(format!("Dosya bulunamadı: {}", clean_rel));
+    }
+    let fname = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&clean_rel)
+        .to_string();
+
+    let mut cfg = load_spaces_cfg();
+    let mut raw_tokens: Vec<String> = Vec::new();
+    if let Some(list) = spaces {
+        for item in list {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                raw_tokens.push(trimmed.to_string());
+            }
+        }
+    }
+    if raw_tokens.is_empty() {
+        if let Some(sp) = space {
+            let trimmed = sp.trim();
+            if !trimmed.is_empty() {
+                raw_tokens.push(trimmed.to_string());
+            }
+        }
+    }
+    if raw_tokens.is_empty() {
+        return Err("Geçerli bir çalışma alanı veya 'all' belirtilmedi".to_string());
+    }
+    let Some(resolved) = normalize_scope_tokens(&raw_tokens, &cfg, "config") else {
+        return Err(format!("Geçersiz çalışma alanı: {}", raw_tokens.join(", ")));
+    };
+    remove_root_doc_cfg(&fname, &mut cfg);
+    if resolved.global {
+        cfg.root_doc_spaces
+            .insert(fname.clone(), RootDocScopeCfg::Single("all".to_string()));
+    } else if resolved.spaces.len() == 1 {
+        cfg.root_doc_spaces.insert(
+            fname.clone(),
+            RootDocScopeCfg::Single(resolved.spaces[0].clone()),
+        );
+    } else {
+        cfg.root_doc_spaces
+            .insert(fname.clone(), RootDocScopeCfg::Multiple(resolved.spaces.clone()));
+    }
+    save_spaces_cfg(&cfg)?;
+    Ok(json!({
+        "rel": fname,
+        "id": format!("note:{}", fname),
+        "space": resolved.space,
+        "spaces": resolved.spaces,
+        "global": resolved.global,
+        "scope_source": resolved.source
     }))
 }
 
@@ -1627,9 +2056,24 @@ pub fn delete_note(rel: &str) -> Result<Value, String> {
     }
     fs::remove_file(&p).map_err(|e| e.to_string())?;
     let clean = rel.replace('\\', "/").trim_start_matches('/').to_string();
-    let mirror = ROOT.join("notes").join(clean);
+    let mirror = ROOT.join("notes").join(&clean);
     if mirror.exists() && !mirror.is_dir() {
         let _ = fs::remove_file(&mirror);
+    }
+    let virt = strip_split_prefix(&clean).to_string();
+    if !virt.is_empty() && !virt.contains('/') {
+        let mut cfg = load_spaces_cfg();
+        let mut dirty = remove_root_doc_cfg(&virt, &mut cfg);
+        if let Some(list) = cfg.tree_order.get_mut("__root_docs__") {
+            let before = list.len();
+            list.retain(|n| n != &virt);
+            if list.len() != before {
+                dirty = true;
+            }
+        }
+        if dirty {
+            let _ = save_spaces_cfg(&cfg);
+        }
     }
     Ok(json!({ "deleted": rel }))
 }
@@ -1883,7 +2327,12 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         if src_is_root_kasa {
             return Err("Çalışma kasası başka bir klasörün içine taşınamaz".to_string());
         }
-        let is_root_target = clean_target.is_empty() || clean_target == "_root_docs";
+        let target_root_space: Option<String> = clean_target
+            .strip_prefix("_root_docs:")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let is_root_target =
+            clean_target.is_empty() || clean_target == "_root_docs" || target_root_space.is_some();
         let new_parent_rel = if is_root_target {
             String::new()
         } else {
@@ -1896,6 +2345,44 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
             return Err("Klasör kendi içine veya alt klasörüne taşınamaz".to_string());
         }
         if old_parent_rel == new_parent_rel {
+            if is_root_target && old_parent_rel.is_empty() {
+                if let Some(ref sp_tok) = target_root_space {
+                    if let Some(sp_id) = match_space_token(sp_tok, &cfg) {
+                        remove_root_doc_cfg(&src_name, &mut cfg);
+                        cfg.root_doc_spaces
+                            .insert(src_name.clone(), RootDocScopeCfg::Single(sp_id.clone()));
+                        save_spaces_cfg(&cfg)?;
+                        return Ok(json!({
+                            "old_rel": clean_src,
+                            "new_rel": clean_src,
+                            "is_dir": false,
+                            "kasa": "",
+                            "space": sp_id,
+                            "moved": false,
+                            "reordered": true,
+                            "scope_updated": true
+                        }));
+                    }
+                } else if clean_target == "_root_docs" {
+                    let cur = resolve_root_doc_scope(&src_name, "", &cfg);
+                    if !cur.global {
+                        remove_root_doc_cfg(&src_name, &mut cfg);
+                        cfg.root_doc_spaces
+                            .insert(src_name.clone(), RootDocScopeCfg::Single("all".to_string()));
+                        save_spaces_cfg(&cfg)?;
+                        return Ok(json!({
+                            "old_rel": clean_src,
+                            "new_rel": clean_src,
+                            "is_dir": false,
+                            "kasa": "",
+                            "space": "all",
+                            "moved": false,
+                            "reordered": true,
+                            "scope_updated": true
+                        }));
+                    }
+                }
+            }
             let kasa = clean_src
                 .split_once('/')
                 .map(|(k, _)| k.to_string())
@@ -1916,7 +2403,7 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         let old_key = if old_parent_rel.is_empty() {
             "__root_docs__".to_string()
         } else {
-            old_parent_rel
+            old_parent_rel.clone()
         };
         if let Some(list) = cfg.tree_order.get_mut(&old_key) {
             list.retain(|n| n != &src_name);
@@ -1924,11 +2411,30 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         let new_key = if new_parent_rel.is_empty() {
             "__root_docs__".to_string()
         } else {
-            new_parent_rel
+            new_parent_rel.clone()
         };
         if let Some(list) = cfg.tree_order.get_mut(&new_key) {
             if !list.contains(&src_name) {
                 list.push(src_name.clone());
+            }
+        }
+        if old_parent_rel.is_empty() && !new_parent_rel.is_empty() {
+            remove_root_doc_cfg(&src_name, &mut cfg);
+        } else if !old_parent_rel.is_empty() && new_parent_rel.is_empty() {
+            if let Some(sp_id) = target_root_space
+                .as_deref()
+                .and_then(|tok| match_space_token(tok, &cfg))
+            {
+                remove_root_doc_cfg(&src_name, &mut cfg);
+                cfg.root_doc_spaces
+                    .insert(src_name.clone(), RootDocScopeCfg::Single(sp_id));
+            } else if lookup_root_doc_cfg(&src_name, &cfg).is_none() {
+                let old_kasa = old_parent_rel.split('/').next().unwrap_or("");
+                if !old_kasa.is_empty() {
+                    let inherited = resolve_kasa_space(old_kasa, &cfg);
+                    cfg.root_doc_spaces
+                        .insert(src_name.clone(), RootDocScopeCfg::Single(inherited));
+                }
             }
         }
         if src_is_dir {
@@ -2031,6 +2537,14 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
             if let Some(list) = cfg.tree_order.get_mut(&old_parent_rel) {
                 list.retain(|n| n != &src_name);
             }
+            if lookup_root_doc_cfg(&src_name, &cfg).is_none() {
+                let old_kasa = old_parent_rel.split('/').next().unwrap_or("");
+                if !old_kasa.is_empty() {
+                    let inherited = resolve_kasa_space(old_kasa, &cfg);
+                    cfg.root_doc_spaces
+                        .insert(src_name.clone(), RootDocScopeCfg::Single(inherited));
+                }
+            }
             moved = true;
         }
         let mut names = sorted_dir_names_rel(
@@ -2082,10 +2596,13 @@ pub fn move_item(src_rel: &str, target_rel: &str, position: &str) -> Result<Valu
         let old_key = if old_parent_rel.is_empty() {
             "__root_docs__".to_string()
         } else {
-            old_parent_rel
+            old_parent_rel.clone()
         };
         if let Some(list) = cfg.tree_order.get_mut(&old_key) {
             list.retain(|n| n != &src_name);
+        }
+        if old_parent_rel.is_empty() {
+            remove_root_doc_cfg(&src_name, &mut cfg);
         }
         if src_is_dir {
             migrate_tree_order_keys(&mut cfg.tree_order, &clean_src, &new_rel);
@@ -2222,6 +2739,177 @@ fn b64_encode(data: &[u8]) -> String {
     out
 }
 
+#[derive(Clone)]
+struct CachedPptxPdf {
+    mtime: u64,
+    last_used: u64,
+    bytes: Vec<u8>,
+}
+
+static PPTX_PDF_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, CachedPptxPdf>>> =
+    std::sync::OnceLock::new();
+static PPTX_CONV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+static PPTX_USE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn pptx_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, CachedPptxPdf>> {
+    PPTX_PDF_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn evict_pptx_pdf(rel: &str) {
+    if let Ok(mut guard) = pptx_cache().lock() {
+        guard.remove(rel);
+    }
+}
+
+pub fn pptx_to_pdf_bytes(rel: &str) -> Result<Vec<u8>, String> {
+    let p = safe_path(rel)?;
+    if !p.exists() {
+        return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    if ext != ".ppt" && ext != ".pptx" && ext != ".ppsx" {
+        return Err("Desteklenmeyen sunum formatı".to_string());
+    }
+    let mtime = fs::metadata(&p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    {
+        if let Ok(mut guard) = pptx_cache().lock() {
+            if let Some(entry) = guard.get_mut(rel) {
+                if entry.mtime == mtime {
+                    entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return Ok(entry.bytes.clone());
+                }
+            }
+        }
+    }
+
+    let _conv_guard = PPTX_CONV_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    // Double-check after acquiring lock
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if let Some(entry) = guard.get_mut(rel) {
+            if entry.mtime == mtime {
+                entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir();
+    let temp_pdf = temp_dir.join(format!("agydesk_pptx_{}.pdf", stamp));
+    let in_str = p.to_string_lossy().to_string();
+    let out_str = temp_pdf.to_string_lossy().to_string();
+
+    let ps_script = format!(
+        "$ErrorActionPreference='Stop'; \
+         $inF='{in_esc}'; $outF='{out_esc}'; \
+         $pp=[Activator]::CreateInstance([Type]::GetTypeFromProgID('PowerPoint.Application')); \
+         try {{ \
+           $t=$pp.GetType(); \
+           $cols=$t.InvokeMember('Presentations',[System.Reflection.BindingFlags]::GetProperty,$null,$pp,$null); \
+           $pres=$cols.GetType().InvokeMember('Open',[System.Reflection.BindingFlags]::InvokeMethod,$null,$cols,@($inF,$true,$false,$false)); \
+           try {{ \
+             $pres.GetType().InvokeMember('SaveAs',[System.Reflection.BindingFlags]::InvokeMethod,$null,$pres,@($outF,32)); \
+           }} finally {{ \
+             try {{ $pres.GetType().InvokeMember('Close',[System.Reflection.BindingFlags]::InvokeMethod,$null,$pres,$null) }} catch {{}} \
+           }} \
+         }} finally {{ \
+           try {{ $pp.GetType().InvokeMember('Quit',[System.Reflection.BindingFlags]::InvokeMethod,$null,$pp,$null) }} catch {{}} \
+         }}",
+        in_esc = in_str.replace('\'', "''"),
+        out_esc = out_str.replace('\'', "''")
+    );
+
+    let ps_res = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    let mut converted = ps_res
+        .as_ref()
+        .map(|o| o.status.success() && temp_pdf.exists())
+        .unwrap_or(false);
+
+    if !converted {
+        // Fallback: LibreOffice headless
+        let _ = std::fs::remove_file(&temp_pdf);
+        let lo_dir = temp_dir.join(format!("agydesk_lo_{}", stamp));
+        let _ = fs::create_dir_all(&lo_dir);
+        if let Ok(lo_out) = std::process::Command::new("soffice")
+            .args([
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                &lo_dir.to_string_lossy(),
+                &in_str,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if lo_out.status.success() {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let cand = lo_dir.join(format!("{}.pdf", stem));
+                    if cand.exists() && fs::rename(&cand, &temp_pdf).is_ok() {
+                        converted = true;
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&lo_dir);
+    }
+
+    if !converted || !temp_pdf.exists() {
+        let _ = fs::remove_file(&temp_pdf);
+        let err_detail = ps_res
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "PowerPoint veya LibreOffice bulunamadı".to_string());
+        return Err(format!("Sunum PDF'e dönüştürülemedi: {}", err_detail));
+    }
+
+    let bytes = fs::read(&temp_pdf);
+    let _ = fs::remove_file(&temp_pdf);
+    let bytes = bytes.map_err(|e| format!("Geçici PDF okunamadı: {}", e))?;
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        while guard.len() >= 6 {
+            if let Some(oldest_k) = guard
+                .iter()
+                .min_by_key(|(_, v)| v.last_used)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest_k);
+            } else {
+                break;
+            }
+        }
+        guard.insert(
+            rel.to_string(),
+            CachedPptxPdf {
+                mtime,
+                last_used: PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                bytes: bytes.clone(),
+            },
+        );
+    }
+
+    Ok(bytes)
+}
+
 pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
     let p = safe_path(rel)?;
     if !p.exists() {
@@ -2235,11 +2923,49 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
             "title": fname,
             "count": 0,
             "slides": [],
-            "note": "Eski ikili .ppt formatı doğrudan XML olarak okunamıyor; PowerPoint üzerinden .pptx veya .pdf olarak kaydedin."
+            "is_legacy_ppt": true,
+            "note": "Eski ikili .ppt formatı doğrudan XML olarak okunamıyor. 'Tam Görünüm (PowerPoint PDF)' ile RAM üzerinden açabilirsiniz."
         }));
     }
     let file = fs::File::open(&p).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    // Read slide dimensions from ppt/presentation.xml (default 4:3 = 9144000 x 6858000 EMU)
+    let mut slide_w: f64 = 9144000.0;
+    let mut slide_h: f64 = 6858000.0;
+    let mut pres_xml = String::new();
+    if let Ok(mut pf) = archive.by_name("ppt/presentation.xml") {
+        let _ = pf.read_to_string(&mut pres_xml);
+    }
+    if !pres_xml.is_empty() {
+        let mut pr = Reader::from_str(&pres_xml);
+        loop {
+            match pr.read_event() {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                    if e.local_name().as_ref() == b"sldSz" {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"cx" => {
+                                    if let Ok(v) = String::from_utf8_lossy(&attr.value).parse::<f64>() {
+                                        if v > 0.0 { slide_w = v; }
+                                    }
+                                }
+                                b"cy" => {
+                                    if let Ok(v) = String::from_utf8_lossy(&attr.value).parse::<f64>() {
+                                        if v > 0.0 { slide_h = v; }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+
     let slide_re = Regex::new(r"^ppt/slides/slide(\d+)\.xml$").unwrap();
     let mut slide_entries: Vec<(usize, String, String)> = Vec::new();
     for i in 0..archive.len() {
@@ -2260,117 +2986,15 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
         if let Ok(mut entry) = archive.by_name(sname) {
             let _ = entry.read_to_string(&mut sxml);
         }
-        let mut reader = Reader::from_str(&sxml);
-        reader.trim_text(false);
-        let mut in_sp = false;
-        let mut is_title_sp = false;
-        let mut in_p = false;
-        let mut in_t = false;
-        let mut cur_p = String::new();
-        let mut sp_paras: Vec<String> = Vec::new();
-        let mut title = String::new();
-        let mut lines: Vec<String> = Vec::new();
-        let mut rel_ids: Vec<String> = Vec::new();
 
-        loop {
-            match reader.read_event() {
-                Ok(Event::Start(e)) => {
-                    let ln = e.local_name();
-                    let tag = ln.as_ref();
-                    if tag == b"sp" {
-                        in_sp = true;
-                        is_title_sp = false;
-                        sp_paras.clear();
-                    } else if tag == b"ph" && in_sp {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"type" {
-                                let v = String::from_utf8_lossy(&attr.value);
-                                if v == "title" || v == "ctrTitle" {
-                                    is_title_sp = true;
-                                }
-                            }
-                        }
-                    } else if tag == b"p" {
-                        in_p = true;
-                        cur_p.clear();
-                    } else if tag == b"t" && in_p {
-                        in_t = true;
-                    } else if tag == b"blip" {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"embed" {
-                                rel_ids.push(String::from_utf8_lossy(&attr.value).to_string());
-                            }
-                        }
-                    }
-                }
-                Ok(Event::Empty(e)) => {
-                    let ln = e.local_name();
-                    let tag = ln.as_ref();
-                    if tag == b"ph" && in_sp {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"type" {
-                                let v = String::from_utf8_lossy(&attr.value);
-                                if v == "title" || v == "ctrTitle" {
-                                    is_title_sp = true;
-                                }
-                            }
-                        }
-                    } else if tag == b"blip" {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.local_name().as_ref() == b"embed" {
-                                rel_ids.push(String::from_utf8_lossy(&attr.value).to_string());
-                            }
-                        }
-                    }
-                }
-                Ok(Event::Text(e)) => {
-                    if in_t {
-                        if let Ok(t) = e.unescape() {
-                            cur_p.push_str(&t);
-                        }
-                    }
-                }
-                Ok(Event::End(e)) => {
-                    let ln = e.local_name();
-                    let tag = ln.as_ref();
-                    if tag == b"t" {
-                        in_t = false;
-                    } else if tag == b"p" {
-                        in_p = false;
-                        let trimmed = cur_p.trim().to_string();
-                        if !trimmed.is_empty() {
-                            sp_paras.push(trimmed);
-                        }
-                        cur_p.clear();
-                    } else if tag == b"sp" {
-                        in_sp = false;
-                        if !sp_paras.is_empty() {
-                            if is_title_sp && title.is_empty() {
-                                title = sp_paras.join(" ");
-                            } else {
-                                lines.extend(sp_paras.drain(..));
-                            }
-                        }
-                        sp_paras.clear();
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(_) => break,
-                _ => {}
-            }
-        }
-        if title.is_empty() && !lines.is_empty() {
-            title = lines.remove(0);
-        }
-
-        let mut images: Vec<String> = Vec::new();
+        // Load slide rels first so pics can resolve inline
+        let mut rid_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let rels_name = format!("ppt/slides/_rels/slide{}.xml.rels", snum);
         let mut rxml = String::new();
         if let Ok(mut rentry) = archive.by_name(&rels_name) {
             let _ = rentry.read_to_string(&mut rxml);
         }
-        if !rxml.is_empty() && !rel_ids.is_empty() {
-            let mut rid_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        if !rxml.is_empty() {
             let mut rr = Reader::from_str(&rxml);
             loop {
                 match rr.read_event() {
@@ -2394,6 +3018,241 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
                     _ => {}
                 }
             }
+        }
+
+        let mut reader = Reader::from_str(&sxml);
+        reader.trim_text(false);
+        let mut in_sp = false;
+        let mut in_pic = false;
+        let mut in_sp_pr = false;
+        let mut in_ln = false;
+        let mut in_solid_fill = false;
+        let mut is_title_sp = false;
+        let mut in_p = false;
+        let mut in_t = false;
+        let mut cur_p = String::new();
+        let mut sp_paras: Vec<String> = Vec::new();
+        let mut cur_x: f64 = 0.0;
+        let mut cur_y: f64 = 0.0;
+        let mut cur_w: f64 = 0.0;
+        let mut cur_h: f64 = 0.0;
+        let mut cur_prst = String::new();
+        let mut cur_fill: Option<String> = None;
+        let mut cur_stroke: Option<String> = None;
+        let mut pic_rid = String::new();
+
+        let mut title = String::new();
+        let mut lines: Vec<String> = Vec::new();
+        let mut rel_ids: Vec<String> = Vec::new();
+        let mut elements: Vec<Value> = Vec::new();
+
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"sp" || tag == b"cxnSp" {
+                        in_sp = true;
+                        is_title_sp = false;
+                        sp_paras.clear();
+                        cur_x = 0.0; cur_y = 0.0; cur_w = 0.0; cur_h = 0.0;
+                        cur_prst = if tag == b"cxnSp" { "line".to_string() } else { "rect".to_string() };
+                        cur_fill = None;
+                        cur_stroke = None;
+                    } else if tag == b"pic" {
+                        in_pic = true;
+                        cur_x = 0.0; cur_y = 0.0; cur_w = 0.0; cur_h = 0.0;
+                        pic_rid.clear();
+                    } else if tag == b"spPr" && (in_sp || in_pic) {
+                        in_sp_pr = true;
+                    } else if tag == b"ln" && in_sp_pr {
+                        in_ln = true;
+                    } else if tag == b"solidFill" && in_sp_pr {
+                        in_solid_fill = true;
+                    } else if tag == b"prstGeom" && in_sp_pr {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"prst" {
+                                cur_prst = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    } else if tag == b"ph" && in_sp {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"type" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                if v == "title" || v == "ctrTitle" {
+                                    is_title_sp = true;
+                                }
+                            }
+                        }
+                    } else if tag == b"p" {
+                        in_p = true;
+                        cur_p.clear();
+                    } else if tag == b"t" && in_p {
+                        in_t = true;
+                    } else if tag == b"blip" {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"embed" {
+                                let rid = String::from_utf8_lossy(&attr.value).to_string();
+                                if in_pic && pic_rid.is_empty() {
+                                    pic_rid = rid.clone();
+                                }
+                                rel_ids.push(rid);
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Empty(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"off" && in_sp_pr {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"x" => cur_x = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0.0),
+                                b"y" => cur_y = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0.0),
+                                _ => {}
+                            }
+                        }
+                    } else if tag == b"ext" && in_sp_pr {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"cx" => cur_w = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0.0),
+                                b"cy" => cur_h = String::from_utf8_lossy(&attr.value).parse().unwrap_or(0.0),
+                                _ => {}
+                            }
+                        }
+                    } else if tag == b"prstGeom" && in_sp_pr {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"prst" {
+                                cur_prst = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    } else if tag == b"srgbClr" && in_solid_fill {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                let hex = format!("#{}", String::from_utf8_lossy(&attr.value));
+                                if in_ln {
+                                    if cur_stroke.is_none() { cur_stroke = Some(hex); }
+                                } else if cur_fill.is_none() {
+                                    cur_fill = Some(hex);
+                                }
+                            }
+                        }
+                    } else if tag == b"ph" && in_sp {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"type" {
+                                let v = String::from_utf8_lossy(&attr.value);
+                                if v == "title" || v == "ctrTitle" {
+                                    is_title_sp = true;
+                                }
+                            }
+                        }
+                    } else if tag == b"blip" {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"embed" {
+                                let rid = String::from_utf8_lossy(&attr.value).to_string();
+                                if in_pic && pic_rid.is_empty() {
+                                    pic_rid = rid.clone();
+                                }
+                                rel_ids.push(rid);
+                            }
+                        }
+                    }
+                }
+                Ok(Event::Text(e)) => {
+                    if in_t {
+                        if let Ok(t) = e.unescape() {
+                            cur_p.push_str(&t);
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let ln = e.local_name();
+                    let tag = ln.as_ref();
+                    if tag == b"t" {
+                        in_t = false;
+                    } else if tag == b"p" {
+                        in_p = false;
+                        let trimmed = cur_p.trim().to_string();
+                        if !trimmed.is_empty() {
+                            sp_paras.push(trimmed);
+                        }
+                        cur_p.clear();
+                    } else if tag == b"solidFill" {
+                        in_solid_fill = false;
+                    } else if tag == b"ln" {
+                        in_ln = false;
+                    } else if tag == b"spPr" {
+                        in_sp_pr = false;
+                    } else if tag == b"pic" {
+                        in_pic = false;
+                        if !pic_rid.is_empty() && cur_w > 0.0 && cur_h > 0.0 {
+                            if let Some(tgt) = rid_map.get(&pic_rid) {
+                                if tgt.contains("media/") {
+                                    let clean = tgt.trim_start_matches("./").replace("../", "");
+                                    let norm = if clean.starts_with("ppt/") { clean } else { format!("ppt/{}", clean) };
+                                    let mime = if norm.ends_with(".png") { Some("image/png") }
+                                        else if norm.ends_with(".jpg") || norm.ends_with(".jpeg") { Some("image/jpeg") }
+                                        else if norm.ends_with(".gif") { Some("image/gif") }
+                                        else if norm.ends_with(".webp") { Some("image/webp") }
+                                        else if norm.ends_with(".svg") { Some("image/svg+xml") }
+                                        else { None };
+                                    if let Some(m) = mime {
+                                        if let Ok(mut img_f) = archive.by_name(&norm) {
+                                            let mut buf = Vec::new();
+                                            if img_f.read_to_end(&mut buf).is_ok() && buf.len() <= 4 * 1024 * 1024 {
+                                                elements.push(json!({
+                                                    "kind": "pic",
+                                                    "x": (cur_x / slide_w * 100.0).clamp(0.0, 100.0),
+                                                    "y": (cur_y / slide_h * 100.0).clamp(0.0, 100.0),
+                                                    "w": (cur_w / slide_w * 100.0).clamp(0.0, 100.0),
+                                                    "h": (cur_h / slide_h * 100.0).clamp(0.0, 100.0),
+                                                    "src": format!("data:{};base64,{}", m, b64_encode(&buf))
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if tag == b"sp" || tag == b"cxnSp" {
+                        in_sp = false;
+                        if cur_w > 0.0 || cur_h > 0.0 {
+                            if !sp_paras.is_empty() || cur_fill.is_some() || cur_stroke.is_some() {
+                                elements.push(json!({
+                                    "kind": "shape",
+                                    "x": (cur_x / slide_w * 100.0).clamp(0.0, 100.0),
+                                    "y": (cur_y / slide_h * 100.0).clamp(0.0, 100.0),
+                                    "w": (cur_w / slide_w * 100.0).clamp(0.0, 100.0),
+                                    "h": (cur_h / slide_h * 100.0).clamp(0.0, 100.0),
+                                    "prst": cur_prst,
+                                    "fill": cur_fill,
+                                    "stroke": cur_stroke,
+                                    "is_title": is_title_sp,
+                                    "paras": sp_paras
+                                }));
+                            }
+                        }
+                        if !sp_paras.is_empty() {
+                            if is_title_sp && title.is_empty() {
+                                title = sp_paras.join(" ");
+                            } else {
+                                lines.extend(sp_paras.drain(..));
+                            }
+                        }
+                        sp_paras.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(_) => break,
+                _ => {}
+            }
+        }
+        if title.is_empty() && !lines.is_empty() {
+            title = lines.remove(0);
+        }
+
+        let mut images: Vec<String> = Vec::new();
+        if !rid_map.is_empty() && !rel_ids.is_empty() {
             let mut seen = std::collections::HashSet::new();
             for rid in rel_ids {
                 if let Some(tgt) = rid_map.get(&rid) {
@@ -2434,7 +3293,8 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
             "num": idx + 1,
             "title": if title.is_empty() { format!("Slayt {}", idx + 1) } else { title },
             "lines": lines,
-            "images": images
+            "images": images,
+            "elements": elements
         }));
     }
 
@@ -2442,6 +3302,8 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
         "rel": rel,
         "title": fname,
         "count": slides.len(),
+        "slide_w": slide_w,
+        "slide_h": slide_h,
         "slides": slides
     }))
 }
@@ -2775,6 +3637,7 @@ mod tests {
                 .iter()
                 .map(|k| ((*k).to_string(), "donem_7".to_string()))
                 .collect(),
+            root_doc_spaces: HashMap::new(),
             kasa_meta: HashMap::new(),
             tree_order: HashMap::new(),
         };
@@ -2789,11 +3652,80 @@ mod tests {
     }
 
     #[test]
+    fn resolve_root_doc_scope_config_frontmatter_and_defaults() {
+        let mut cfg = SpacesCfg {
+            version: 1,
+            spaces: default_spaces_list(),
+            assignments: HashMap::new(),
+            root_doc_spaces: HashMap::new(),
+            kasa_meta: HashMap::new(),
+            tree_order: HashMap::new(),
+        };
+
+        // Built-in default: 00_LAB_ORTAK_TAKVIM.md belongs only to donem_7
+        let d7 = resolve_root_doc_scope("00_LAB_ORTAK_TAKVIM.md", "# Lab Takvimi", &cfg);
+        assert_eq!(d7.space, "donem_7");
+        assert_eq!(d7.spaces, vec!["donem_7".to_string()]);
+        assert!(!d7.global);
+        assert_eq!(d7.source, "default");
+
+        // Unconfigured generic root doc defaults to global ("all")
+        let gen = resolve_root_doc_scope("00_GENEL_KURALLAR.md", "# Genel Kurallar", &cfg);
+        assert_eq!(gen.space, "all");
+        assert_eq!(gen.spaces, vec!["all".to_string()]);
+        assert!(gen.global);
+
+        // Frontmatter single workspace (by title or id)
+        let fm_single = "---\nspace: Dönem 8\n---\n# 8. Dönem Takvimi\n";
+        let r8 = resolve_root_doc_scope("00_DONEM8_TAKVIM.md", fm_single, &cfg);
+        assert_eq!(r8.space, "donem_8");
+        assert_eq!(r8.spaces, vec!["donem_8".to_string()]);
+        assert!(!r8.global);
+        assert_eq!(r8.source, "frontmatter");
+
+        // Frontmatter multi-workspace YAML list
+        let fm_multi = "---\n# comment\nspaces:\n  - donem_7\n  - donem_8\n---\n# Ortak Föy\n";
+        let r_multi = resolve_root_doc_scope("00_ORTAK_FOY.md", fm_multi, &cfg);
+        assert_eq!(r_multi.space, "donem_7");
+        assert_eq!(r_multi.spaces, vec!["donem_7".to_string(), "donem_8".to_string()]);
+        assert!(!r_multi.global);
+        assert_eq!(clean_title(Path::new("00_ORTAK_FOY.md"), fm_multi), "Ortak Föy");
+
+        // Frontmatter global flag overrides built-in default
+        let fm_global = "---\nglobal: true\n---\n# Herkes İçin\n";
+        let r_glob = resolve_root_doc_scope("00_LAB_ORTAK_TAKVIM.md", fm_global, &cfg);
+        assert!(r_glob.global);
+        assert_eq!(r_glob.space, "all");
+        assert_eq!(r_glob.source, "frontmatter");
+
+        // Explicit config mapping takes precedence over frontmatter
+        cfg.root_doc_spaces.insert(
+            "00_DONEM8_TAKVIM.md".to_string(),
+            RootDocScopeCfg::Single("donem_7".to_string()),
+        );
+        let r_cfg = resolve_root_doc_scope("00_DONEM8_TAKVIM.md", fm_single, &cfg);
+        assert_eq!(r_cfg.space, "donem_7");
+        assert!(!r_cfg.global);
+        assert_eq!(r_cfg.source, "config");
+
+        // Config global override works for 00_LAB_ORTAK_TAKVIM.md too
+        cfg.root_doc_spaces.insert(
+            "00_LAB_ORTAK_TAKVIM.md".to_string(),
+            RootDocScopeCfg::Single("all".to_string()),
+        );
+        let r_cfg_all = resolve_root_doc_scope("00_LAB_ORTAK_TAKVIM.md", "", &cfg);
+        assert!(r_cfg_all.global);
+        assert_eq!(r_cfg_all.space, "all");
+        assert_eq!(r_cfg_all.source, "config");
+    }
+
+    #[test]
     fn folder_meta_applies_override() {
         let mut cfg = SpacesCfg {
             version: 1,
             spaces: default_spaces_list(),
             assignments: HashMap::new(),
+            root_doc_spaces: HashMap::new(),
             kasa_meta: HashMap::new(),
             tree_order: HashMap::new(),
         };

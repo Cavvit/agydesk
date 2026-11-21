@@ -28,7 +28,7 @@ use futures_util::stream::Stream;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     convert::Infallible,
     hash::{Hash, Hasher},
     net::TcpStream,
@@ -36,12 +36,12 @@ use std::{
     path::Path,
     process::Command,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
@@ -94,6 +94,9 @@ struct AppState {
     mem_hashes: Arc<Mutex<HashMap<String, u64>>>,
     auth_needed: Arc<AtomicBool>,
     auth_running: Arc<AtomicBool>,
+    guard_pending: Arc<Mutex<HashMap<String, (String, oneshot::Sender<bool>)>>>,
+    guard_grants: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    guard_seq: Arc<AtomicU64>,
 }
 
 fn hash_str(s: &str) -> u64 {
@@ -143,9 +146,32 @@ fn ws_hint_for(session: &str) -> String {
         ),
         _ => String::new(),
     };
+    let study_rule = if config::is_study_session(session) {
+        let pdirs: Vec<String> = config::PERSONAL_DIRS
+            .iter()
+            .map(|(_, lbl, p)| format!("{} ({})", lbl, p.to_string_lossy()))
+            .collect();
+        if pdirs.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " Kişisel klasörler [{}] ve Drive geneline yazma işlemleri KULLANICI ONAYI ile açıktır: kullanıcı istediğinde `agydesk-guard.exe --list \"<klasor>\"` (en yeniden eskiye listeler), read_file/write_file/edit_file veya `agydesk-guard.exe --copy/--move/--sync` aracını doğrudan çağır, AgyDesk kullanıcıya otomatik onay kartı gösterir (reddedilirse bildiriş yap). Proje klasörleri (ai-workstation, .git, .agents, .gemini), sistem klasörleri ve genel shell kesinlikle kapalıdır.",
+                pdirs.join(", ")
+            )
+        }
+    } else {
+        String::new()
+    };
+    let mode_label = if config::is_study_session(session) {
+        "AgyStudy Çalışma Modu (Kasa/Drive otomatik; İndirilenler/Masaüstü/Belgeler/Resimler/Drive-yazma kullanıcı onaylı; proje/genel shell kapalı)"
+    } else {
+        "AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/PDF üretimi/Dosya listeleme-kopyalama-taşıma-senkron; proje/genel shell kapalı)"
+    };
     format!(
-        "[AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/PDF üretimi; proje/genel shell kapalı). Kasa: {vd}. {write_rule}{drive_rule} \
+        "[{mode_label}. Kasa: {vd}. {write_rule}{drive_rule}{study_rule} \
+Klasör içeriğini en yeniden eskiye listelemek için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --list \"<klasor>\" çalıştır. \
 PDF oluşturmak için önce kasaya .md veya .html yaz, sonra run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --md-to-pdf \"<girdi.md>\" \"<cikti.pdf>\" (veya --html-to-pdf) çalıştır. \
+İkili dosya (PDF, görsel, PPTX, DOCX vb.) veya klasör kopyalamak/taşımak/Drive'a yedeklemek için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --copy \"<kaynak>\" \"<hedef>\" (veya --move, --sync) çalıştır. \
 Not açmak için [[Dosya_Adi]] yaz. Matematik: $...$/$$...$$. ASCII çizme; devre için ```sema trafo-esdeger|trafo-bosta|trafo-kisadevre|trafo-baglanti|dc-sont```, akış için ```mermaid``` (alt çizgisiz etiket) kullan.]\n\n"
     )
 }
@@ -264,6 +290,15 @@ fn default_space_accent() -> String {
 #[derive(Deserialize)]
 struct SpaceDelQuery {
     id: String,
+}
+
+#[derive(Deserialize)]
+struct RootDocSpaceReq {
+    rel: String,
+    #[serde(default)]
+    space: Option<String>,
+    #[serde(default)]
+    spaces: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -505,6 +540,29 @@ async fn delete_space_ep(
     }
 }
 
+async fn update_root_doc_space_ep(
+    State(st): State<AppState>,
+    Json(r): Json<RootDocSpaceReq>,
+) -> Response {
+    match vault::update_root_doc_space(&r.rel, r.space.as_deref(), r.spaces.as_deref()) {
+        Ok(res) => {
+            let sp = res
+                .get("space")
+                .and_then(|v| v.as_str())
+                .unwrap_or("all");
+            store::add_log(
+                "vault",
+                &format!("📌 Ortak kök belge kapsamı güncellendi: {} → {}", r.rel, sp),
+                "ok",
+            );
+            st.emit("log", json!({}));
+            Json(res).into_response()
+        }
+        Err(e) if e.starts_with("Dosya bulunamadı:") => err_resp(StatusCode::NOT_FOUND, e),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
 async fn create_folder_ep(
     State(st): State<AppState>,
     Json(r): Json<FolderCreateReq>,
@@ -672,6 +730,28 @@ async fn get_pptx_ep(Query(q): Query<RelQuery>) -> Response {
         Ok(val) => Json(val).into_response(),
         Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
     }
+}
+
+async fn get_pptx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::pptx_to_pdf_bytes(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/pdf")
+            .header(axum::http::header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(bytes))
+            .unwrap_or_else(|e| err_resp(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn delete_pptx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    vault::evict_pptx_pdf(&q.rel);
+    Json(json!({"ok": true})).into_response()
 }
 
 async fn get_pdf_info_ep(Query(q): Query<RelQuery>) -> Response {
@@ -1050,12 +1130,29 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
         }
     }
 
-    let dec = if r.force_provider.as_deref() == Some("local") {
-        router::Decision {
-            provider: "local".to_string(),
-            label: provider_spec("local").label.to_string(),
-            reason: "Kullanıcı yerel modele yönlendirdi".to_string(),
-            fallback: true,
+    let dec = if let Some(fp) = r.force_provider.as_deref().filter(|s| !s.trim().is_empty()) {
+        let restricted = config::is_restricted_session(&r.session);
+        let allowed = match fp {
+            "local" | "gemini-hydrogen" | "gemini-neon" => true,
+            "gemini-argon" | "claude-sonnet" | "claude-opus" => !restricted,
+            _ => false,
+        };
+        if allowed {
+            let spec = provider_spec(fp);
+            router::Decision {
+                provider: spec.id.to_string(),
+                label: spec.label.to_string(),
+                reason: format!("Kullanıcı {} modelini seçti", spec.label),
+                fallback: fp == "local",
+            }
+        } else {
+            router::route_for_session(
+                &r.session,
+                &r.text,
+                r.skill.as_deref(),
+                !r.images.is_empty(),
+                store::used_pct,
+            )
         }
     } else {
         if providers::agy_available() {
@@ -1063,7 +1160,13 @@ async fn run_ep(State(st): State<AppState>, Json(r): Json<RunReq>) -> Response {
                 let _ = tokio::task::spawn_blocking(|| store::fetch_agy_usage(false)).await;
             });
         }
-        router::route(&r.text, r.skill.as_deref(), !r.images.is_empty(), store::used_pct)
+        router::route_for_session(
+            &r.session,
+            &r.text,
+            r.skill.as_deref(),
+            !r.images.is_empty(),
+            store::used_pct,
+        )
     };
     store::add_log(
         &r.session,
@@ -1104,6 +1207,7 @@ async fn stop_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json<
     if let Ok(mut steps) = st.steps.lock() {
         steps.remove(&r.session);
     }
+    cancel_guard_approvals_for_session(&st, &r.session);
     store::add_log(&r.session, "■ Acil durdurma", "w");
     st.emit("log", json!({}));
     Json(json!({ "stopped": killed || aborted }))
@@ -1111,6 +1215,10 @@ async fn stop_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json<
 
 async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json<Value> {
     providers::kill_session_proc(&r.session);
+    cancel_guard_approvals_for_session(&st, &r.session);
+    if let Ok(mut g) = st.guard_grants.lock() {
+        g.remove(&r.session);
+    }
     store::set_conv_id(&r.session, None);
     store::clear_chat_msgs(&r.session);
     if let Ok(mut m) = st.src_hashes.lock() {
@@ -1122,6 +1230,141 @@ async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json
     store::add_log(&r.session, "🧹 Oturum bağlamı sıfırlandı", "m");
     st.emit("log", json!({}));
     Json(json!({ "cleared": true }))
+}
+
+#[derive(Deserialize)]
+struct GuardApproveReq {
+    session: String,
+    #[serde(default)]
+    tool: String,
+    #[serde(default)]
+    action: String,
+    #[serde(default)]
+    root_key: String,
+    #[serde(default)]
+    root_label: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    dst_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GuardDecideReq {
+    id: String,
+    #[serde(default)]
+    session: String,
+    allow: bool,
+    #[serde(default)]
+    remember: bool,
+    #[serde(default)]
+    root_key: Option<String>,
+}
+
+fn cancel_guard_approvals_for_session(st: &AppState, session: &str) {
+    let mut cancelled_ids = Vec::new();
+    if let Ok(mut pending) = st.guard_pending.lock() {
+        let keys: Vec<String> = pending
+            .iter()
+            .filter(|(_, (s, _))| s == session)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in keys {
+            if let Some((_, tx)) = pending.remove(&k) {
+                let _ = tx.send(false);
+                cancelled_ids.push(k);
+            }
+        }
+    }
+    for id in cancelled_ids {
+        st.emit(
+            "guard_approval_done",
+            json!({ "id": id, "session": session, "allow": false }),
+        );
+    }
+}
+
+async fn guard_approve_ep(State(st): State<AppState>, Json(r): Json<GuardApproveReq>) -> Json<Value> {
+    if !r.session.is_empty() && !r.root_key.is_empty() {
+        if let Ok(grants) = st.guard_grants.lock() {
+            if grants
+                .get(&r.session)
+                .map(|set| set.contains(&r.root_key))
+                .unwrap_or(false)
+            {
+                return Json(json!({ "decision": "allow" }));
+            }
+        }
+    }
+
+    let seq = st.guard_seq.fetch_add(1, Ordering::Relaxed) + 1;
+    let req_id = format!("g_{}", seq);
+    let (tx, rx) = oneshot::channel::<bool>();
+    if let Ok(mut pending) = st.guard_pending.lock() {
+        pending.insert(req_id.clone(), (r.session.clone(), tx));
+    }
+
+    st.emit(
+        "guard_approval",
+        json!({
+            "id": req_id,
+            "session": r.session,
+            "tool": r.tool,
+            "action": r.action,
+            "root_key": r.root_key,
+            "root_label": r.root_label,
+            "path": r.path,
+            "dst_path": r.dst_path,
+        }),
+    );
+
+    match tokio::time::timeout(Duration::from_secs(120), rx).await {
+        Ok(Ok(true)) => Json(json!({ "decision": "allow" })),
+        Ok(Ok(false)) => Json(json!({
+            "decision": "deny",
+            "reason": "Kullanıcı bu klasör/dosya erişimini reddetti."
+        })),
+        _ => {
+            if let Ok(mut pending) = st.guard_pending.lock() {
+                pending.remove(&req_id);
+            }
+            st.emit(
+                "guard_approval_done",
+                json!({ "id": req_id, "session": r.session, "allow": false }),
+            );
+            Json(json!({
+                "decision": "deny",
+                "reason": "Klasör erişim onayı zaman aşımına uğradı veya iptal edildi."
+            }))
+        }
+    }
+}
+
+async fn guard_decide_ep(State(st): State<AppState>, Json(r): Json<GuardDecideReq>) -> Json<Value> {
+    let mut sess = r.session.clone();
+    if let Ok(mut pending) = st.guard_pending.lock() {
+        if let Some((s, tx)) = pending.remove(&r.id) {
+            if sess.is_empty() {
+                sess = s;
+            }
+            if r.allow && r.remember {
+                if let Some(rk) = r.root_key.as_deref().filter(|k| !k.is_empty()) {
+                    if let Ok(mut grants) = st.guard_grants.lock() {
+                        grants
+                            .entry(sess.clone())
+                            .or_default()
+                            .insert(rk.to_string());
+                    }
+                }
+            }
+            let _ = tx.send(r.allow);
+        }
+    }
+    st.emit(
+        "guard_approval_done",
+        json!({ "id": r.id, "session": sess, "allow": r.allow }),
+    );
+    Json(json!({ "ok": true }))
 }
 
 #[derive(Deserialize)]
@@ -1844,6 +2087,9 @@ fn build_router() -> Router {
         mem_hashes: Arc::new(Mutex::new(HashMap::new())),
         auth_needed: Arc::new(AtomicBool::new(false)),
         auth_running: Arc::new(AtomicBool::new(false)),
+        guard_pending: Arc::new(Mutex::new(HashMap::new())),
+        guard_grants: Arc::new(Mutex::new(HashMap::new())),
+        guard_seq: Arc::new(AtomicU64::new(0)),
     };
 
     let frontend_dir = ROOT.join("frontend");
@@ -1858,6 +2104,7 @@ fn build_router() -> Router {
         .route("/api/kasa", post(create_kasa_ep))
         .route("/api/kasa/update", post(update_kasa_ep))
         .route("/api/space", post(save_space_ep).delete(delete_space_ep))
+        .route("/api/root_doc/space", post(update_root_doc_space_ep))
         .route("/api/folder", post(create_folder_ep))
         .route("/api/note", get(get_note_ep).post(save_note_ep).delete(delete_note_ep))
         .route("/api/note/create", post(create_note_ep))
@@ -1866,6 +2113,7 @@ fn build_router() -> Router {
         .route("/api/upload", post(upload_asset_ep))
         .route("/api/docx", get(get_docx_ep))
         .route("/api/pptx", get(get_pptx_ep))
+        .route("/api/pptx_pdf", get(get_pptx_pdf_ep).delete(delete_pptx_pdf_ep))
         .route("/api/pdf_info", get(get_pdf_info_ep))
         .route("/api/raw/*rel", get(raw_file_ep))
         .route("/api/chats", get(get_chats_ep).post(post_chat_ep))
@@ -1876,6 +2124,8 @@ fn build_router() -> Router {
         .route("/api/stop", post(stop_ep))
         .route("/api/clear", post(clear_ep))
         .route("/api/undo", post(undo_ep))
+        .route("/api/guard/approve", post(guard_approve_ep))
+        .route("/api/guard/decide", post(guard_decide_ep))
         .route("/api/media/status", get(media_status_ep))
         .route("/api/media/cmd", post(media_cmd_ep))
         .route("/api/open", post(open_target_ep))

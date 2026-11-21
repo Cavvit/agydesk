@@ -25,6 +25,87 @@ const ICON_POOL=[
 function getSpaceObj(id){
   return spacesData.find(s=>s.id===id)||null;
 }
+function isRootDocGlobal(d){
+  if(!d) return false;
+  if(d.global===true||d.space==='all'||d.space==='global'||d.space==='*') return true;
+  return Array.isArray(d.spaces)&&d.spaces.some(s=>s==='all'||s==='global'||s==='*');
+}
+function rootDocSpacesList(d){
+  if(!d) return [];
+  if(isRootDocGlobal(d)) return ['all'];
+  if(Array.isArray(d.spaces)&&d.spaces.length) return d.spaces.filter(Boolean);
+  return d.space?[d.space]:[];
+}
+function rootDocMatchesSpace(d,spaceId){
+  if(!d) return false;
+  if(!spaceId||spaceId==='all') return isRootDocGlobal(d);
+  if(isRootDocGlobal(d)) return true;
+  return rootDocSpacesList(d).includes(spaceId);
+}
+function rootDocOnlyInSpace(d,spaceId){
+  if(!d||!spaceId||spaceId==='all'||isRootDocGlobal(d)) return false;
+  return rootDocSpacesList(d).includes(spaceId);
+}
+function rootDocScopeBadge(d){
+  if(isRootDocGlobal(d)) return {text:'🌐 Tüm Alanlar',title:'Global · Tüm çalışma alanlarında görünür',global:true};
+  const list=rootDocSpacesList(d);
+  const objs=list.map(id=>getSpaceObj(id)).filter(Boolean);
+  if(!objs.length) return {text:'🌐 Tüm Alanlar',title:'Global · Tüm çalışma alanlarında görünür',global:true};
+  const first=objs[0];
+  const extra=objs.length>1?` +${objs.length-1}`:'';
+  const full=objs.map(s=>`${s.icon||'🗂'} ${s.title}`).join(', ');
+  return {text:`${first.icon||'🗂'} ${first.title}${extra}`,title:`Kapsam: ${full}`,global:false};
+}
+async function setRootDocScope(rel,targetSpace,opts={}){
+  const prevDoc=rootDocsData.find(d=>d.rel===rel)||pages['note:'+rel]||null;
+  const prevSpaces=prevDoc?rootDocSpacesList(prevDoc):['all'];
+  const payload=Array.isArray(targetSpace)?{rel,spaces:targetSpace}:{rel,space:targetSpace};
+  try{
+    const res=await api('/api/root_doc/space',payload);
+    const nid='note:'+rel;
+    if(noteCache[nid]){
+      noteCache[nid].space=res.space;
+      noteCache[nid].spaces=res.spaces;
+      noteCache[nid].global=res.global;
+      noteCache[nid].scope_source=res.scope_source;
+    }
+    await loadVault();
+    const label=res.global?'🌐 Tüm Alanlar (Global)':(getSpaceObj(res.space)?`${getSpaceObj(res.space).icon||'🗂'} ${getSpaceObj(res.space).title}`:res.space);
+    if(!opts.skipUndo){
+      const prevPayload=prevSpaces.length>1?prevSpaces:(prevSpaces[0]||'all');
+      pushAppUndo({
+        label:`"${rel}" kapsam değişikliği`,
+        undo:async()=>{ await setRootDocScope(rel,prevPayload,{skipUndo:true}); },
+        redo:async()=>{ await setRootDocScope(rel,targetSpace,{skipUndo:true}); }
+      });
+    }
+    toast(`📌 "${prevDoc&&prevDoc.title?prevDoc.title:rel}" → ${label}${opts.skipUndo?'':' (Ctrl+Z: Geri al)'}`);
+  }catch(e){ alert('Belge kapsamı güncellenemedi: '+e.message); }
+}
+function openRootDocScopeMenu(ev,rel){
+  if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+  const doc=rootDocsData.find(d=>d.rel===rel)||pages['note:'+rel];
+  if(!doc) return;
+  const curGlobal=isRootDocGlobal(doc);
+  const curList=rootDocSpacesList(doc);
+  const items=[
+    {
+      icon:'🌐',
+      text:`Tüm Alanlar (Global)${curGlobal?' ✓':''}`,
+      fn:()=>{ closeNotionTreeMenu(); if(!curGlobal) setRootDocScope(rel,'all'); }
+    },
+    {sep:true},
+    ...spacesData.map(sp=>{
+      const on=!curGlobal&&curList.length===1&&curList[0]===sp.id;
+      return {
+        icon:sp.icon||'🗂',
+        text:`Sadece ${sp.title}${on?' ✓':''}`,
+        fn:()=>{ closeNotionTreeMenu(); if(!on) setRootDocScope(rel,sp.id); }
+      };
+    })
+  ];
+  showTreeMenuItems(ev,`📌 Kapsam: ${doc.title||doc.t||rel}`,items);
+}
 function renderAccentSwatches(inputId,activeHex){
   const cur=(activeHex||'#e0a458').toLowerCase();
   return `<input type="hidden" id="${inputId}" value="${escHtml(activeHex||'#e0a458')}">
@@ -561,25 +642,54 @@ async function openTargetLink(ev,target,forceReveal=false){
 function revealTargetFolder(ev,target){
   return openTargetLink(ev,target,true);
 }
+function normalizeVaultAssetRel(target,base){
+  let s=String(target||'').trim();
+  if(!s) return '';
+  if(/^https?:\/\//i.test(s)&&!s.includes('/api/raw/')) return s;
+  if(s.startsWith('note:')) s=s.slice(5);
+  s=s.replace(/^.*\/api\/raw\//,'');
+  if(/^file:\/\/\//i.test(s)) s=s.slice(8);
+  else if(/^file:\/\//i.test(s)) s=s.slice(7);
+  try{ s=decodeURIComponent(s); }catch(e){}
+  s=s.replace(/\\/g,'/').replace(/^\/+(?=[A-Za-z]:\/)/,'').split('#')[0].split('?')[0];
+  const low=s.toLowerCase();
+  for(const marker of ['/agydesk_dokuman/','/agydesk_notlar/','/agydesk_belgeler/','/notes/']){
+    const idx=low.lastIndexOf(marker);
+    if(idx!==-1){ s=s.slice(idx+marker.length); break; }
+  }
+  while(s.startsWith('../')||s.startsWith('./')){
+    s=s.startsWith('../')?s.slice(3):s.slice(2);
+  }
+  s=s.replace(/^(?:AgyDesk_Dokuman|AgyDesk_Notlar)\//i,'').replace(/^\/+/,'');
+  if(base&&s&&!s.startsWith(base+'/')&&!/^[A-Za-z]:\//.test(s)){
+    const firstSeg=s.split('/')[0];
+    const isKasa=(typeof kasalarData!=='undefined'&&Array.isArray(kasalarData)&&kasalarData.some(k=>k.key===firstSeg))||firstSeg===base.split('/')[0];
+    if(!isKasa) s=base+'/'+s;
+  }
+  return s;
+}
 function mdToHtml(md,base){
   const mathBlocks=[], codeBlocks=[];
-  let s=String(md).replace(/\r\n/g,'\n');
-  const resolveRel=t=>/^https?:\/\//i.test(t)?t:(base?base+'/'+t:t);
+  let s=splitLeadingFrontmatter(md).body;
+  const resolveRel=t=>normalizeVaultAssetRel(t,base);
   const imgPh=(t,alt)=>{
     t=String(t).trim(); const e=p=>'/api/raw/'+encodeURI(p);
+    const cleanT=normalizeVaultAssetRel(t,'');
     const rel=resolveRel(t);
-    const tag=/^https?:\/\//i.test(t)
-      ?`<img class="nimg" src="${t}" alt="${alt}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" onclick="openRightViewer('${t}','${alt||'Görsel'}')" ondblclick="openDocInTab('${t}','${alt||'Görsel'}')">`
-      :`<img class="nimg" src="${e(rel)}" data-alt="${e(t)}" data-rel="${rel}" alt="${alt}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" loading="lazy" onclick="openRightViewer(this.dataset.rel||this.src,this.alt)" ondblclick="openDocInTab(this.dataset.rel||this.src,this.alt)" onerror="if(this.dataset.alt&&!this.dataset.t){this.dataset.t=1;this.src=this.dataset.alt;this.dataset.rel='${t}'}"><button class="emb-x" onclick="event.stopPropagation();removeEmbed('${t}')" title="Bu eki nottan kaldır">✕ kaldır</button>`;
+    const isHttp=/^https?:\/\//i.test(rel);
+    const safeRel=escAttr(rel), safeT=escAttr(t), safeAlt=escAttr(alt||''), safeLbl=escAttr(alt||'Görsel');
+    const tag=isHttp
+      ?`<img class="nimg" src="${safeRel}" alt="${safeAlt}" data-rel="${safeRel}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" onclick="openRightViewer(this.dataset.rel,this.alt||'Görsel')" ondblclick="openDocInTab(this.dataset.rel,this.alt||'Görsel')">`
+      :`<img class="nimg" src="${e(rel)}" data-alt="${e(cleanT)}" data-fallback-rel="${escAttr(cleanT)}" data-raw="${safeT}" data-rel="${safeRel}" alt="${safeAlt}" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç" loading="lazy" onclick="openRightViewer(this.dataset.rel||this.src,this.alt)" ondblclick="openDocInTab(this.dataset.rel||this.src,this.alt)" onerror="if(this.dataset.alt&&!this.dataset.t){this.dataset.t=1;this.src=this.dataset.alt;this.dataset.rel=this.dataset.fallbackRel||this.dataset.rel}"><button class="emb-x" data-raw="${safeT}" onclick="event.stopPropagation();removeEmbed(this.dataset.raw)" title="Bu eki nottan kaldır">✕ kaldır</button>`;
     return `@@CODE_${codeBlocks.push(tag)-1}@@`;
   };
   const docPh=(t,alt)=>{
     t=String(t).trim(); const rel=resolveRel(t);
-    const ext=t.slice(t.lastIndexOf('.')).toLowerCase();
+    const ext=rel.includes('.')?rel.slice(rel.lastIndexOf('.')).toLowerCase():'';
     const ic=ext==='.pdf'?'📄':(ext.startsWith('.ppt')?'📊':(ext.startsWith('.xls')||ext==='.csv'?'📗':'📘'));
-    const lbl=alt||t.split('/').pop();
-    const safeLbl=lbl.replace(/'/g,'');
-    const tag=`<span class="doc-chip" onclick="openRightViewer('${rel}','${safeLbl}')" ondblclick="openDocInTab('${rel}','${safeLbl}')" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç (${rel})">${ic} ${lbl} <small style="opacity:.65">👁 önizle</small><small style="opacity:.85;margin-left:3px;padding:1px 5px;border-radius:4px;background:var(--cu-d);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent)" onclick="event.stopPropagation();openDocInTab('${rel}','${safeLbl}')" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢ sekmede aç</small><button class="emb-x" onclick="event.stopPropagation();removeEmbed('${t}')" title="Bu eki nottan kaldır">✕ kaldır</button></span>`;
+    const lbl=alt||rel.split('/').pop()||t.split('/').pop();
+    const safeRel=escAttr(rel), safeLbl=escAttr(lbl), safeT=escAttr(t);
+    const tag=`<span class="doc-chip" data-rel="${safeRel}" data-lbl="${safeLbl}" onclick="openRightViewer(this.dataset.rel,this.dataset.lbl)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.lbl)" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç (${safeRel})">${ic} ${escHtml(lbl)} <small style="opacity:.65">👁 önizle</small><small style="opacity:.85;margin-left:3px;padding:1px 5px;border-radius:4px;background:var(--cu-d);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent)" onclick="event.stopPropagation();openDocInTab(this.parentElement.dataset.rel,this.parentElement.dataset.lbl)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢ sekmede aç</small><button class="emb-x" data-raw="${safeT}" onclick="event.stopPropagation();removeEmbed(this.dataset.raw)" title="Bu eki nottan kaldır">✕ kaldır</button></span>`;
     return `@@CODE_${codeBlocks.push(tag)-1}@@`;
   };
   s=s.replace(/```sema[ \t]+([\w-]+)[^\n]*\n([\s\S]*?)```/g,(_,n)=>{
@@ -610,8 +720,8 @@ function mdToHtml(md,base){
   s=s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s=s.replace(/!\[\[([^\]|]+\.(?:png|jpe?g|gif|webp|bmp|svg|avif))(?:\|([^\]]*))?\]\]/gi,(_,t,a)=>imgPh(t,a||''));
   s=s.replace(/!?\[\[([^\]|]+\.(?:pdf|docx?|pptx?|xlsx?|csv|txt))(?:\|([^\]]*))?\]\]/gi,(_,t,a)=>docPh(t,a||''));
-  s=s.replace(/!\[([^\]]*)\]\(([^)\s]+\.(?:pdf|docx?|pptx?|xlsx?|csv|txt))\)/gi,(_,a,t)=>docPh(t,a));
-  s=s.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,(_,a,t)=>imgPh(t,a));
+  s=s.replace(/!\[([^\]]*)\]\(([^)\n]+\.(?:pdf|docx?|pptx?|xlsx?|csv|txt))\)/gi,(_,a,t)=>docPh(t,a));
+  s=s.replace(/!\[([^\]]*)\]\(([^)\n]+)\)/g,(_,a,t)=>imgPh(t,a));
   s=s.replace(/\[\[([^\]]+)\]\]/g,(_,inner)=>{
     const {id,label}=resolveWiki(inner);
     return id?`<span class="link" onclick="openPage('${id}')">📄 ${label}</span>`:`<span class="link">[[${label}]]</span>`;
@@ -750,6 +860,8 @@ const UI_SYNC_KEYS=[
 ];
 let _restoringSession=false;
 let _uiStateHydrated=false;
+let _closedWinsDirty=false;
+let _bootNeedServerClosedWin=false;
 let _uiStatePendingPatch={};
 let _uiStateFlushTimer=null;
 const _initialLocalSeed={};
@@ -928,10 +1040,11 @@ function saveSessionTabs(isClosing=false){
       try{
         let lst=[]; try{ lst=JSON.parse(localStorage.getItem(CLOSED_WINS_KEY)||'[]'); }catch(e){}
         if(!Array.isArray(lst)) lst=[];
-        lst=lst.filter(x=>x&&x.id!==TAB_DOCK_WIN_ID);
-        if(payload.openTabs.length) lst.unshift({id:TAB_DOCK_WIN_ID,ts:Date.now(),p:payload});
+        lst=lst.filter(x=>x&&x.id!==WIN_ID&&x.id!==TAB_DOCK_WIN_ID);
+        if(payload.openTabs.length) lst.unshift({id:WIN_ID,ts:Date.now(),p:payload});
         const out=JSON.stringify(lst.slice(0,3));
         localStorage.setItem(CLOSED_WINS_KEY,out);
+        _closedWinsDirty=true;
         persistUiState({[CLOSED_WINS_KEY]:out},false);
       }catch(e){}
     }
@@ -1009,9 +1122,42 @@ function restoreSessionTabs(){
     let winRaw=null;
     try{ winRaw=sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
     const isFreshWindow=!winRaw;
-    const raw=winRaw||localStorage.getItem(LAST_CLOSED_WIN_KEY)||localStorage.getItem(TAB_STORE_KEY);
-    if(!raw) return false;
-    const saved=JSON.parse(raw);
+    let saved=null;
+    if(!isFreshWindow){
+      // Ctrl+R reload: remove any entry pushed by our own beforeunload so we don't duplicate an open window
+      try{
+        let lst=JSON.parse(localStorage.getItem(CLOSED_WINS_KEY)||'[]');
+        if(Array.isArray(lst)&&lst.some(x=>x&&x.id===WIN_ID)){
+          const out=JSON.stringify(lst.filter(x=>x&&x.id!==WIN_ID).slice(0,3));
+          localStorage.setItem(CLOSED_WINS_KEY,out);
+          _closedWinsDirty=true;
+          persistUiState({[CLOSED_WINS_KEY]:out},true);
+        }
+      }catch(e){}
+      saved=JSON.parse(winRaw);
+    }else{
+      // Fresh window launch (double-click AgyDesk.exe): pop 1 closed window (LIFO, max 3); if empty -> blank Çalışma Alanları
+      const rawList=localStorage.getItem(CLOSED_WINS_KEY);
+      if(rawList===null){
+        _bootNeedServerClosedWin=true;
+        return false;
+      }
+      let lst=[]; try{ lst=JSON.parse(rawList||'[]'); }catch(e){}
+      if(!Array.isArray(lst)) lst=[];
+      while(lst.length){
+        const entry=lst.shift();
+        if(entry&&entry.p&&Array.isArray(entry.p.openTabs)&&entry.p.openTabs.length){
+          saved=entry.p;
+          break;
+        }
+      }
+      if(saved){
+        const out=JSON.stringify(lst.slice(0,3));
+        localStorage.setItem(CLOSED_WINS_KEY,out);
+        _closedWinsDirty=true;
+        persistUiState({[CLOSED_WINS_KEY]:out},true);
+      }
+    }
     if(!saved||!Array.isArray(saved.openTabs)||!saved.openTabs.length) return false;
     _restoringSession=true;
     if(saved.treeOpen&&typeof saved.treeOpen==='object'){
@@ -1021,7 +1167,9 @@ function restoreSessionTabs(){
     if(typeof saved.currentKasa==='string'&&saved.currentKasa) currentKasa=saved.currentKasa;
     const cleaned=[];
     saved.openTabs.forEach(t=>{
-      if(typeof t!=='string'||!t||cleaned.includes(t)) return;
+      if(typeof t!=='string'||!t) return;
+      if(t.startsWith('note:')) t='note:'+normalizeVaultAssetRel(t.slice(5),'');
+      if(cleaned.includes(t)) return;
       if(t.startsWith('blank:')){
         const num=parseInt(t.slice(6),10);
         if(Number.isFinite(num)&&num>blankN) blankN=num;
@@ -1041,6 +1189,7 @@ function restoreSessionTabs(){
     if(!cleaned.length){ _restoringSession=false; return false; }
     if(typeof saved.theme==='string'&&saved.theme){ try{ sessionStorage.setItem('agydesk_win_theme',saved.theme); }catch(e){} applyTheme(saved.theme,false); }
     openTabs=cleaned;
+    if(typeof saved.active==='string'&&saved.active.startsWith('note:')) saved.active='note:'+normalizeVaultAssetRel(saved.active.slice(5),'');
     active=(typeof saved.active==='string'&&openTabs.includes(saved.active))?saved.active:openTabs[0];
     const targetMode=saved.curMode||(active==='kasalar'?'kasalar':(isAI(active)?'ai':(active==='cal'?'plan':(active==='studychat'?'study':'write'))));
     writeNoLeft=typeof saved.writeNoLeft==='boolean'?saved.writeNoLeft:(targetMode==='write'&&typeof saved.noLeft==='boolean'?saved.noLeft:false);
@@ -1065,6 +1214,7 @@ function restoreSessionTabs(){
     renderMain();
     syncPdfFocusMode();
     _restoringSession=false;
+    if(isFreshWindow) saveSessionTabs(false);
     return true;
   }catch(e){
     _restoringSession=false;
@@ -1249,6 +1399,17 @@ function rebuildTreeAndSources(){
   }else if(spacesData.length){
     topGroups=spacesData.map(sp=>{
       const spKasas=vaultTree.filter(g=>g.space===sp.id);
+      const spScopedRoots=rootDocsData.filter(d=>rootDocOnlyInSpace(d,sp.id));
+      const spKids=[...spKasas];
+      if(spScopedRoots.length){
+        spKids.push({
+          n:`Ortak Belgeler (${spScopedRoots.length})`,
+          i:'📌',
+          rel:`_root_docs:${sp.id}`,
+          open:false,
+          k:spScopedRoots.map(d=>({n:d.title,i:d.icon,id:d.id,rel:d.rel}))
+        });
+      }
       const sk='space:'+sp.id;
       const isOpen=(sk in TREE_OPEN)?TREE_OPEN[sk]:(sp.id==='donem_7'||(spKasas.length>0&&spKasas.length<=3));
       return {
@@ -1257,7 +1418,7 @@ function rebuildTreeAndSources(){
         spaceId:sp.id,
         accent:sp.accent||'#e0a458',
         open:isOpen,
-        k:spKasas
+        k:spKids
       };
     });
     const orphan=vaultTree.filter(g=>!spacesData.some(sp=>sp.id===g.space));
@@ -1265,7 +1426,11 @@ function rebuildTreeAndSources(){
   }else{
     topGroups=vaultTree.map(g=>({...g}));
   }
-  const visRoots=(currentKasa==='all')?rootDocsData.filter(d=>currentSpace==='all'||d.space===currentSpace):[];
+  const visRoots=(currentKasa==='all')
+    ?(currentSpace==='all'
+        ?rootDocsData.filter(d=>isRootDocGlobal(d))
+        :rootDocsData.filter(d=>rootDocMatchesSpace(d,currentSpace)))
+    :[];
   if(visRoots.length){
     topGroups.push({
       n:`Ortak Belgeler (${visRoots.length})`,
@@ -1859,7 +2024,7 @@ function resolveTreeDropMode(ev,el,src,targetNode,flags){
     return {position:'into',targetRel:targetNode.rel};
   }
   if(isRootDocsBucket){
-    return src.kind==='file'?{position:'into',targetRel:'_root_docs'}:null;
+    return src.kind==='file'?{position:'into',targetRel:targetNode.rel||'_root_docs'}:null;
   }
   if(isSubfolder){
     const rect=el.getBoundingClientRect();
@@ -1898,6 +2063,8 @@ async function moveTreeItem(srcRel,targetRel,position='into',opts={}){
     if(res.moved){
       const name=res.new_rel.split('/').pop();
       toast(`📦 "${name}" taşındı${opts.skipUndo?'':' (Ctrl+Z: Geri al)'}`);
+    }else if(res.scope_updated){
+      toast('📌 Ortak belge çalışma alanı kapsamı güncellendi');
     }else if(res.reordered){
       toast('↕ Sıralama güncellendi');
     }
@@ -1953,7 +2120,7 @@ function renderTree(){
     const tk=x.spaceId?('space:'+x.spaceId):(x.rel||((x.id||'')+'|'+x.n));
     if(x.k&&(tk in TREE_OPEN)) x.open=TREE_OPEN[tk];
     const isSpace=Boolean(x.spaceId);
-    const isRootDocsBucket=x.rel==='_root_docs';
+    const isRootDocsBucket=x.rel==='_root_docs'||String(x.rel||'').startsWith('_root_docs:');
     const isRootKasa=Boolean(!isSpace&&x.k&&x.rel&&!String(x.rel).includes('/')&&!isRootDocsBucket);
     const isSubfolder=Boolean(!isSpace&&x.k&&x.rel&&String(x.rel).includes('/'));
     const isVaultFile=Boolean(!isSpace&&!x.k&&x.rel&&String(x.id||'').startsWith('note:'));
@@ -2061,7 +2228,7 @@ function renderTree(){
       more.title='Çalışma Alanı Seçenekleri';
       more.onclick=e=>openSpaceCardMenu(e,x.spaceId);
       act.appendChild(more);
-    }else if(x.k&&(x.rel||x.kasa)&&x.rel!=='_root_docs'){
+    }else if(x.k&&(x.rel||x.kasa)&&!isRootDocsBucket){
       const more=document.createElement('button');
       more.type='button';
       more.className='ph-btn ti-more';
@@ -2082,6 +2249,15 @@ function renderTree(){
         act.appendChild(maxBtn);
       }
       if(!x.k&&String(x.id||'').startsWith('note:')){
+        if(x.rel&&!String(x.rel).includes('/')){
+          const scBtn=document.createElement('button');
+          scBtn.type='button';
+          scBtn.className='ph-btn ti-hover-btn';
+          scBtn.textContent='⋯';
+          scBtn.title='Çalışma alanı kapsamını değiştir (Dönem / Global)';
+          scBtn.onclick=e=>openRootDocScopeMenu(e,x.rel);
+          act.appendChild(scBtn);
+        }
         const delBtn=document.createElement('button');
         delBtn.type='button';
         delBtn.className='ph-btn ti-hover-btn ti-del';
@@ -2150,9 +2326,8 @@ function toggleRightViewerNight(){
   if(fr) fr.style.filter=rvNight?'invert(0.90) hue-rotate(180deg) contrast(0.96)':'none';
 }
 function openDocInTab(relOrUrl,title){
-  let raw=String(relOrUrl||'');
-  if(raw.startsWith('note:')) raw=raw.slice(5);
-  const cleanRel=raw.replace(/^.*\/api\/raw\//,'');
+  const cleanRel=normalizeVaultAssetRel(relOrUrl,typeof notionState!=='undefined'?notionState.baseDir:'');
+  if(!cleanRel) return;
   const id='note:'+cleanRel;
   if(!pages[id]){
     const ext=(cleanRel.includes('.')?cleanRel.slice(cleanRel.lastIndexOf('.')):'').toLowerCase();
@@ -2168,7 +2343,7 @@ async function openRightViewer(relOrUrl,title){
   let raw=String(relOrUrl||'');
   if(raw.startsWith('note:'))raw=raw.slice(5);
   const isHttp=/^https?:\/\//i.test(raw)&&!raw.includes('/api/raw/');
-  const cleanRel=raw.replace(/^.*\/api\/raw\//,'');
+  const cleanRel=isHttp?raw:normalizeVaultAssetRel(raw,typeof notionState!=='undefined'?notionState.baseDir:'');
   const url=isHttp?raw:('/api/raw/'+encodeURI(cleanRel));
   const low=cleanRel.toLowerCase();
   const name=title||decodeURIComponent(cleanRel.split('/').pop()||'Dosya');
@@ -2198,18 +2373,27 @@ async function openRightViewer(relOrUrl,title){
   app.classList.remove('no-right');
   syncPaneBtns();
   if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(low)){
-    const safeName=name.replace(/'/g,'');
-    b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="openDocInTab('${cleanRel}','${safeName}')" title="AgyDesk içinde yeni sekmede tam boy aç"><div class="mono" style="font-size:11px;color:var(--mut)">${cleanRel} · <span class="link" onclick="openDocInTab('${cleanRel}','${safeName}')">⤢ Sekmede Tam Ekran Aç</span></div></div>`;
+    const safeRel=escAttr(cleanRel), safeName=escAttr(name);
+    b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" data-rel="${safeRel}" data-title="${safeName}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="openDocInTab(this.dataset.rel,this.dataset.title)" title="AgyDesk içinde yeni sekmede tam boy aç"><div class="mono" style="font-size:11px;color:var(--mut)">${escHtml(cleanRel)} · <span class="link" data-rel="${safeRel}" data-title="${safeName}" onclick="openDocInTab(this.dataset.rel,this.dataset.title)">⤢ Sekmede Tam Ekran Aç</span></div></div>`;
   }else if(low.endsWith('.pdf')){
     const filt=rvNight?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
     b.innerHTML=`<iframe src="${url}#view=FitH" style="flex:1;width:100%;height:100%;border:0;background:#fff;transition:filter .2s;${filt}"></iframe>`;
   }else if(/\.(pptx?|ppsx)$/i.test(low)){
-    b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Sunum slaytları hazırlanıyor: ${name}…</div>`;
+    if(window._rvPptxRel && window._rvPptxRel!==cleanRel) evictPptxPdf(window._rvPptxRel);
+    window._rvPptxRel=cleanRel;
+    b.innerHTML=`<div class="pptx-rv-bar"><span class="mono" style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span><button class="hb" id="rvPptxPdfBtn">📄 Tam Görünüm (RAM PDF)</button></div><div id="rvPptxStage" class="rview-pptx" style="flex:1;overflow:auto"><div style="padding:20px;color:var(--mut)"><span class="spin"></span> Sunum slaytları hazırlanıyor: ${escHtml(name)}…</div></div>`;
+    const rvStage=b.querySelector('#rvPptxStage');
+    const rvBtn=b.querySelector('#rvPptxPdfBtn');
+    if(rvBtn) rvBtn.onclick=()=>openPptxAsRamPdf(cleanRel,rvStage,rvBtn,rvNight);
     try{
       const d=await api('/api/pptx?rel='+encodeURIComponent(cleanRel));
-      b.innerHTML=`<div class="rview-pptx">${renderPptxSlidesHtml(d)}</div>`;
+      if(d&&d.is_legacy_ppt){
+        openPptxAsRamPdf(cleanRel,rvStage,rvBtn,rvNight);
+      }else if(rvStage){
+        rvStage.innerHTML=renderPptxSlidesHtml(d);
+      }
     }catch(e){
-      b.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${e.message}</div>`;
+      if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${escHtml(e.message)}</div>`;
     }
   }else if(/\.(docx?)$/i.test(low)){
     b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Word belgesi okunuyor: ${name}…</div>`;
@@ -2224,6 +2408,7 @@ async function openRightViewer(relOrUrl,title){
   }
 }
 function closeRightViewer(){
+  if(window._rvPptxRel){ evictPptxPdf(window._rvPptxRel); window._rvPptxRel=null; }
   $('#rtabsBar').style.display='';
   const prev=viewerPrev;
   viewerPrev=null;
@@ -2418,6 +2603,7 @@ function dockTabToWindow(id,targetWinId,dropScreenX){
   tabDockBC.postMessage({type:'dock-drop',target:targetWinId,payload});
   openTabs=openTabs.filter(t=>t!==id);
   removePdfSlot(id);
+  if(id.startsWith('note:')&&/\.(pptx?|ppsx)$/i.test(id)) evictPptxPdf(id.slice(5));
   if(!openTabs.length){
     try{ sessionStorage.removeItem(TAB_STORE_KEY); sessionStorage.removeItem('agy_detached_win'); }catch(e){}
     winAct('close',true);
@@ -2487,6 +2673,7 @@ function detachTabToWindow(id,screenX,screenY){
   else if(active==='studychat') layoutMode('study');
   else layoutMode('write');
   removePdfSlot(id);
+  if(id.startsWith('note:')&&/\.(pptx?|ppsx)$/i.test(id)) evictPptxPdf(id.slice(5));
   renderTabs();
   syncTreeActiveHighlight();
   renderSessions();
@@ -2530,6 +2717,7 @@ function closeTab(id,opts={}){
   else if(active==='studychat') layoutMode('study');
   else if(curMode==='ai') layoutMode('write');
   removePdfSlot(id);
+  if(id.startsWith('note:')&&/\.(pptx?|ppsx)$/i.test(id)) evictPptxPdf(id.slice(5));
   if(!opts.silentUndo&&idx!==-1&&id!=='kasalar'&&!isBlank(id)&&(!closingAi||hasChatActivity(aiSnap))){
     CLOSED_TABS.push({id,idx,aiSnap:closingAi?aiSnap:null});
     if(CLOSED_TABS.length>30) CLOSED_TABS.shift();
@@ -3405,8 +3593,12 @@ function currentEffortLabel(){
   const found=EFFORTS.find(e=>e.id===curEffort);
   return found?found.label:'Low';
 }
+function currentModelPrefLabel(){
+  const found=MODEL_PREFS.find(m=>m.id===curModelPref);
+  return found?found.short:'Oto';
+}
 function syncUnifiedModelPills(){
-  const effTxt='Hydrogen · '+currentEffortLabel();
+  const effTxt=currentModelPrefLabel()+' · '+currentEffortLabel();
   $$('.gem-unified-pill').forEach(btn=>{
     const sid=btn.dataset.msess;
     const m=(ai[sid]&&ai[sid].mode)||'y';
@@ -3417,7 +3609,9 @@ function syncUnifiedModelPills(){
       mEl.textContent=(MODES[m]&&MODES[m].n)||'Akıllı';
       mEl.className='gem-u-mode mode-'+m;
     }
-    btn.title=`Düşünme: ${effTxt} · İzin: ${(MODES[m]&&MODES[m].d)||''} (Shift+Tab)`;
+    btn.title=btn.dataset.showmode==='0'
+      ? `Model & Düşünme Derinliği: ${effTxt}`
+      : `Model: ${effTxt} · İzin: ${(MODES[m]&&MODES[m].d)||''} (Shift+Tab)`;
   });
 }
 function closeGemModelMenu(){
@@ -3438,9 +3632,16 @@ function toggleGemModelMenu(btn,sid,showMode=true){
   menu.dataset.sid=sid;
   menu.dataset.sm=showMode?'1':'0';
   menu.innerHTML=`
+    <div class="gmm-sec">Model</div>
+    ${MODEL_PREFS.map(mp=>`<button type="button" class="gmm-item${mp.id===curModelPref?' on':''}" onclick="setModelPref('${mp.id}');closeGemModelMenu()">
+      <span class="gmm-main">${mp.label}</span>
+      <span class="gmm-sub">${mp.tip}</span>
+      <span class="gmm-chk">${mp.id===curModelPref?'✓':''}</span>
+    </button>`).join('')}
+    <div class="gmm-div"></div>
     <div class="gmm-sec">Düşünme Derinliği</div>
     ${EFFORTS.map(e=>`<button type="button" class="gmm-item${e.id===curEffort?' on':''}" onclick="setEffort('${e.id}');closeGemModelMenu()">
-      <span class="gmm-main">Hydrogen · ${e.label}</span>
+      <span class="gmm-main">${currentModelPrefLabel()} · ${e.label}</span>
       <span class="gmm-sub">${e.tip}</span>
       <span class="gmm-chk">${e.id===curEffort?'✓':''}</span>
     </button>`).join('')}
@@ -3477,7 +3678,7 @@ function gemComposerHtml(opts){
   const att=opts.attachId?`<div class="chat-att-bar gem-att-bar" id="${escAttr(opts.attachId)}"></div>`:'';
   const curM=(ai[opts.sessId]&&ai[opts.sessId].mode)||'y';
   const showMode=Boolean(opts.showMode);
-  const effControl=`<button type="button" class="gem-eff-pill gem-unified-pill" data-msess="${sid}" data-showmode="${showMode?'1':'0'}" onclick="toggleGemModelMenu(this,'${sid}',${showMode})" title="${showMode?'Düşünme derinliği & İzin modu (Shift+Tab)':'Model & Düşünme Derinliği (Effort)'}"><span class="gem-u-eff">Hydrogen · ${currentEffortLabel()}</span>${showMode?`<span class="gem-u-sep">·</span><span class="gem-u-mode mode-${curM}">${(MODES[curM]&&MODES[curM].n)||'Akıllı'}</span>`:''}<svg class="gem-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>`;
+  const effControl=`<button type="button" class="gem-eff-pill gem-unified-pill" data-msess="${sid}" data-showmode="${showMode?'1':'0'}" onclick="toggleGemModelMenu(this,'${sid}',${showMode})" title="${showMode?'Model, düşünme derinliği & İzin modu (Shift+Tab)':'Model & Düşünme Derinliği (Effort)'}"><span class="gem-u-eff">${currentModelPrefLabel()} · ${currentEffortLabel()}</span>${showMode?`<span class="gem-u-sep">·</span><span class="gem-u-mode mode-${curM}">${(MODES[curM]&&MODES[curM].n)||'Akıllı'}</span>`:''}<svg class="gem-chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></button>`;
   return `<div class="gem-wrap"><div class="${cls}" data-gem-sess="${sid}">
     ${att}
     <textarea id="${opts.inputId}" rows="1" placeholder="${escAttr(opts.placeholder||"AgyDesk'e sorun…")}"></textarea>
@@ -3613,7 +3814,45 @@ function aiBody(id){
   if(isEmptyAiWelcome(id)) return aiHeroHtml();
   const live=(s.running&&s.streamText)?`<div class="msg-row a"><div class="msg a live-stream" data-sid="${escAttr(id)}">${escHtml(s.streamText)}</div></div>`:'';
   return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+live+
-    (s.running?`<div class="run"><span class="spin"></span> Çalışıyor…<div class="st">${s.step}</div><div class="prog"><i></i></div></div>`:'');
+    (s.running?`<div class="run" data-run-sid="${escAttr(id)}"><span class="spin"></span> Çalışıyor…<div class="st" data-step-sid="${escAttr(id)}">${escHtml(s.step||'')}</div><div class="prog"><i></i></div></div>`:'');
+}
+function updateChatStepInPlace(sid,stepText){
+  const els=$$('[data-step-sid]').filter(el=>el.dataset.stepSid===sid);
+  if(!els.length) return false;
+  els.forEach(el=>{ el.textContent=stepText||'Çalışıyor…'; });
+  return true;
+}
+function updateChatDeltaInPlace(sid,streamText){
+  let liveEls=$$('.live-stream').filter(el=>el.dataset.sid===sid);
+  if(!liveEls.length){
+    const runEls=$$('[data-run-sid]').filter(el=>el.dataset.runSid===sid);
+    if(!runEls.length) return false;
+    runEls.forEach(runEl=>{
+      if(runEl.closest('#scChat')){
+        const d=document.createElement('div');
+        d.className='sc-msg a live-stream';
+        d.dataset.sid=sid;
+        runEl.parentNode.insertBefore(d,runEl);
+      }else{
+        const row=document.createElement('div');
+        row.className='msg-row a';
+        const d=document.createElement('div');
+        d.className='msg a live-stream';
+        d.dataset.sid=sid;
+        row.appendChild(d);
+        runEl.parentNode.insertBefore(row,runEl);
+      }
+    });
+    liveEls=$$('.live-stream').filter(el=>el.dataset.sid===sid);
+  }
+  if(!liveEls.length) return false;
+  liveEls.forEach(el=>{
+    const sc=el.closest('#aichat, #chat, #scChat');
+    const atBottom=!sc||(sc.scrollHeight-sc.clientHeight-sc.scrollTop)<120;
+    el.textContent=streamText;
+    if(sc&&atBottom) sc.scrollTop=sc.scrollHeight;
+  });
+  return true;
 }
 function scrollChatToLastReply(c,s){
   if(!c||!s||!s._scrollToLastReply) return false;
@@ -3629,13 +3868,25 @@ function scrollChatToLastReply(c,s){
 function renderSideAi(){
   const c=$('#chat'), s=ai.side_ai;
   if(!c||!s) return;
+  const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
+  const prevScroll=c.scrollTop;
+  const nearBottom=prevLen<0||(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
   c.innerHTML=aiBody('side_ai');
-  if(!scrollChatToLastReply(c,s)) c.scrollTop=c.scrollHeight;
+  c.dataset.msgCount=String(s.msgs.length);
+  let pinBottom=false;
+  if(scrollChatToLastReply(c,s)){
+    pinBottom=false;
+  }else if(s.msgs.length!==prevLen||nearBottom){
+    c.scrollTop=c.scrollHeight;
+    pinBottom=true;
+  }else{
+    c.scrollTop=prevScroll;
+  }
   const stBtn=$('#sideAiStop');
   if(stBtn) stBtn.style.display=(s.running||s.pending)?'inline-flex':'none';
   syncAllGemBoxes();
-  runMermaid('#chat .mermaid');
-  renderStudyChatBody();
+  runMermaid('#chat .mermaid',false,pinBottom?()=>{ if($('#chat')) $('#chat').scrollTop=$('#chat').scrollHeight; }:null);
+  if(active==='studychat'&&$('#scChat')) renderStudyChatBody();
 }
 function clearSideAi(){
   api('/api/clear',{session:'side_ai'}).catch(()=>{});
@@ -3795,7 +4046,7 @@ function wireChatDrop(el,getSessionId,onSkill){
   });
 }
 let _lastMermaidTheme='';
-function runMermaid(sel,force=false){
+function runMermaid(sel,force=false,onDone=null){
   if(!window.mermaid)return;
   const els=$$(sel).filter(el=>el.offsetParent!==null);
   if(!els.length)return;
@@ -3819,7 +4070,11 @@ function runMermaid(sel,force=false){
       _lastMermaidTheme=mTheme;
     }
     const p=mermaid.run({nodes:todo});
-    if(p&&typeof p.catch==='function') p.catch(()=>{});
+    if(p&&typeof p.then==='function'){
+      p.then(()=>{ if(typeof onDone==='function') onDone(); }).catch(()=>{});
+    }else if(typeof onDone==='function'){
+      onDone();
+    }
   }catch(e){}
 }
 function aiRefresh(id){
@@ -3828,7 +4083,23 @@ function aiRefresh(id){
   if(active===id&&$('#aichat')){
     const mainEl=$('#aiMain');
     if(mainEl) mainEl.classList.toggle('ai-empty',isEmptyAiWelcome(id));
-    const c=$('#aichat');c.firstChild.innerHTML=aiBody(id);if(!scrollChatToLastReply(c,ai[id])) c.scrollTop=c.scrollHeight;saveChatScroll(id);aiHead(id);runMermaid('#aichat .mermaid');
+    const c=$('#aichat'), s=ai[id];
+    const prevLen=c.dataset.msgCount?+c.dataset.msgCount:-1;
+    const prevScroll=c.scrollTop;
+    const nearBottom=prevLen<0||(c.scrollHeight-c.clientHeight-c.scrollTop)<80;
+    c.firstChild.innerHTML=aiBody(id);
+    c.dataset.msgCount=String(s.msgs.length);
+    let pinBottom=false;
+    if(scrollChatToLastReply(c,s)){
+      pinBottom=false;
+    }else if(s.msgs.length!==prevLen||nearBottom){
+      c.scrollTop=c.scrollHeight;
+      pinBottom=true;
+    }else{
+      c.scrollTop=prevScroll;
+    }
+    saveChatScroll(id);aiHead(id);
+    runMermaid('#aichat .mermaid',false,pinBottom?()=>{ if(active===id&&$('#aichat')){ $('#aichat').scrollTop=$('#aichat').scrollHeight; saveChatScroll(id); } }:null);
   }
   syncAllGemBoxes();
   renderTabs(); renderSessions(); renderAiDrawer();
@@ -3846,11 +4117,25 @@ async function loadLog(){
   }catch(e){}
 }
 const renderLog=loadLog;
+const MODEL_PREFS=[
+  {id:'auto',short:'Oto',label:'Otomatik (Akıllı)',tip:'AgyNote/Study: Hydrogen & Neon · AgyAI: tam yönlendirme'},
+  {id:'gemini-neon',short:'Neon',label:'Gemini 4 Neon',tip:'Güçlü akıl yürütme ve analiz (Gemini kotası)'},
+  {id:'gemini-hydrogen',short:'Hydrogen',label:'Gemini 4 Hydrogen',tip:'Hızlı ve ekonomik günlük model (Gemini kotası)'}
+];
+let curModelPref=localStorage.getItem('agydesk_model_pref')||'auto';
+if(!MODEL_PREFS.some(m=>m.id===curModelPref)) curModelPref='auto';
+function setModelPref(val){
+  if(!MODEL_PREFS.some(m=>m.id===val)) return;
+  curModelPref=val;
+  localStorage.setItem('agydesk_model_pref',val);
+  persistUiState({agydesk_model_pref:val});
+  syncUnifiedModelPills();
+}
 const EFFORTS=[
   {id:'low',label:'Low',tip:'Hızlı yanıt (varsayılan)'},
   {id:'medium',label:'Medium',tip:'Dengeli hız ve analiz'},
   {id:'high',label:'High',tip:'Yüksek akıl yürütme'},
-  {id:'xhigh',label:'XHigh',tip:'Maksimum derinlik (Gemini 4 Hydrogen)'}
+  {id:'xhigh',label:'XHigh',tip:'Maksimum derinlik (Hydrogen & Neon)'}
 ];
 let curEffort=localStorage.getItem('agydesk_effort')||'low';
 if(!EFFORTS.some(e=>e.id===curEffort)) curEffort='low';
@@ -3888,7 +4173,7 @@ function aiHead(id){
   const title=getAiSessionTitle(id);
   const leftOpen=!app.classList.contains('no-left');
   h.innerHTML=`<button class="hb ai-drawer-tog${leftOpen?' on':''}" id="aiDrawerTog" onclick="toggleAiDrawer()" title="Sol paneli (sohbetler & notlar) aç/kapat (Ctrl+B)">
-     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path class="pane-fill" d="M5.5 4H9.5V20H5.5A2.5 2.5 0 0 1 3 17.5V6.5A2.5 2.5 0 0 1 5.5 4Z" fill="currentColor" stroke="none"/><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9.5" y1="4" x2="9.5" y2="20"/></svg>
      <span>Sohbetler</span>${savedCnt?`<span class="ai-cnt-pill" id="aiHeadCount">${savedCnt}</span>`:`<span class="ai-cnt-pill" id="aiHeadCount" style="display:none"></span>`}
    </button>
    <button class="ai-title-btn" onclick="if(app.classList.contains('no-left'))toggleAiDrawer();startRenameAiSession('${escAttr(id)}',event)" title="Sohbet başlığını düzenle">${escHtml(title)}</button>
@@ -3901,7 +4186,15 @@ async function aiUndo(id){ const s=ai[id]; if(!s.checkpoints)return;
   try{ const r=await api('/api/undo',{session:id}); s.checkpoints=0; s.msgs.push({w:'a',h:`↶ ${r.undone} checkpoint geri alındı. İzlenen dosyalar önceki duruma döndü.`}); }
   catch(e){ s.msgs.push({w:'a',h:'⚠ Geri alma başarısız: '+e.message}); }
   aiRefresh(id); }
-async function aiStop(id){ const s=ai[id]; try{await api('/api/stop',{session:id});}catch(e){} s.pending=null; s.msgs=s.msgs.filter(m=>!m.ap); s.running=false; s.streamText=''; s.msgs.push({w:'a',h:'■ Durduruldu. Çalışan iş kesildi.'}); aiRefresh(id); }
+async function aiStop(id){ const s=ai[id]; try{await api('/api/stop',{session:id});}catch(e){} s.pending=null; s.msgs=s.msgs.filter(m=>!m.ap&&!m.guardId); s.running=false; s.streamText=''; s.msgs.push({w:'a',h:'■ Durduruldu. Çalışan iş kesildi.'}); aiRefresh(id); }
+function guardDecide(sessId,reqId,rootKey,allow){
+  const s=ai[sessId];
+  const cb=document.getElementById('galw-'+reqId);
+  const remember=!!(allow&&cb&&cb.checked);
+  if(s){ s.msgs=s.msgs.filter(m=>m.guardId!==reqId); aiRefresh(sessId); }
+  api('/api/guard/decide',{id:reqId,session:sessId,allow,remember,root_key:rootKey}).catch(()=>{});
+  logAct(sessId, allow?`✓ Klasör erişimi onaylandı (${rootKey}${remember?' · oturum boyunca':''})`:`✗ Klasör erişimi reddedildi (${rootKey})`, allow?'ok':'w');
+}
 function approve(id,yes){
   const s=ai[id],p=s.pending; if(!p)return;
   const alw=document.getElementById('alw-'+id); if(yes&&alw&&alw.checked){s.allow[p.risk]=true;}
@@ -4022,7 +4315,7 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
       approved:!!ok,
       sources:reqSources,
       active_note:actNote,
-      force_provider:(extraOpts&&extraOpts.force_provider)||null,
+      force_provider:(extraOpts&&extraOpts.force_provider)||(curModelPref!=='auto'?curModelPref:null),
       win_id:WIN_ID
     });
   }catch(e){ s.running=false; s.msgs.push({w:'a',h:'⚠ Backend hatası: '+e.message}); aiRefresh(id); return; }
@@ -4034,7 +4327,8 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     aiRefresh(id); return;
   }
   s._scrollToLastReply=false;
-  s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label; aiRefresh(id);
+  s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label;
+  if(!updateChatStepInPlace(id,s.step)) aiRefresh(id);
 }
 /* ---------- Sunucu olayları (SSE) ---------- */
 function startEvents(){
@@ -4045,19 +4339,28 @@ function startEvents(){
     if(d.event==='quota'){ if(d.quota)applyQuota(d.quota); }
     else if(d.event==='delta'&&s){
       s.streamText=(s.streamText||'')+(d.delta||'');
-      const liveEls=document.querySelectorAll('.live-stream');
-      let hit=false;
-      liveEls.forEach(el=>{
-        if(el.dataset.sid!==d.session) return;
-        hit=true;
-        const sc=el.closest('#aichat, #chat, #scChat');
-        const atBottom=!sc||(sc.scrollHeight-sc.clientHeight-sc.scrollTop)<120;
-        el.textContent=s.streamText;
-        if(sc&&atBottom) sc.scrollTop=sc.scrollHeight;
-      });
-      if(!hit) aiRefresh(d.session);
+      if(!updateChatDeltaInPlace(d.session,s.streamText)) aiRefresh(d.session);
     }
-    else if(d.event==='step'&&s){s.step=d.step;aiRefresh(d.session);}
+    else if(d.event==='step'&&s){
+      s.step=d.step;
+      if(!updateChatStepInPlace(d.session,d.step)) aiRefresh(d.session);
+    }
+    else if(d.event==='guard_approval'&&s){
+      s.msgs=s.msgs.filter(m=>m.guardId!==d.id);
+      const actEsc=escHtml(d.action||'Erişim');
+      const lblEsc=escHtml(d.root_label||d.root_key||'Kişisel Klasör');
+      const pathEsc=escHtml(d.path||'');
+      const dstHtml=d.dst_path?` → <code>${escHtml(d.dst_path)}</code>`:'';
+      const sidA=escAttr(d.session), idA=escAttr(d.id), rkA=escAttr(d.root_key||'');
+      s.msgs.push({w:'a',guardId:d.id,h:`<div class="appr"><b>🔐 Klasör Erişim Onayı · ${lblEsc}</b><div>${actEsc}:<br><code>${pathEsc}</code>${dstHtml}</div><label><input type="checkbox" id="galw-${idA}"> Bu oturumda "${lblEsc}" klasörüne hep izin ver</label><div class="ab"><button class="btn" onclick="guardDecide('${sidA}','${idA}','${rkA}',true)">İzin ver</button><button class="hb" onclick="guardDecide('${sidA}','${idA}','${rkA}',false)">Reddet</button></div></div>`});
+      if(isStudySessId(d.session)&&active!=='studychat'){ toast(`🔐 AgyStudy erişim onayı bekliyor (${d.root_label||'Klasör'})`,'studychat'); }
+      aiRefresh(d.session);
+    }
+    else if(d.event==='guard_approval_done'&&s){
+      const before=s.msgs.length;
+      s.msgs=s.msgs.filter(m=>m.guardId!==d.id);
+      if(s.msgs.length!==before) aiRefresh(d.session);
+    }
     else if(d.event==='done'&&s){
       s.running=false; s.streamText=''; if(d.quota)applyQuota(d.quota);
       linkifyAndOpen(d.reply);
@@ -4175,11 +4478,18 @@ function toast(t,id){
 /* ---------- NotebookLM Tarzı Kasalar Ana Ekranı & Modallar ---------- */
 function fmtRelTime(ts){
   if(!ts) return '';
-  const diff=Math.max(0,Math.floor(Date.now()/1000-ts));
+  const now=new Date();
+  const d=new Date(ts*1000);
+  const diff=Math.max(0,Math.floor(now.getTime()/1000-ts));
   if(diff<60) return 'Az önce';
   if(diff<3600) return `${Math.floor(diff/60)} dk önce`;
-  if(diff<86400) return `Bugün ${new Date(ts*1000).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})}`;
-  return new Date(ts*1000).toLocaleDateString('tr-TR',{day:'numeric',month:'short'});
+  const hhmm=d.toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'});
+  const todayStart=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+  const targetStart=new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();
+  const dayDiff=Math.round((todayStart-targetStart)/86400000);
+  if(dayDiff===0) return `Bugün ${hhmm}`;
+  if(dayDiff===1) return `Dün ${hhmm}`;
+  return d.toLocaleDateString('tr-TR',{day:'numeric',month:'short'});
 }
 function renderToolsGridHtml(){
   return `<div class="ksect-hd" style="margin-top:34px">
@@ -4213,12 +4523,15 @@ function renderRootDocsHtml(docs){
     </div>
     <div class="rdocs">
       ${docs.map(d=>{
-        const sp=getSpaceObj(d.space);
-        return `<button type="button" class="rdoc" onclick="openPage('${escHtml(d.id)}')" title="${escHtml(d.rel)}">
-          <span>${escHtml(d.icon||'📄')}</span>
-          <span>${escHtml(d.title)}</span>
-          ${sp?`<span class="rdoc-sp">${escHtml(sp.icon)} ${escHtml(sp.title)}</span>`:''}
-        </button>`;
+        const badge=rootDocScopeBadge(d);
+        const relJs=escHtml(d.rel).replace(/'/g,"\\'");
+        return `<div class="rdoc-chip" oncontextmenu="openRootDocScopeMenu(event,'${relJs}')">
+          <button type="button" class="rdoc" onclick="openPage('${escHtml(d.id)}')" title="${escHtml(d.rel)} · ${escHtml(badge.title)}">
+            <span>${escHtml(d.icon||'📄')}</span>
+            <span>${escHtml(d.title)}</span>
+          </button>
+          <button type="button" class="rdoc-sp-btn${badge.global?' global':''}" onclick="openRootDocScopeMenu(event,'${relJs}')" title="${escHtml(badge.title)} · Değiştirmek için tıkla">${escHtml(badge.text)}</button>
+        </div>`;
       }).join('')}
     </div>`;
 }
@@ -4279,12 +4592,11 @@ function renderKasaRowHtml(k,showSpaceBadge=false){
     </div>
   </div>`;
 }
-function renderKasalarHome(m){
-  const q=kasaSearchQ.trim().toLowerCase();
+function renderKasalarBody(bodyEl){
+  if(!bodyEl) return;
+  const rawQ=kasaSearchQ.trim();
+  const q=rawQ.toLowerCase();
   const activeSpaceObj=currentSpace!=='all'?getSpaceObj(currentSpace):null;
-  const totalKasas=kasalarData.length;
-  const totalNotes=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
-  const totalDocs=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
 
   if(q){
     const kMatches=kasalarData.filter(k=>{
@@ -4298,50 +4610,28 @@ function renderKasalarHome(m){
       k.title.toLowerCase().includes(q)||(k.desc||'').toLowerCase().includes(q)||(k.tag||'').toLowerCase().includes(q)||(k.previews||[]).some(p=>p.title.toLowerCase().includes(q))
     )):[];
     const pageHits=Object.entries(pages)
-      .filter(([id,p])=>id.startsWith('note:')&&p&&(!activeSpaceObj||p.space===activeSpaceObj.id)&&((p.t||'').toLowerCase().includes(q)||(p.rel||'').toLowerCase().includes(q)))
+      .filter(([id,p])=>id.startsWith('note:')&&p&&(!activeSpaceObj||(!p.kasa?rootDocMatchesSpace(p,activeSpaceObj.id):p.space===activeSpaceObj.id))&&((p.t||'').toLowerCase().includes(q)||(p.rel||'').toLowerCase().includes(q)))
       .slice(0,10);
 
-    m.innerHTML=`<div class="khome">
-      ${activeSpaceObj?`<div class="snav">
-        <div class="snav-left">
-          <button type="button" class="snav-back" onclick="selectSpaceFilter('all')">← Tüm Alanlar</button>
-          <span class="spill on" style="--sp-acc:${escHtml(activeSpaceObj.accent||'#e0a458')}">${escHtml(activeSpaceObj.icon)} ${escHtml(activeSpaceObj.title)}</span>
-        </div>
-      </div>`:''}
-      <div class="khero">
-        <div>
-          <h1><span style="color:var(--cu)">🔎</span> Arama Sonuçları</h1>
-          <p>"<b>${escHtml(kasaSearchQ)}</b>" için ${activeSpaceObj?`<b>${escHtml(activeSpaceObj.title)}</b> alanında`:'tüm alanlarda'} <b>${kMatches.length} kasa</b>, <b>${pageHits.length} doğrudan not/belge</b> bulundu.</p>
-        </div>
-        <div class="kbar">
-          <input class="ksrch" id="kasaSrchIn" placeholder="Alan, kasa veya not ara…" value="${escHtml(kasaSearchQ)}">
-          <button class="hb" onclick="kasaSearchQ='';renderKasalarHome($('#main'))">✕ Temizle</button>
-        </div>
+    bodyEl.innerHTML=`
+      <div class="ksrch-summary">
+        <span><span style="color:var(--cu)">🔎</span> "<b>${escHtml(rawQ)}</b>" için ${activeSpaceObj?`<b>${escHtml(activeSpaceObj.title)}</b> alanında`:'tüm alanlarda'} <b>${kMatches.length} kasa</b>, <b>${pageHits.length} doğrudan not/belge</b> bulundu.</span>
+        ${activeSpaceObj?`<button type="button" class="hb" style="padding:4px 10px;font-size:12px" onclick="selectSpaceFilter('all')">Tüm Alanlarda Ara</button>`:''}
       </div>
       ${kMatches.length?`<div class="ksect-hd"><h2>❖ Eşleşen Kasalar</h2><span class="ksect-sub">${kMatches.length}</span></div>
         <div class="kgrid">${kMatches.map(k=>renderKasaCardHtml(k,true)).join('')}</div>`
-      :`<div class="scard-empty" style="margin-bottom:24px"><span>Bu alanda "${escHtml(kasaSearchQ)}" ile eşleşen kasa yok.</span>${activeSpaceObj?`<button class="hb" onclick="selectSpaceFilter('all')">Tüm Alanlarda Ara</button>`:''}</div>`}
+      :`<div class="scard-empty" style="margin-bottom:24px"><span>Bu alanda "${escHtml(rawQ)}" ile eşleşen kasa yok.</span>${activeSpaceObj?`<button class="hb" onclick="selectSpaceFilter('all')">Tüm Alanlarda Ara</button>`:''}</div>`}
       ${pageHits.length?`<div class="ksect-hd"><h2>📄 Doğrudan Eşleşen Not &amp; Belgeler</h2><span class="ksect-sub">${pageHits.length}</span></div>
         <div class="rdocs">${pageHits.map(([id,p])=>`<button type="button" class="rdoc" onclick="${p.kasa?`currentKasa='${p.kasa}';${p.space?`currentSpace='${p.space}';`:''}rebuildTreeAndSources();`:''}openPage('${escHtml(id)}')"><span>${escHtml(p.i||'📄')}</span><span>${escHtml(p.t||id)}</span><span class="rdoc-sp">${escHtml(p.folder||'Ortak')}</span></button>`).join('')}</div>`:''}
       ${otherMatches.length?`<div class="ksect-hd"><h2>🗂 Diğer Alanlardaki Eşleşmeler</h2><span class="ksect-sub">${otherMatches.length}</span></div>
         <div class="kgrid">${otherMatches.map(k=>renderKasaCardHtml(k,true)).join('')}</div>`:''}
-    </div>`;
-  }else if(!activeSpaceObj){
-    /* ---- SEVİYE 1: ÇALIŞMA ALANLARI (Dönem 7, Dönem 8, Belgeler & Arşiv, Özel Alanlar) ---- */
-    m.innerHTML=`<div class="khome">
-      <div class="khero">
-        <div>
-          <h1><span style="color:var(--cu)">❖</span> Çalışma Alanları</h1>
-          <p>Derslerini ve belgelerini dönem ve türe göre düzenli tut · <b>${spacesData.length} alan</b>, <b>${totalKasas} kasa</b>, <b>${totalNotes} not</b>, <b>${totalDocs} kaynak</b>.</p>
-        </div>
-        <div class="kbar">
-          <input class="ksrch" id="kasaSrchIn" placeholder="Alan, kasa veya ders notu ara…" value="">
-          <button class="btn" style="padding:8px 14px" onclick="openSpaceModal()">＋ Yeni Alan</button>
-          <button class="hb" onclick="openNewKasaModal()">＋ Yeni Kasa</button>
-          <button class="hb" onclick="triggerAssetUpload()" title="Aktif kasaya belge/fotoğraf yükle">📎 Belge Ekle</button>
-        </div>
-      </div>
+    `;
+    return;
+  }
 
+  if(!activeSpaceObj){
+    const globalRoots=rootDocsData.filter(d=>isRootDocGlobal(d));
+    bodyEl.innerHTML=`
       <div class="ksect-hd">
         <h2>🗂 Çalışma Alanların (${spacesData.length})</h2>
         <span class="kdrag-hint">Alan kartına tıkla → içindeki kasaları gör</span>
@@ -4349,6 +4639,7 @@ function renderKasalarHome(m){
       <div class="sgrid">
         ${spacesData.map(sp=>{
           const spKasas=kasalarData.filter(k=>k.space===sp.id);
+          const spScopedRoots=rootDocsData.filter(d=>rootDocOnlyInSpace(d,sp.id));
           const sc=sp.counts||{total:0,notes:0,docs:0,images:0};
           const chipsHtml=spKasas.length
             ? spKasas.slice(0,5).map(k=>`
@@ -4377,6 +4668,7 @@ function renderKasalarHome(m){
                 <span>·</span>
                 <span><b>${sc.notes}</b> not</span>
                 ${(sc.docs+sc.images)?`<span>·</span><span><b>${sc.docs+sc.images}</b> kaynak</span>`:''}
+                ${spScopedRoots.length?`<span>·</span><span><b>${spScopedRoots.length}</b> ortak</span>`:''}
               </div>
               <span class="scard-go">Alana Gir →</span>
             </div>
@@ -4389,8 +4681,76 @@ function renderKasalarHome(m){
         </div>
       </div>
 
-      ${renderRootDocsHtml(rootDocsData)}
+      ${renderRootDocsHtml(globalRoots)}
       ${renderToolsGridHtml()}
+    `;
+    return;
+  }
+
+  const sp=activeSpaceObj;
+  const spKasas=kasalarData.filter(k=>k.space===sp.id);
+  const spRoots=rootDocsData.filter(d=>rootDocMatchesSpace(d,sp.id));
+
+  const cardsHtml=spKasas.length
+    ? (kasaViewMode==='list'
+        ? `<div class="klist">${spKasas.map(k=>renderKasaRowHtml(k,false)).join('')}</div>`
+        : `<div class="kgrid">
+            ${spKasas.map(k=>renderKasaCardHtml(k,false)).join('')}
+            <div class="kcard new-card" onclick="openNewKasaModal('${escHtml(sp.id)}')">
+              <div style="font-size:28px;margin-bottom:4px">＋</div>
+              <b style="font-size:15px;color:var(--txt)">${escHtml(sp.title)} Alanına Kasa Ekle</b>
+              <span style="font-size:12.5px;max-width:220px">Yeni ders, laboratuvar, proje veya belge kasası oluştur</span>
+            </div>
+          </div>`)
+    : `<div class="scard" style="--sp-acc:${escHtml(sp.accent||'#e0a458')};align-items:center;text-align:center;padding:38px 24px;margin-bottom:28px;cursor:default">
+        <div class="scard-ico" style="width:56px;height:56px;font-size:28px">${escHtml(sp.icon||'🗂')}</div>
+        <div>
+          <div style="font-size:18px;font-weight:650;color:var(--txt)">${escHtml(sp.title)} henüz boş</div>
+          <div style="color:var(--mut);font-size:13px;max-width:440px;margin-top:6px">Buraya yeni bir kasa ekleyebilir, başka bir alandaki kasayı yukarıdaki haplardan bu alana taşıyabilir veya doğrudan belge yükleyebilirsin.</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px">
+          <button type="button" class="btn" style="padding:8px 16px" onclick="openNewKasaModal('${escHtml(sp.id)}')">＋ Bu Alana İlk Kasayı Ekle</button>
+          <button type="button" class="hb" onclick="triggerSpaceUpload('${escHtml(sp.id)}')">📎 Doğrudan Belge / Görsel Ekle</button>
+        </div>
+      </div>`;
+
+  bodyEl.innerHTML=`
+    <div class="ksect-hd">
+      <h2>❖ Kasalar (${spKasas.length})</h2>
+      ${spKasas.length?`<span class="kdrag-hint">İpucu: Kartı üstteki başka bir alan hapına sürükleyerek taşıyabilirsin</span>`:''}
+    </div>
+    ${cardsHtml}
+    ${renderRootDocsHtml(spRoots)}
+    ${renderToolsGridHtml()}
+  `;
+}
+
+function renderKasalarHome(m){
+  const activeSpaceObj=currentSpace!=='all'?getSpaceObj(currentSpace):null;
+  const totalKasas=kasalarData.length;
+  const totalNotes=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
+  const totalDocs=kasalarData.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
+  const hasQ=kasaSearchQ.length>0;
+
+  if(!activeSpaceObj){
+    /* ---- SEVİYE 1: ÇALIŞMA ALANLARI ---- */
+    m.innerHTML=`<div class="khome">
+      <div class="khero">
+        <div>
+          <h1><span style="color:var(--cu)">❖</span> Çalışma Alanları</h1>
+          <p>Derslerini ve belgelerini dönem ve türe göre düzenli tut · <b>${spacesData.length} alan</b>, <b>${totalKasas} kasa</b>, <b>${totalNotes} not</b>, <b>${totalDocs} kaynak</b>.</p>
+        </div>
+        <div class="kbar">
+          <div class="ksrch-wrap">
+            <input class="ksrch" id="kasaSrchIn" placeholder="Alan, kasa veya ders notu ara…" value="${escHtml(kasaSearchQ)}">
+            <button type="button" class="ksrch-clr ${hasQ?'show':''}" id="kasaSrchClr" title="Aramayı temizle">✕</button>
+          </div>
+          <button class="btn" style="padding:8px 14px" onclick="openSpaceModal()">＋ Yeni Alan</button>
+          <button class="hb" onclick="openNewKasaModal()">＋ Yeni Kasa</button>
+          <button class="hb" onclick="triggerAssetUpload()" title="Aktif kasaya belge/fotoğraf yükle">📎 Belge Ekle</button>
+        </div>
+      </div>
+      <div id="kasaHomeBody"></div>
     </div>`;
   }else{
     /* ---- SEVİYE 2: SEÇİLİ ÇALIŞMA ALANI İÇİNDEKİ KASALAR ---- */
@@ -4398,7 +4758,6 @@ function renderKasalarHome(m){
     const spKasas=kasalarData.filter(k=>k.space===sp.id);
     const spNotes=spKasas.reduce((a,k)=>a+(k.counts?k.counts.notes:0),0);
     const spDocs=spKasas.reduce((a,k)=>a+(k.counts?k.counts.docs+k.counts.images:0),0);
-    const spRoots=rootDocsData.filter(d=>d.space===sp.id);
 
     const pillsHtml=spacesData.map(s=>`
       <button type="button" class="spill ${s.id===sp.id?'on':''}" style="--sp-acc:${escHtml(s.accent||'#e0a458')}" onclick="enterSpace('${escHtml(s.id)}')" ondragover="handleSpaceDragOver(event,this)" ondragleave="handleSpaceDragLeave(this)" ondrop="handleSpaceDrop(event,'${escHtml(s.id)}')" title="${escHtml(s.title)} · Kasayı buraya sürükleyip taşıyabilirsin">
@@ -4407,29 +4766,6 @@ function renderKasalarHome(m){
         <span class="spill-cnt">${s.count_kasas||0}</span>
       </button>
     `).join('')+`<button type="button" class="spill" onclick="openSpaceModal()" title="Yeni Çalışma Alanı Oluştur">＋ Yeni Alan</button>`;
-
-    const cardsHtml=spKasas.length
-      ? (kasaViewMode==='list'
-          ? `<div class="klist">${spKasas.map(k=>renderKasaRowHtml(k,false)).join('')}</div>`
-          : `<div class="kgrid">
-              ${spKasas.map(k=>renderKasaCardHtml(k,false)).join('')}
-              <div class="kcard new-card" onclick="openNewKasaModal('${escHtml(sp.id)}')">
-                <div style="font-size:28px;margin-bottom:4px">＋</div>
-                <b style="font-size:15px;color:var(--txt)">${escHtml(sp.title)} Alanına Kasa Ekle</b>
-                <span style="font-size:12.5px;max-width:220px">Yeni ders, laboratuvar, proje veya belge kasası oluştur</span>
-              </div>
-            </div>`)
-      : `<div class="scard" style="--sp-acc:${escHtml(sp.accent||'#e0a458')};align-items:center;text-align:center;padding:38px 24px;margin-bottom:28px;cursor:default">
-          <div class="scard-ico" style="width:56px;height:56px;font-size:28px">${escHtml(sp.icon||'🗂')}</div>
-          <div>
-            <div style="font-size:18px;font-weight:650;color:var(--txt)">${escHtml(sp.title)} henüz boş</div>
-            <div style="color:var(--mut);font-size:13px;max-width:440px;margin-top:6px">Buraya yeni bir kasa ekleyebilir, başka bir alandaki kasayı yukarıdaki haplardan bu alana taşıyabilir veya doğrudan belge yükleyebilirsin.</div>
-          </div>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:6px">
-            <button type="button" class="btn" style="padding:8px 16px" onclick="openNewKasaModal('${escHtml(sp.id)}')">＋ Bu Alana İlk Kasayı Ekle</button>
-            <button type="button" class="hb" onclick="triggerSpaceUpload('${escHtml(sp.id)}')">📎 Doğrudan Belge / Görsel Ekle</button>
-          </div>
-        </div>`;
 
     m.innerHTML=`<div class="khome">
       <div class="snav">
@@ -4449,26 +4785,54 @@ function renderKasalarHome(m){
           <p>${escHtml(sp.desc||'')} · <b>${spKasas.length} kasa</b>, <b>${spNotes} not</b>, <b>${spDocs} PDF/görsel kaynak</b>.</p>
         </div>
         <div class="kbar">
-          <input class="ksrch" id="kasaSrchIn" placeholder="Bu alanda kasa veya not ara…" value="">
+          <div class="ksrch-wrap">
+            <input class="ksrch" id="kasaSrchIn" placeholder="Bu alanda kasa veya not ara…" value="${escHtml(kasaSearchQ)}">
+            <button type="button" class="ksrch-clr ${hasQ?'show':''}" id="kasaSrchClr" title="Aramayı temizle">✕</button>
+          </div>
           <button class="hb" onclick="openSpaceModal('${escHtml(sp.id)}')">✎ Alanı Düzenle</button>
           <button class="hb" onclick="triggerSpaceUpload('${escHtml(sp.id)}')">📎 Belge Ekle</button>
           <button class="btn" style="padding:8px 14px" onclick="openNewKasaModal('${escHtml(sp.id)}')">＋ Yeni Kasa</button>
         </div>
       </div>
-
-      <div class="ksect-hd">
-        <h2>❖ Kasalar (${spKasas.length})</h2>
-        ${spKasas.length?`<span class="kdrag-hint">İpucu: Kartı üstteki başka bir alan hapına sürükleyerek taşıyabilirsin</span>`:''}
-      </div>
-      ${cardsHtml}
-      ${renderRootDocsHtml(spRoots)}
-      ${renderToolsGridHtml()}
+      <div id="kasaHomeBody"></div>
     </div>`;
   }
 
+  const bodyEl=$('#kasaHomeBody');
+  renderKasalarBody(bodyEl);
+
   const sIn=$('#kasaSrchIn');
+  const sClr=$('#kasaSrchClr');
+  let lastTrimQ=kasaSearchQ.trim().toLowerCase();
   if(sIn){
-    sIn.oninput=e=>{ kasaSearchQ=e.target.value; renderKasalarHome(m); const el=$('#kasaSrchIn'); if(el){el.focus();el.setSelectionRange(el.value.length,el.value.length);} };
+    sIn.oninput=e=>{
+      kasaSearchQ=e.target.value;
+      if(sClr) sClr.classList.toggle('show',kasaSearchQ.length>0);
+      const nextTrimQ=kasaSearchQ.trim().toLowerCase();
+      if(nextTrimQ!==lastTrimQ){
+        lastTrimQ=nextTrimQ;
+        renderKasalarBody(bodyEl);
+      }
+    };
+    sIn.onkeydown=e=>{
+      if(e.key==='Escape'&&kasaSearchQ){
+        e.preventDefault();
+        kasaSearchQ='';
+        sIn.value='';
+        if(sClr) sClr.classList.remove('show');
+        lastTrimQ='';
+        renderKasalarBody(bodyEl);
+      }
+    };
+  }
+  if(sClr){
+    sClr.onclick=()=>{
+      kasaSearchQ='';
+      if(sIn){ sIn.value=''; sIn.focus(); }
+      sClr.classList.remove('show');
+      lastTrimQ='';
+      renderKasalarBody(bodyEl);
+    };
   }
 }
 
@@ -5001,8 +5365,16 @@ function updateRightProps(){
     const uniqOut=[]; outLinks.forEach(x=>{if(!uniqOut.some(u=>u.id===x.id))uniqOut.push(x);});
     const inLinks=backlinksMap[active]||[];
 
+    const isRootFile=!rel.includes('/');
+    const rootScopeRow=isRootFile?(()=>{
+      const badge=rootDocScopeBadge(n||p);
+      const relJs=escHtml(rel).replace(/'/g,"\\'");
+      return `<div class="src" style="margin:0;cursor:pointer" onclick="openRootDocScopeMenu(event,'${relJs}')" title="${escHtml(badge.title)} · Değiştirmek için tıkla"><span>Kapsam</span><b class="mono" style="color:var(--cu)">${escHtml(badge.text)} ▾</b></div>`;
+    })():'';
+
     host.innerHTML=`
       <div class="src" style="margin:0"><span>Kasa</span><b class="mono" style="color:var(--cu)">${p.folder||'—'}</b></div>
+      ${rootScopeRow}
       <div class="src" style="margin:0"><span>Dosya</span><b class="mono" style="font-size:11px">${rel}</b></div>
       <div class="src" style="margin:0"><span>İstatistik</span><b class="mono">${words} kelime · ${lines} satır (~${readMin} dk)</b></div>
       <div style="display:flex;gap:6px;margin-top:4px">
@@ -5309,6 +5681,7 @@ function dockDocToRightAndReturn(id){
   if(!openTabs.length) openTabs=[otherTab];
   active=openTabs[openTabs.length-1];
   removePdfSlot(id);
+  if(id.startsWith('note:')&&/\.(pptx?|ppsx)$/i.test(id)) evictPptxPdf(id.slice(5));
   renderTabs(); renderTree(); renderMain();
   openRightViewer(rel,p.t);
   toast('📌 Belge sağ panele sabitlendi, sol/orta alanda notunla yan yana çalışabilirsin');
@@ -5322,11 +5695,59 @@ function printPdfFrame(rel){
   window.print();
 }
 
+function evictPptxPdf(rel){
+  if(!rel) return;
+  fetch('/api/pptx_pdf?rel='+encodeURIComponent(rel),{method:'DELETE'}).catch(()=>{});
+}
+async function openPptxAsRamPdf(rel,stageEl,btnEl,nightMode){
+  if(!stageEl) return;
+  if(btnEl){ btnEl.disabled=true; btnEl.textContent='⏳ PowerPoint RAM PDF hazırlanıyor…'; }
+  stageEl.style.padding='0';
+  stageEl.innerHTML=`<div style="padding:40px;color:#ccc;text-align:center"><span class="spin"></span> Sunum arka planda PDF'e dönüştürülüyor (diskte dosya tutulmaz, kapanınca RAM'den silinir)…</div>`;
+  try{
+    const url='/api/pptx_pdf?rel='+encodeURIComponent(rel);
+    const resp=await fetch(url);
+    if(!resp.ok){
+      const msg=await resp.text();
+      throw new Error(msg||('HTTP '+resp.status));
+    }
+    const blob=await resp.blob();
+    const blobUrl=URL.createObjectURL(blob);
+    const filt=nightMode?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
+    stageEl.innerHTML=`<iframe src="${blobUrl}#view=FitH" style="flex:1;width:100%;height:100%;min-height:70vh;border:0;background:#fff;${filt}"></iframe>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='✓ RAM PDF Aktif'; }
+  }catch(e){
+    stageEl.style.padding='';
+    stageEl.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">PDF Dönüştürme Hatası</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='📄 Tam Görünüm (RAM PDF)'; }
+  }
+}
 function renderPptxSlidesHtml(d){
   if(d&&d.note) return `<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">${escHtml(d.title||'Sunum')}</h2><span class="pptx-slide-num">Bilgi</span></div><div class="pptx-slide-body"><p>${escHtml(d.note)}</p></div></div>`;
   const slides=(d&&d.slides)||[];
   if(!slides.length) return `<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">${escHtml((d&&d.title)||'Sunum')}</h2></div><div class="pptx-slide-body"><p>Bu sunumda okunabilir metin veya görsel slayt bulunamadı.</p></div></div>`;
+  const sw=(d&&d.slide_w)||9144000, sh=(d&&d.slide_h)||6858000;
   return slides.map(s=>{
+    const els=s.elements||[];
+    if(els.length){
+      const inner=els.map(el=>{
+        const st=`left:${el.x.toFixed(2)}%;top:${el.y.toFixed(2)}%;width:${el.w.toFixed(2)}%;height:${el.h.toFixed(2)}%;`;
+        if(el.kind==='pic'){
+          return `<img class="pptx-el-pic" src="${el.src}" style="${st}" loading="lazy">`;
+        }
+        const prst=el.prst||'rect';
+        if(prst==='line'||prst.includes('Arrow')||prst.includes('Connector')){
+          const col=el.stroke||'#334155';
+          return `<svg style="position:absolute;${st}pointer-events:none;overflow:visible" viewBox="0 0 100 100" preserveAspectRatio="none"><line x1="0" y1="50" x2="96" y2="50" stroke="${col}" stroke-width="3"/><polygon points="92,35 100,50 92,65" fill="${col}"/></svg>`;
+        }
+        const bg=el.fill?`background:${el.fill};`:'';
+        const bd=el.stroke?`border:1.5px solid ${el.stroke};`:'';
+        const rad=prst==='ellipse'?'border-radius:50%;':(prst==='roundRect'?'border-radius:10px;':'');
+        const ps=(el.paras||[]).map(t=>`<p>${escHtml(t)}</p>`).join('');
+        return `<div class="pptx-el-shape${el.is_title?' is-title':''}" style="${st}${bg}${bd}${rad}">${ps}</div>`;
+      }).join('');
+      return `<section class="pptx-canvas-wrap" id="slide-${s.num}"><div class="pptx-canvas" style="aspect-ratio:${sw}/${sh}">${inner}<span class="pptx-canvas-badge">${s.num} / ${slides.length}</span></div></section>`;
+    }
     const imgs=(s.images&&s.images.length)?`<div class="pptx-slide-imgs">${s.images.map(src=>`<img src="${src}" loading="lazy">`).join('')}</div>`:'';
     const body=(s.lines&&s.lines.length)?`<div class="pptx-slide-body">${s.lines.map(ln=>`<p>${escHtml(ln)}</p>`).join('')}</div>`:'';
     return `<section class="pptx-slide" id="slide-${s.num}">
@@ -5447,22 +5868,44 @@ async function renderVaultNote(m,id){
         <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
         <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')">✨ AI Özetle</button>
         <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')">▤ Sınav Föyü</button>
+        <button class="hb" id="pptxRamPdfBtn" style="border-color:var(--cu);color:var(--cu)" title="PowerPoint ile RAM üzerinde birebir PDF görünümü aç (diske kaydetmez)">📄 Tam Görünüm (RAM PDF)</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
         <button class="hb" onclick="window.print()" title="Sunumu PDF olarak kaydet / A4 Yazdır">🖨 PDF / Yazdır</button>
         <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
       <div class="pptx-stage ${filtCls}" id="pdfFrameWrap">
-        <div style="padding:40px;color:#ccc"><span class="spin"></span> Sunum PDF sayfalarına dönüştürülüyor…</div>
+        <div style="padding:40px;color:#ccc"><span class="spin"></span> Sunum slaytları hazırlanıyor…</div>
       </div>
     </div>`;
+    let pptxMode='fast', pptxData=null;
+    const ramBtn=$('#pptxRamPdfBtn');
+    const stage=$('#pdfFrameWrap');
+    const b=$('#pptxMetaBadge');
+    if(ramBtn) ramBtn.onclick=async ()=>{
+      if(pptxMode==='pdf'&&pptxData){
+        pptxMode='fast';
+        if(stage){ stage.style.padding=''; stage.innerHTML=renderPptxSlidesHtml(pptxData); }
+        ramBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+        if(b) b.textContent=`${pptxData.count||0} slayt · Hızlı Görünüm`;
+        evictPptxPdf(rel);
+      }else{
+        pptxMode='pdf';
+        await openPptxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
+        if(b) b.textContent='RAM PDF · Tam Görünüm';
+      }
+    };
     try{
       const d=await api('/api/pptx?rel='+encodeURIComponent(rel));
-      const stage=$('#pdfFrameWrap');
-      if(stage) stage.innerHTML=renderPptxSlidesHtml(d);
-      const b=$('#pptxMetaBadge');
-      if(b) b.textContent=`${d.count||0} slayt · Sunum`;
+      pptxData=d;
+      if(d&&d.is_legacy_ppt){
+        pptxMode='pdf';
+        await openPptxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
+        if(b) b.textContent='RAM PDF · Eski .ppt';
+      }else{
+        if(stage) stage.innerHTML=renderPptxSlidesHtml(d);
+        if(b) b.textContent=`${d.count||0} slayt · Hızlı Görünüm`;
+      }
     }catch(e){
-      const stage=$('#pdfFrameWrap');
       if(stage) stage.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">Sunum okunamadı</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
     }
     updateRightProps();
@@ -5536,17 +5979,39 @@ async function renderVaultNote(m,id){
     return;
   }
 
-  if(ext==='.html'){
-    m.innerHTML=`<div class="pdf-studio">
+  if(ext==='.html'||ext==='.htm'){
+    const stage=$('#pdfCacheStage');
+    let slot=getPdfSlot(id);
+    if(slot&&slot.isConnected){
+      activatePdfCache(id);
+      updateRightProps();
+      return;
+    }
+    if(slot){ slot.remove(); pdfSlotMap.delete(id); }
+    slot=document.createElement('div');
+    slot.className='pdf-tab-slot active';
+    slot.dataset.pdfId=id;
+    slot.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
-        <div class="pdf-title-wrap"><span>${p.i||'🌐'}</span><b>${p.t}</b></div>
-        <span class="pdf-badge">${p.folder} · ${rel}</span>
+        <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>${p.i||'🌐'}</span><b>${p.t}</b></div>
+        <span class="pdf-badge">${p.folder||''} · ${rel}</span>
         <span style="flex:1"></span>
+        <button class="hb" onclick="const s=getPdfSlot('${id}');const f=s&&s.querySelector('iframe.html-main-frame');if(f){f.src='/api/raw/${encodeURI(rel)}?_t='+Date.now();}" title="HTML sayfasını baştan yükle (sıfırla)">↻ Yenile</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
         <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
-      <iframe src="/api/raw/${encodeURI(rel)}" style="flex:1;border:0;width:100%;background:#fff"></iframe>
+      <iframe class="html-main-frame" src="/api/raw/${encodeURI(rel)}" style="flex:1;border:0;width:100%;background:#fff"></iframe>
     </div>`;
+    if(stage){
+      stage.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+      activatePdfCache(id);
+    }else{
+      m.innerHTML='';
+      m.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+    }
+    updateRightProps();
     return;
   }
   if(notionState.saveTimer&&notionState.noteId&&notionState.noteId!==id){
@@ -5567,6 +6032,7 @@ async function renderVaultNote(m,id){
   }
   notionState.noteId=id;
   notionState.baseDir=baseDir;
+  notionState.frontmatter=splitLeadingFrontmatter(n.content||'').frontmatter;
   notionState.locked=!unlockedNotes.has(id);
   if(notionState.locked) editMode=false;
   const cachedDom=noteDomCache.get(id);
@@ -5605,7 +6071,9 @@ async function renderVaultNote(m,id){
       <div class="notion-crumb">
         <span class="nc-item" onclick="openKasalarHome(true)" title="Çalışma Alanlarına Dön">❖ Çalışma Alanları</span>
         <span>/</span>
-        <span class="nc-item" onclick="enterKasa('${n.kasa||p.kasa||''}','write')">📘 ${n.folder}</span>
+        ${(n.kasa||p.kasa)
+          ?`<span class="nc-item" onclick="enterKasa('${n.kasa||p.kasa||''}','write')">📘 ${n.folder}</span>`
+          :`<span class="nc-item" onclick="${(!isRootDocGlobal(n)&&n.space)?`enterSpace('${escHtml(n.space)}')`:'openKasalarHome(true)'}" title="Ortak Kök Belge çalışma alanına git">📌 ${n.folder}</span>`}
         <span>/</span>
         <span class="nc-cur">${p.t||n.rel.split('/').pop()}</span>
       </div>
@@ -5790,8 +6258,29 @@ let _blkUid=1;
 const nextBlkId=()=>'nb_'+(++_blkUid)+'_'+Math.random().toString(36).slice(2,6);
 const escHtml=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
+function splitLeadingFrontmatter(md){
+  const norm=String(md||'').replace(/^\uFEFF/,'').replace(/\r\n/g,'\n');
+  if(!norm.startsWith('---\n')) return {frontmatter:'',body:norm};
+  const lines=norm.split('\n');
+  let hasKv=false;
+  const maxLines=Math.min(lines.length,65);
+  for(let idx=1;idx<maxLines;idx++){
+    const tr=lines[idx].trim();
+    if(tr==='---'||tr==='...'){
+      if(!hasKv) return {frontmatter:'',body:norm};
+      return {
+        frontmatter:lines.slice(0,idx+1).join('\n'),
+        body:lines.slice(idx+1).join('\n').replace(/^\n+/,'')
+      };
+    }
+    if(tr&&!tr.startsWith('#')&&tr.includes(':')) hasKv=true;
+  }
+  return {frontmatter:'',body:norm};
+}
+
 function parseNoteBlocks(md){
-  const lines=String(md||'').replace(/\r\n/g,'\n').split('\n');
+  const fmSplit=splitLeadingFrontmatter(md);
+  const lines=fmSplit.body.split('\n');
   const blocks=[];
   let i=0;
   while(i<lines.length){
@@ -5943,7 +6432,7 @@ function parseNoteBlocks(md){
   return blocks;
 }
 
-function serializeNoteBlocks(blocks){
+function serializeNoteBlocks(blocks,frontmatter){
   const out=[];
   let olCounter=0;
   for(let i=0;i<blocks.length;i++){
@@ -6001,7 +6490,9 @@ function serializeNoteBlocks(blocks){
       if(!sameList) out.push('');
     }
   }
-  return out.join('\n')+'\n';
+  const body=out.join('\n')+'\n';
+  const fm=(frontmatter!==undefined)?frontmatter:(typeof notionState!=='undefined'&&notionState?notionState.frontmatter:'');
+  return fm?(fm+'\n\n'+body):body;
 }
 
 /* ---------- Inline Markdown <-> Editable DOM (With Lossless KaTeX & WikiLink Chips) ---------- */
@@ -6033,13 +6524,13 @@ function inlineMdToEditableHtml(md,base){
     const parts=inner.split('|');
     const target=parts[0].trim();
     const label=(parts[1]||target.split('/').pop()).trim();
-    const resolveRel=t=>/^https?:\/\//i.test(t)?t:(base?base+'/'+t:t);
+    const resolveRel=t=>normalizeVaultAssetRel(t,base);
     if(/\.(pdf|docx?|pptx?|xlsx?|csv|txt|png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(target)){
       const rel=resolveRel(target);
       const safeLbl=label.replace(/'/g,'');
       const ext=target.slice(target.lastIndexOf('.')).toLowerCase();
       const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':'📘');
-      return stash(`<span class="n-wiki-chip" contenteditable="false" data-raw="${escAttr(raw)}" onclick="openRightViewer('${escAttr(rel)}','${escAttr(safeLbl)}')" ondblclick="openDocInTab('${escAttr(rel)}','${escAttr(safeLbl)}')" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede aç (${escAttr(rel)})">${ic} ${escHtml(label)}</span>`);
+      return stash(`<span class="n-wiki-chip" contenteditable="false" data-raw="${escAttr(raw)}" data-rel="${escAttr(rel)}" data-lbl="${escAttr(safeLbl)}" onclick="openRightViewer(this.dataset.rel,this.dataset.lbl)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.lbl)" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede aç (${escAttr(rel)})">${ic} ${escHtml(label)}</span>`);
     }
     const {id,label:wLbl}=resolveWiki(inner);
     return stash(`<span class="n-wiki-chip" contenteditable="false" data-raw="${escAttr(raw)}" onclick="${id?`openPage('${escAttr(id)}')`:''}" title=" Bağlantıyı aç: ${escAttr(wLbl)}">📄 ${escHtml(wLbl)}</span>`);
@@ -6152,9 +6643,11 @@ function scheduleRawMdAutoSave(id){
     noteCache[id].content=ed.value;
   invalidateNoteDomCache(id);
     api('/api/note',{rel,content:ed.value}).then(saved=>{
+      const prevScope=JSON.stringify(rootDocSpacesList(pages[id]||noteCache[id]));
       noteCache[id]=saved;
       setSavePillState('saved','✓ Kaydedildi');
       updateRightProps();
+      if(!rel.includes('/')&&JSON.stringify(rootDocSpacesList(saved))!==prevScope){ loadVault(); }
     }).catch(()=>{ setSavePillState('saving','⚠ Kayıt hatası'); });
   },700);
 }
@@ -6179,11 +6672,14 @@ async function flushNotionSave(noteId,manual=false){
   invalidateNoteDomCache(id);
   setSavePillState('saving','● Kaydediliyor…');
   try{
-    noteCache[id]=await api('/api/note',{rel,content:md});
+    const prevScope=JSON.stringify(rootDocSpacesList(pages[id]||noteCache[id]));
+    const saved=await api('/api/note',{rel,content:md});
+    noteCache[id]=saved;
   invalidateNoteDomCache(id);
     setSavePillState('saved','✓ Kaydedildi');
     updateRightProps();
     renderNotionMinimap();
+    if(!rel.includes('/')&&JSON.stringify(rootDocSpacesList(saved))!==prevScope){ loadVault(); }
     if(manual) toast('💾 Not diske kaydedildi: '+rel, id);
   }catch(e){
     setSavePillState('saving','⚠ Kaydedilemedi');
@@ -7000,7 +7496,7 @@ function blockMenuAction(idx,act){
     else notionState.blocks.splice(idx,1);
     renderNotionCanvasDOM(Math.max(0,idx-1),true);
   }else if(act==='ai'){
-    const md=serializeNoteBlocks([b]).trim();
+    const md=serializeNoteBlocks([b],'').trim();
     rtab('ai');
     aiSend('side_ai',`Notumdaki şu bloğu detaylıca açıkla ve sınav düzeyinde bir örnek ekle:\n\n${md}`);
     return;
@@ -7465,7 +7961,7 @@ function renderMain(){
     _mountedNoteScrollId=null;
     m.ondragover=null; m.ondragleave=null; m.ondrop=null;
   }
-  if(!isPdfTab(active)) deactivatePdfCache();
+  if(!isCachedFrameTab(active)) deactivatePdfCache();
   if(active==='kasalar') renderKasalarHome(m);
   else if(isBlank(active)) renderBlankTab(m);
   else if(active.startsWith('note:')) renderVaultNote(m,active);
@@ -9848,11 +10344,12 @@ function renderStudyChatBody(){
   }else{
     h=msgs.map(({x,i})=>renderMsgRowHtml(sid,x,i,true)).join('');
     if(s.running&&s.streamText) h+=`<div class="sc-msg a live-stream" data-sid="${escAttr(sid)}">${escHtml(s.streamText)}</div>`;
-    if(s.running) h+=`<div class="sc-msg a"><span class="spin"></span> ${s.step||'Çalışıyor…'}</div>`;
+    if(s.running) h+=`<div class="sc-msg a" data-run-sid="${escAttr(sid)}"><span class="spin"></span> <span data-step-sid="${escAttr(sid)}">${escHtml(s.step||'Çalışıyor…')}</span></div>`;
   }
   c.innerHTML=`<div class="sc-col">${h}</div>`;
   c.dataset.rendered=sid;
   c.dataset.msgCount=String(msgs.length);
+  let pinBottom=false;
   if(scrollChatToLastReply(c,s)){
     saveChatScroll('studychat');
   }else if(isInitialMount){
@@ -9862,9 +10359,11 @@ function renderStudyChatBody(){
       requestAnimationFrame(()=>{ if(active==='studychat'&&$('#scChat')&&getStudySessId()===sid) $('#scChat').scrollTop=saved.top; });
     }else{
       c.scrollTop=c.scrollHeight;
+      pinBottom=true;
     }
   }else if(msgs.length!==prevLen||nearBottom){
     c.scrollTop=c.scrollHeight;
+    pinBottom=true;
   }else{
     c.scrollTop=prevScroll;
   }
@@ -9872,7 +10371,7 @@ function renderStudyChatBody(){
   const ch=$('#scChips');
   if(ch) ch.innerHTML=msgs.length?'':['Bu kaynakları özetle','Kritik formülleri listele','Sınavda çıkabilecek sorular'].map(q=>`<button onclick="studioSend('${q}')">${q}</button>`).join('');
   syncAllGemBoxes();
-  runMermaid('#scChat .mermaid');
+  runMermaid('#scChat .mermaid',false,pinBottom?()=>{ if(active==='studychat'&&$('#scChat')&&getStudySessId()===sid){ $('#scChat').scrollTop=$('#scChat').scrollHeight; saveChatScroll('studychat'); } }:null);
 }
 /* ---------- Sohbet / yönlendirici (Sağ Panel Gerçek AI) ---------- */
 function chat(who,html){
@@ -9893,8 +10392,10 @@ wireChatDrop($('#rb-ai'),()=>'side_ai');
 
 /* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
 function syncPaneBtns(){
-  const l=$('#leftTog'), r=$('#rightTog');
-  if(l) l.classList.toggle('on', !app.classList.contains('no-left'));
+  const l=$('#leftTog'), r=$('#rightTog'), d=$('#aiDrawerTog');
+  const leftOpen=!app.classList.contains('no-left');
+  if(l) l.classList.toggle('on', leftOpen);
+  if(d) d.classList.toggle('on', leftOpen);
   if(r) r.classList.toggle('on', !app.classList.contains('no-right'));
 }
 function togglePane(side){
@@ -10135,9 +10636,18 @@ function isPdfTab(id){
   const ext=(p&&p.ext?p.ext:String(id).slice(String(id).lastIndexOf('.'))).toLowerCase();
   return ext==='.pdf';
 }
+function isHtmlTab(id){
+  if(!String(id||'').startsWith('note:')) return false;
+  const p=pages[id];
+  const ext=(p&&p.ext?p.ext:String(id).slice(String(id).lastIndexOf('.'))).toLowerCase();
+  return ext==='.html'||ext==='.htm';
+}
+function isCachedFrameTab(id){
+  return isPdfTab(id)||isHtmlTab(id);
+}
 function syncPdfFocusMode(){
   if(!app) return;
-  const on=app.classList.contains('zen')&&isPdfTab(active);
+  const on=app.classList.contains('zen')&&isCachedFrameTab(active);
   app.classList.toggle('pdf-zen',on);
 }
 function toggleZen(){
@@ -11651,6 +12161,7 @@ async function hydrateUiState(){
       if(!(k in srv)&&v!==null&&v!==undefined) missingSeed[k]=v;
     });
     UI_SYNC_KEYS.forEach(k=>{
+      if(k===CLOSED_WINS_KEY&&_closedWinsDirty) return;
       if(typeof srv[k]==='string') localStorage.setItem(k,srv[k]);
     });
     let _hasWinTheme=false; try{ _hasWinTheme=!!sessionStorage.getItem('agydesk_win_theme'); }catch(e){}
@@ -11706,10 +12217,11 @@ async function hydrateUiState(){
         }
       }catch(e){}
     }
-    let hasWinTabs=false;
-    try{ hasWinTabs=!!sessionStorage.getItem(TAB_STORE_KEY); }catch(e){}
-    if(!hasWinTabs&&(typeof srv[LAST_CLOSED_WIN_KEY]==='string'||typeof srv[TAB_STORE_KEY]==='string')){
+    if(_bootNeedServerClosedWin&&typeof srv[CLOSED_WINS_KEY]==='string'){
+      _bootNeedServerClosedWin=false;
+      try{ sessionStorage.removeItem(TAB_STORE_KEY); }catch(e){}
       if(restoreSessionTabs()) initNavHistory();
+      else saveSessionTabs(false);
     }else if(String(active).startsWith('note:')&&$('#doc')){
       restoreMainScroll(active);
     }
@@ -11947,8 +12459,11 @@ initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initAppBattery();
 let _bootFresh=false; try{ _bootFresh=!sessionStorage.getItem(TAB_STORE_KEY)&&!new URLSearchParams(location.search).get('detach_tab'); }catch(e){}
 if(!restoreSessionTabs()){
   _restoringSession=true;
+  openTabs=['kasalar'];
+  active='kasalar';
   setMode('kasalar');
   _restoringSession=false;
+  saveSessionTabs(false);
 }
 initNavHistory();
 window.addEventListener('beforeunload',()=>{
@@ -11965,22 +12480,6 @@ document.addEventListener('visibilitychange',()=>{
     flushUiStateRemote(true);
   }
 });
-function spawnClosedWins(){
-  try{
-    if(!_bootFresh||window.__IS_DETACHED_WIN||!window.ipc||typeof window.ipc.postMessage!=='function') return;
-    let lst=[]; try{ lst=JSON.parse(localStorage.getItem(CLOSED_WINS_KEY)||'[]'); }catch(e){}
-    if(!Array.isArray(lst)||lst.length<2) return;
-    localStorage.setItem(CLOSED_WINS_KEY,'[]'); persistUiState({[CLOSED_WINS_KEY]:'[]'},false);
-    lst.slice(1,3).forEach((e,i)=>{
-      const p=e&&e.p; if(!p||!Array.isArray(p.openTabs)||!p.openTabs.length) return;
-      const token=Date.now().toString(36)+Math.random().toString(36).slice(2,7)+i;
-      localStorage.setItem('agy_detach_'+token,JSON.stringify({tabId:p.openTabs[0],currentSpace:p.currentSpace,currentKasa:p.currentKasa,restore:p}));
-      const off=(i+1)*40;
-      setTimeout(()=>window.ipc.postMessage('detach:'+JSON.stringify({tab:p.openTabs[0],token,x:60+off,y:50+off,w:Math.min(window.outerWidth||1180,1240),h:Math.min(window.outerHeight||780,820)})),700*(i+1));
-    });
-  }catch(e){}
-}
 hydrateUiState().finally(()=>{
-  spawnClosedWins();
   loadVault(); loadChats(); loadCalEvents(false).then(()=>renderTabs());
 });

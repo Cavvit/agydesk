@@ -40,7 +40,8 @@ def _ws_hint_for(session: str) -> str:
             )
             break
     return (
-        f"[AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama; proje/shell kapalı). Kasa: {VAULT_DIR}. {_WRITE_RULE}{drive_rule} "
+        f"[AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/PDF üretimi/Dosya kopyalama-taşıma-senkron; proje/genel shell kapalı). Kasa: {VAULT_DIR}. {_WRITE_RULE}{drive_rule} "
+        "İkili dosya (PDF, görsel, PPTX vb.) veya klasör kopyalamak/taşımak/yedeklemek için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --copy \"<kaynak>\" \"<hedef>\" (veya --move, --sync) çalıştır. "
         "Not açmak için [[Dosya_Adi]] yaz. Matematik: $...$/$$...$$. ASCII çizme; devre için ```sema trafo-esdeger|trafo-bosta|trafo-kisadevre|trafo-baglanti|dc-sont```, akış için ```mermaid``` (alt çizgisiz etiket) kullan.]\n\n"
     )
 
@@ -130,6 +131,12 @@ class SpaceSaveReq(BaseModel):
     accent: str = "#e0a458"
     tag: str = ""
     desc: str = ""
+
+
+class RootDocSpaceReq(BaseModel):
+    rel: str
+    space: str | None = None
+    spaces: list[str] | None = None
 
 
 class NoteCreateReq(BaseModel):
@@ -316,6 +323,19 @@ async def delete_space_ep(id: str):
         return res
     except FileNotFoundError as e:
         raise HTTPException(404, f"Alan bulunamadı: {e}")
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/root_doc/space")
+async def update_root_doc_space_ep(r: RootDocSpaceReq):
+    try:
+        res = vault.update_root_doc_space(r.rel, r.space, r.spaces)
+        store.add_log("vault", f"📌 Ortak kök belge kapsamı güncellendi: {res['rel']} → {res['space']}", "ok")
+        emit("log")
+        return res
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Dosya bulunamadı: {e}")
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -630,17 +650,20 @@ async def run(r: RunReq):
             store.add_log(r.session, f"● Checkpoint alındı (#{cp}) → {log_text}", "ok")
         else:
             store.add_log(r.session, "● Checkpoint alınamadı (git deposu yok)", "w")
-    if r.force_provider == "local":
+    restricted = _is_restricted_session(r.session)
+    allowed_forced = {"local", "gemini-hydrogen", "gemini-neon"} if restricted else set(PROVIDERS.keys())
+    if r.force_provider in allowed_forced:
+        fp = r.force_provider
         dec = router.Decision(
-            provider="local",
-            label=PROVIDERS["local"]["label"],
-            reason="Kullanıcı yerel modele yönlendirdi",
-            fallback=True,
+            provider=fp,
+            label=PROVIDERS[fp]["label"],
+            reason=f"Kullanıcı {PROVIDERS[fp]['label']} modelini seçti",
+            fallback=(fp == "local"),
         )
     else:
         if providers.agy_available():
             asyncio.create_task(asyncio.to_thread(store.fetch_agy_usage, False))
-        dec = router.route(r.text, r.skill, store.used_pct, has_images=bool(r.images))
+        dec = router.route(r.text, r.skill, store.used_pct, has_images=bool(r.images), restricted=restricted)
     store.add_log(r.session, f"İş başladı → {dec.label}: {log_text}")
     _tasks[r.session] = asyncio.create_task(_job(r, dec))
     emit("log")

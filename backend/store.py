@@ -152,8 +152,9 @@ def parse_agy_usage_json(raw: str, now_ts: float | None = None) -> dict[str, dic
         elif "claude" in low or "gpt" in low or "3p-" in b_ids:
             out["claude-opus"] = info
             out["claude-sonnet"] = info
-        elif "gemini" in low or "hydrogen" in low:
+        elif "gemini" in low or "hydrogen" in low or "neon" in low:
             out["gemini-hydrogen"] = info
+            out["gemini-neon"] = info
             gemini_fallback = info
 
     if "gemini-argon" not in out and gemini_fallback is not None:

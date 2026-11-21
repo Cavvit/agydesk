@@ -643,6 +643,96 @@ def test_parse_agy_usage_json_and_quota():
     assert parsed["claude-sonnet"]["used_pct"] == 100
 
 
+def test_root_docs_workspace_scoping_and_global(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main, vault
+
+    split_root = tmp_path / "AgyDesk_Belgeler"
+    (split_root / "AgyDesk_Notlar" / "Elektrik_Makineleri_Lab").mkdir(parents=True)
+    (split_root / "AgyDesk_Dokuman" / "Elektrik_Makineleri_Lab").mkdir(parents=True)
+
+    monkeypatch.setattr(vault, "VAULT_DIR", split_root)
+    monkeypatch.setattr(vault, "ROOT", tmp_path)
+    monkeypatch.setattr(main, "VAULT_DIR", split_root)
+
+    client = TestClient(main.app)
+
+    # 1. 00_LAB_ORTAK_TAKVIM.md stays at AgyDesk_Notlar root, scopes to donem_7, preserves wikilink
+    (split_root / "AgyDesk_Notlar" / "00_LAB_ORTAK_TAKVIM.md").write_text(
+        "# 7. Dönem Lab Takvimi\n", encoding="utf-8"
+    )
+    (split_root / "AgyDesk_Notlar" / "Elektrik_Makineleri_Lab" / "00_LAB_CALISMA_PLANI.md").write_text(
+        "# Plan\n- Bakınız: [[00_LAB_ORTAK_TAKVIM]]\n", encoding="utf-8"
+    )
+    # 2. Unconfigured generic root doc defaults to global ("all")
+    (split_root / "AgyDesk_Notlar" / "00_GENEL_REHBER.md").write_text(
+        "# Genel Rehber\n", encoding="utf-8"
+    )
+    # 3. Frontmatter-scoped root doc for donem_8 (title stripped cleanly past frontmatter)
+    (split_root / "AgyDesk_Notlar" / "00_DONEM8_TAKVIM.md").write_text(
+        "---\n# yaml comment\nspace: donem_8\n---\n# 8. Dönem Takvimi\n", encoding="utf-8"
+    )
+    # 4. Frontmatter multi-space root doc
+    (split_root / "AgyDesk_Notlar" / "00_MULTI_ORTAK.md").write_text(
+        "---\nspaces:\n  - donem_7\n  - donem_8\n---\n# Çoklu Dönem Notu\n", encoding="utf-8"
+    )
+
+    v = client.get("/api/vault").json()
+    by_rel = {d["rel"]: d for d in v["root_docs"]}
+
+    assert by_rel["00_LAB_ORTAK_TAKVIM.md"]["space"] == "donem_7"
+    assert by_rel["00_LAB_ORTAK_TAKVIM.md"]["spaces"] == ["donem_7"]
+    assert by_rel["00_LAB_ORTAK_TAKVIM.md"]["global"] is False
+
+    assert by_rel["00_GENEL_REHBER.md"]["space"] == "all"
+    assert by_rel["00_GENEL_REHBER.md"]["spaces"] == ["all"]
+    assert by_rel["00_GENEL_REHBER.md"]["global"] is True
+
+    assert by_rel["00_DONEM8_TAKVIM.md"]["space"] == "donem_8"
+    assert by_rel["00_DONEM8_TAKVIM.md"]["global"] is False
+    assert by_rel["00_DONEM8_TAKVIM.md"]["title"] == "8. Dönem Takvimi"
+    assert by_rel["00_DONEM8_TAKVIM.md"]["scope_source"] == "frontmatter"
+
+    assert by_rel["00_MULTI_ORTAK.md"]["spaces"] == ["donem_7", "donem_8"]
+    assert by_rel["00_MULTI_ORTAK.md"]["global"] is False
+
+    # Wikilink + backlink + read_note all remain intact at original path
+    assert v["wikimap"]["00_lab_ortak_takvim"] == "note:00_LAB_ORTAK_TAKVIM.md"
+    assert any(
+        b["id"] == "note:Elektrik_Makineleri_Lab/00_LAB_CALISMA_PLANI.md"
+        for b in v["backlinks"].get("note:00_LAB_ORTAK_TAKVIM.md", [])
+    )
+    rn = client.get("/api/note", params={"rel": "00_DONEM8_TAKVIM.md"}).json()
+    assert rn["space"] == "donem_8"
+    assert rn["global"] is False
+    assert rn["title"] == "8. Dönem Takvimi"
+
+    # Config API overrides frontmatter/default and persists to .agydesk_spaces.json
+    ru = client.post(
+        "/api/root_doc/space",
+        json={"rel": "00_LAB_ORTAK_TAKVIM.md", "space": "all"},
+    )
+    assert ru.status_code == 200
+    assert ru.json()["global"] is True
+    assert ru.json()["space"] == "all"
+
+    ru2 = client.post(
+        "/api/root_doc/space",
+        json={"rel": "00_LAB_ORTAK_TAKVIM.md", "space": "donem_7"},
+    )
+    assert ru2.status_code == 200
+    assert ru2.json()["global"] is False
+    assert ru2.json()["space"] == "donem_7"
+    assert ru2.json()["scope_source"] == "config"
+
+    v2 = client.get("/api/vault").json()
+    d_lab = next(d for d in v2["root_docs"] if d["rel"] == "00_LAB_ORTAK_TAKVIM.md")
+    assert d_lab["space"] == "donem_7"
+    assert d_lab["global"] is False
+    assert d_lab["scope_source"] == "config"
+
+
+
 
 
 

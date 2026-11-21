@@ -135,9 +135,34 @@ _H1_RE = re.compile(r"^#\s+(.+)$", re.M)
 _WIKI_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
 
 
+def _strip_yaml_frontmatter(text: str) -> tuple[str, str | None]:
+    s = text[1:] if text.startswith("\ufeff") else text
+    if s.startswith("---\r\n"):
+        after_open = s[5:]
+    elif s.startswith("---\n"):
+        after_open = s[4:]
+    else:
+        return text, None
+    offset = 0
+    has_kv = False
+    for line_no, chunk in enumerate(after_open.splitlines(keepends=True), start=1):
+        if line_no > 64:
+            return text, None
+        trimmed = chunk.strip()
+        if trimmed in ("---", "..."):
+            if not has_kv:
+                return text, None
+            return after_open[offset + len(chunk):], after_open[:offset]
+        if trimmed and not trimmed.startswith("#") and ":" in trimmed:
+            has_kv = True
+        offset += len(chunk)
+    return text, None
+
+
 def _clean_title(p: Path, text: str = "") -> str:
     if text:
-        m = _H1_RE.search(text)
+        body, _ = _strip_yaml_frontmatter(text)
+        m = _H1_RE.search(body)
         if m:
             t = re.sub(r"^[^\wÇĞİÖŞÜçğıöşü]+", "", m.group(1)).strip()
             if t:
@@ -186,8 +211,26 @@ def _rel_posix(p: Path) -> str:
     return _strip_split_prefix(rel) if _is_split_vault() else rel
 
 
+def _normalize_rel_input(rel: str) -> str:
+    clean = str(rel or "").strip()
+    if clean.lower().startswith("file:///"):
+        clean = clean[8:]
+    elif clean.lower().startswith("file://"):
+        clean = clean[7:]
+    clean = clean.replace("\\", "/").lstrip("/")
+    low = clean.lower()
+    for marker in ("/agydesk_dokuman/", "/agydesk_notlar/", "/agydesk_belgeler/"):
+        idx = low.rfind(marker)
+        if idx != -1:
+            clean = clean[idx + len(marker):]
+            break
+    while clean.startswith("../") or clean.startswith("./"):
+        clean = clean[3:] if clean.startswith("../") else clean[2:]
+    return clean.lstrip("/")
+
+
 def _safe_path(rel: str) -> Path:
-    clean = rel.replace("\\", "/").lstrip("/")
+    clean = _normalize_rel_input(rel)
     root_res = VAULT_DIR.resolve()
     if clean.startswith(".chat_images"):
         target = (VAULT_DIR / clean).resolve()
@@ -244,6 +287,7 @@ def _load_spaces_cfg() -> dict:
     """`.agydesk_spaces.json` dosyasını okur; yoksa bellek içi varsayılanları döndürür."""
     spaces = [dict(s) for s in DEFAULT_SPACES]
     assignments = dict(DEFAULT_SPACE_ASSIGNMENTS)
+    root_doc_spaces: dict[str, str | list[str]] = {}
     kasa_meta: dict[str, dict] = {}
     tree_order: dict[str, list[str]] = {}
     cfg_path = VAULT_DIR / SPACES_FILENAME
@@ -271,6 +315,20 @@ def _load_spaces_cfg() -> dict:
                     for k, v in raw_assign.items():
                         if isinstance(k, str) and isinstance(v, str) and v:
                             assignments[k] = v
+                raw_root_spaces = raw.get("root_doc_spaces")
+                if isinstance(raw_root_spaces, dict):
+                    for k, v in raw_root_spaces.items():
+                        if not isinstance(k, str) or not k.strip():
+                            continue
+                        ck = k.strip()
+                        if isinstance(v, str) and v.strip():
+                            root_doc_spaces[ck] = v.strip()
+                        elif isinstance(v, list):
+                            clean_list = [str(item).strip() for item in v if isinstance(item, str) and item.strip()]
+                            if len(clean_list) == 1:
+                                root_doc_spaces[ck] = clean_list[0]
+                            elif clean_list:
+                                root_doc_spaces[ck] = clean_list
                 raw_meta = raw.get("kasa_meta")
                 if isinstance(raw_meta, dict):
                     for k, v in raw_meta.items():
@@ -283,7 +341,13 @@ def _load_spaces_cfg() -> dict:
                             tree_order[k] = [str(item) for item in v if isinstance(item, str) and item]
         except Exception:
             pass
-    return {"spaces": spaces, "assignments": assignments, "kasa_meta": kasa_meta, "tree_order": tree_order}
+    return {
+        "spaces": spaces,
+        "assignments": assignments,
+        "root_doc_spaces": root_doc_spaces,
+        "kasa_meta": kasa_meta,
+        "tree_order": tree_order,
+    }
 
 
 def _save_spaces_cfg(cfg: dict) -> None:
@@ -293,6 +357,7 @@ def _save_spaces_cfg(cfg: dict) -> None:
         "version": 1,
         "spaces": cfg.get("spaces", DEFAULT_SPACES),
         "assignments": cfg.get("assignments", {}),
+        "root_doc_spaces": cfg.get("root_doc_spaces", {}),
         "kasa_meta": cfg.get("kasa_meta", {}),
         "tree_order": cfg.get("tree_order", {}),
     }
@@ -321,6 +386,131 @@ def _resolve_kasa_space(key: str, cfg: dict) -> str:
     if "belgeler" in valid_ids:
         return "belgeler"
     return spaces[0]["id"] if spaces else "donem_7"
+
+
+def _is_global_scope_token(tok: str) -> bool:
+    return tok.strip().lower() in ("all", "global", "*", "tum", "tüm", "herkes")
+
+
+def _match_space_token(tok: str, cfg: dict) -> str | None:
+    clean = tok.strip().strip("\"'").strip()
+    if not clean:
+        return None
+    if _is_global_scope_token(clean):
+        return "all"
+    low = clean.lower()
+    for sp in cfg["spaces"]:
+        if sp["id"].lower() == low:
+            return sp["id"]
+    slug = _slugify(clean).lower()
+    for sp in cfg["spaces"]:
+        if sp["id"].lower() == slug or _slugify(sp["title"]).lower() == slug:
+            return sp["id"]
+    return None
+
+
+def _normalize_scope_tokens(tokens: list[str], cfg: dict, source: str) -> dict | None:
+    matched: list[str] = []
+    for t in tokens:
+        m = _match_space_token(t, cfg)
+        if not m:
+            continue
+        if m == "all":
+            return {"space": "all", "spaces": ["all"], "global": True, "scope_source": source}
+        if m not in matched:
+            matched.append(m)
+    if not matched:
+        return None
+    return {"space": matched[0], "spaces": matched, "global": False, "scope_source": source}
+
+
+def _parse_yaml_inline_values(val: str) -> list[str]:
+    s = val.strip()
+    if s.startswith("[") and s.endswith("]"):
+        s = s[1:-1]
+    out = []
+    for part in s.split(","):
+        c = part.strip().strip("\"'").strip()
+        if c:
+            out.append(c)
+    return out
+
+
+def _extract_frontmatter_scope_tokens(md_text: str) -> list[str] | None:
+    _, fm = _strip_yaml_frontmatter(md_text)
+    if not fm:
+        return None
+    tokens: list[str] = []
+    collecting_list = False
+    for raw_line in fm.splitlines():
+        trimmed = raw_line.strip()
+        if not trimmed or trimmed.startswith("#"):
+            continue
+        if collecting_list:
+            if trimmed.startswith("-"):
+                v = trimmed[1:].strip().strip("\"'").strip()
+                if v:
+                    tokens.append(v)
+                continue
+            if not raw_line.startswith((" ", "\t")):
+                collecting_list = False
+        if ":" not in trimmed:
+            continue
+        k_raw, v_raw = trimmed.split(":", 1)
+        key = k_raw.strip().lower()
+        val = v_raw.strip()
+        if key == "global":
+            if val.lower() in ("true", "yes", "1"):
+                return ["all"]
+        elif key in ("space", "spaces", "workspace", "workspaces", "scope", "donem", "dönem"):
+            if not val:
+                collecting_list = True
+            else:
+                tokens.extend(_parse_yaml_inline_values(val))
+    return tokens or None
+
+
+def _root_doc_cfg_key_match(key: str, fname: str, stem: str) -> bool:
+    return key.lower() == fname.lower() or (bool(stem) and key.lower() == stem.lower())
+
+
+def _lookup_root_doc_cfg(fname: str, cfg: dict):
+    rd = cfg.get("root_doc_spaces", {})
+    if fname in rd:
+        return rd[fname]
+    stem = Path(fname).stem
+    for k, v in rd.items():
+        if _root_doc_cfg_key_match(k, fname, stem):
+            return v
+    return None
+
+
+def _remove_root_doc_cfg(fname: str, cfg: dict) -> bool:
+    rd = cfg.setdefault("root_doc_spaces", {})
+    stem = Path(fname).stem
+    keys = [k for k in list(rd.keys()) if _root_doc_cfg_key_match(k, fname, stem)]
+    for k in keys:
+        rd.pop(k, None)
+    return bool(keys)
+
+
+def _resolve_root_doc_scope(fname: str, md_text: str, cfg: dict) -> dict:
+    entry = _lookup_root_doc_cfg(fname, cfg)
+    if entry is not None:
+        raw_tokens = [entry] if isinstance(entry, str) else list(entry)
+        res = _normalize_scope_tokens(raw_tokens, cfg, "config")
+        if res:
+            return res
+    if md_text:
+        fm_tokens = _extract_frontmatter_scope_tokens(md_text)
+        if fm_tokens:
+            res = _normalize_scope_tokens(fm_tokens, cfg, "frontmatter")
+            if res:
+                return res
+    stem = Path(fname).stem
+    if stem.lower() == "00_lab_ortak_takvim" and any(s["id"] == "donem_7" for s in cfg["spaces"]):
+        return {"space": "donem_7", "spaces": ["donem_7"], "global": False, "scope_source": "default"}
+    return {"space": "all", "spaces": ["all"], "global": True, "scope_source": "default"}
 
 
 def _meta_for_folder(key: str, cfg: dict | None = None) -> dict:
@@ -561,20 +751,43 @@ def scan_vault() -> dict:
         if ext == ".md":
             try:
                 full_md = f.read_text(encoding="utf-8", errors="replace")
-                head = full_md[:400]
+                head = full_md[:1200]
             except Exception:
                 pass
         title = _clean_title(f, head)
         if ext == ".md" and full_md:
             md_links_raw[nid] = [m.strip() for m in _WIKI_RE.findall(full_md)]
         icon = "📝" if ext == ".md" else ("🌐" if ext == ".html" else ("🖼" if ext in IMG_EXT else ("📘" if ext in (".docx", ".doc") else "📄")))
-        root_space = "donem_7" if ("LAB" in f.stem.upper() or "TAKVIM" in f.stem.upper()) else ("belgeler" if any(s["id"] == "belgeler" for s in cfg["spaces"]) else cfg["spaces"][0]["id"])
-        pages[nid] = {"t": title, "i": icon, "rel": rel, "folder": "Ortak Belgeler", "kasa": "", "space": root_space, "ext": ext, "mtime": f.stat().st_mtime}
+        scope = _resolve_root_doc_scope(rel, full_md, cfg)
+        pages[nid] = {
+            "t": title,
+            "i": icon,
+            "rel": rel,
+            "folder": "Ortak Belgeler",
+            "kasa": "",
+            "space": scope["space"],
+            "spaces": scope["spaces"],
+            "global": scope["global"],
+            "scope_source": scope["scope_source"],
+            "ext": ext,
+            "mtime": f.stat().st_mtime,
+        }
         wikimap[f.name.lower()] = nid
         wikimap[f.stem.lower()] = nid
         wikimap[title.lower()] = nid
         wikimap[f.stem.lower().replace("_", " ")] = nid
-        root_docs.append({"id": nid, "rel": rel, "title": title, "icon": icon, "ext": ext, "space": root_space, "mtime": f.stat().st_mtime})
+        root_docs.append({
+            "id": nid,
+            "rel": rel,
+            "title": title,
+            "icon": icon,
+            "ext": ext,
+            "space": scope["space"],
+            "spaces": scope["spaces"],
+            "global": scope["global"],
+            "scope_source": scope["scope_source"],
+            "mtime": f.stat().st_mtime,
+        })
 
     spaces_out: list[dict] = []
     for sp in cfg["spaces"]:
@@ -640,12 +853,18 @@ def read_note(rel: str) -> dict:
     parts = [part for part in virt_rel.split("/") if part]
     f_key = parts[0] if len(parts) > 1 else ""
     folder = _meta_for_folder(f_key, cfg)["label"] if f_key else "Ortak Belgeler"
-    space_id = _resolve_kasa_space(f_key, cfg) if f_key else "donem_7"
     mtime = p.stat().st_mtime
     if ext == ".pdf":
-        return {"rel": virt_rel, "ext": ext, "kasa": f_key, "space": space_id, "folder": folder, "title": _clean_title(p), "content": "", "mtime": mtime}
+        root_scope = _resolve_root_doc_scope(p.name, "", cfg) if not f_key else None
+        space_id = root_scope["space"] if root_scope else _resolve_kasa_space(f_key, cfg)
+        out = {"rel": virt_rel, "ext": ext, "kasa": f_key, "space": space_id, "folder": folder, "title": _clean_title(p), "content": "", "mtime": mtime}
+        if root_scope:
+            out.update({"spaces": root_scope["spaces"], "global": root_scope["global"], "scope_source": root_scope["scope_source"]})
+        return out
     text = p.read_text(encoding="utf-8", errors="replace")
-    return {
+    root_scope = _resolve_root_doc_scope(p.name, text if ext == ".md" else "", cfg) if not f_key else None
+    space_id = root_scope["space"] if root_scope else _resolve_kasa_space(f_key, cfg)
+    out = {
         "rel": virt_rel,
         "ext": ext,
         "kasa": f_key,
@@ -655,6 +874,9 @@ def read_note(rel: str) -> dict:
         "content": text,
         "mtime": mtime,
     }
+    if root_scope:
+        out.update({"spaces": root_scope["spaces"], "global": root_scope["global"], "scope_source": root_scope["scope_source"]})
+    return out
 
 
 def write_note(rel: str, content: str) -> dict:
@@ -839,8 +1061,59 @@ def delete_space(space_id: str) -> dict:
     for k, v in list(cfg["assignments"].items()):
         if v == clean_id:
             cfg["assignments"][k] = fallback
+    rd = cfg.setdefault("root_doc_spaces", {})
+    for k, v in list(rd.items()):
+        if isinstance(v, str):
+            if v == clean_id:
+                rd[k] = fallback
+        elif isinstance(v, list):
+            kept = [item for item in v if item != clean_id]
+            if not kept:
+                rd[k] = fallback
+            elif len(kept) == 1:
+                rd[k] = kept[0]
+            else:
+                rd[k] = kept
     _save_spaces_cfg(cfg)
     return {"deleted": clean_id, "fallback": fallback}
+
+
+def update_root_doc_space(rel: str, space: str | None = None, spaces: list[str] | None = None) -> dict:
+    clean_rel = _strip_split_prefix(_clean_rel(rel))
+    if not clean_rel or "/" in clean_rel:
+        raise ValueError("Yalnızca kök belgelerin çalışma alanı kapsamı güncellenebilir")
+    p = _safe_path(clean_rel)
+    if not p.exists() or p.is_dir():
+        raise FileNotFoundError(clean_rel)
+    fname = p.name
+    cfg = _load_spaces_cfg()
+    raw_tokens: list[str] = []
+    if spaces:
+        raw_tokens = [str(item).strip() for item in spaces if isinstance(item, str) and item.strip()]
+    if not raw_tokens and space and space.strip():
+        raw_tokens = [space.strip()]
+    if not raw_tokens:
+        raise ValueError("Geçerli bir çalışma alanı veya 'all' belirtilmedi")
+    resolved = _normalize_scope_tokens(raw_tokens, cfg, "config")
+    if not resolved:
+        raise ValueError(f"Geçersiz çalışma alanı: {', '.join(raw_tokens)}")
+    _remove_root_doc_cfg(fname, cfg)
+    rd = cfg.setdefault("root_doc_spaces", {})
+    if resolved["global"]:
+        rd[fname] = "all"
+    elif len(resolved["spaces"]) == 1:
+        rd[fname] = resolved["spaces"][0]
+    else:
+        rd[fname] = resolved["spaces"]
+    _save_spaces_cfg(cfg)
+    return {
+        "rel": fname,
+        "id": f"note:{fname}",
+        "space": resolved["space"],
+        "spaces": resolved["spaces"],
+        "global": resolved["global"],
+        "scope_source": resolved["scope_source"],
+    }
 
 
 def create_folder(parent_rel: str, name: str) -> dict:
@@ -918,6 +1191,16 @@ def delete_note(rel: str) -> dict:
             mirror.unlink()
         except Exception:
             pass
+    virt = _strip_split_prefix(rel.replace("\\", "/").strip("/"))
+    if virt and "/" not in virt:
+        cfg = _load_spaces_cfg()
+        dirty = _remove_root_doc_cfg(virt, cfg)
+        root_order = cfg.get("tree_order", {}).get("__root_docs__")
+        if isinstance(root_order, list) and virt in root_order:
+            cfg["tree_order"]["__root_docs__"] = [n for n in root_order if n != virt]
+            dirty = True
+        if dirty:
+            _save_spaces_cfg(cfg)
     return {"deleted": rel}
 
 
@@ -1070,13 +1353,47 @@ def move_item(src_rel: str, target_rel: str, position: str = "into") -> dict:
     if pos == "into":
         if src_is_root_kasa:
             raise ValueError("Çalışma kasası başka bir klasörün içine taşınamaz")
-        is_root_target = clean_target in ("", "_root_docs")
+        target_root_space = clean_target[len("_root_docs:"):].strip() if clean_target.startswith("_root_docs:") else ""
+        is_root_target = clean_target in ("", "_root_docs") or bool(target_root_space)
         new_parent_rel = "" if is_root_target else clean_target
         if not _check_target_dir_exists(new_parent_rel):
             raise FileNotFoundError(clean_target)
         if src_is_dir and (new_parent_rel == clean_src or new_parent_rel.startswith(f"{clean_src}/")):
             raise ValueError("Klasör kendi içine veya alt klasörüne taşınamaz")
         if old_parent_rel == new_parent_rel:
+            if is_root_target and not old_parent_rel:
+                if target_root_space:
+                    sp_id = _match_space_token(target_root_space, cfg)
+                    if sp_id:
+                        _remove_root_doc_cfg(src_name, cfg)
+                        cfg.setdefault("root_doc_spaces", {})[src_name] = sp_id
+                        _save_spaces_cfg(cfg)
+                        return {
+                            "old_rel": clean_src,
+                            "new_rel": clean_src,
+                            "is_dir": False,
+                            "kasa": "",
+                            "space": sp_id,
+                            "moved": False,
+                            "reordered": True,
+                            "scope_updated": True,
+                        }
+                elif clean_target == "_root_docs":
+                    cur = _resolve_root_doc_scope(src_name, "", cfg)
+                    if not cur["global"]:
+                        _remove_root_doc_cfg(src_name, cfg)
+                        cfg.setdefault("root_doc_spaces", {})[src_name] = "all"
+                        _save_spaces_cfg(cfg)
+                        return {
+                            "old_rel": clean_src,
+                            "new_rel": clean_src,
+                            "is_dir": False,
+                            "kasa": "",
+                            "space": "all",
+                            "moved": False,
+                            "reordered": True,
+                            "scope_updated": True,
+                        }
             return {
                 "old_rel": clean_src,
                 "new_rel": clean_src,
@@ -1096,6 +1413,17 @@ def move_item(src_rel: str, target_rel: str, position: str = "into") -> dict:
         new_parent_key = "__root_docs__" if not new_parent_rel else new_parent_rel
         if new_parent_key in tree_order and src_name not in tree_order[new_parent_key]:
             tree_order[new_parent_key].append(src_name)
+        if not old_parent_rel and new_parent_rel:
+            _remove_root_doc_cfg(src_name, cfg)
+        elif old_parent_rel and not new_parent_rel:
+            sp_id = _match_space_token(target_root_space, cfg) if target_root_space else None
+            if sp_id:
+                _remove_root_doc_cfg(src_name, cfg)
+                cfg.setdefault("root_doc_spaces", {})[src_name] = sp_id
+            elif _lookup_root_doc_cfg(src_name, cfg) is None:
+                old_kasa = old_parent_rel.split("/")[0]
+                if old_kasa:
+                    cfg.setdefault("root_doc_spaces", {})[src_name] = _resolve_kasa_space(old_kasa, cfg)
         if src_is_dir:
             _migrate_tree_order_keys(tree_order, clean_src, new_rel)
         _save_spaces_cfg(cfg)
@@ -1164,6 +1492,10 @@ def move_item(src_rel: str, target_rel: str, position: str = "into") -> dict:
             _mirror_move(clean_src, new_rel)
             if old_parent_rel in tree_order:
                 tree_order[old_parent_rel] = [n for n in tree_order[old_parent_rel] if n != src_name]
+            if _lookup_root_doc_cfg(src_name, cfg) is None:
+                old_kasa = old_parent_rel.split("/")[0]
+                if old_kasa:
+                    cfg.setdefault("root_doc_spaces", {})[src_name] = _resolve_kasa_space(old_kasa, cfg)
             moved = True
         names = [
             n
@@ -1195,6 +1527,8 @@ def move_item(src_rel: str, target_rel: str, position: str = "into") -> dict:
         old_parent_key = "__root_docs__" if not old_parent_rel else old_parent_rel
         if old_parent_key in tree_order:
             tree_order[old_parent_key] = [n for n in tree_order[old_parent_key] if n != src_name]
+        if not old_parent_rel:
+            _remove_root_doc_cfg(src_name, cfg)
         if src_is_dir:
             _migrate_tree_order_keys(tree_order, clean_src, new_rel)
         moved = True

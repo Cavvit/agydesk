@@ -214,8 +214,9 @@ fn parse_agy_usage_json(raw: &str, now: f64) -> Option<HashMap<String, LiveQuota
         } else if low.contains("claude") || low.contains("gpt") || b_ids.contains("3p-") {
             out.insert("claude-opus".to_string(), info.clone());
             out.insert("claude-sonnet".to_string(), info);
-        } else if low.contains("gemini") || low.contains("hydrogen") {
+        } else if low.contains("gemini") || low.contains("hydrogen") || low.contains("neon") {
             gemini_fallback = Some(info.clone());
+            out.insert("gemini-neon".to_string(), info.clone());
             out.insert("gemini-hydrogen".to_string(), info);
         }
     }

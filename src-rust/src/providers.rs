@@ -1,6 +1,6 @@
 use crate::config::{
-    effective_effort, is_restricted_session, model_for, provider_spec, AGY_BIN, CLI_WORKSPACE,
-    DRIVE_DIR, OLLAMA_URL, VAULT_DIR, WORKSPACE,
+    effective_effort, is_restricted_session, is_study_session, model_for, provider_spec, AGY_BIN,
+    CLI_WORKSPACE, DRIVE_DIR, OLLAMA_URL, PERSONAL_DIRS, VAULT_DIR, WORKSPACE,
 };
 use crate::router::CLOUD_CHAIN;
 use crate::store;
@@ -371,11 +371,21 @@ fn spawn_warm_proc(
         // Hard security boundary is enforced by PreToolUse hook (agydesk-guard.exe, matcher="*").
         // Use --dangerously-skip-permissions so whitelisted tools (incl. sandboxed PDF export)
         // execute without headless print-mode interactive approval cancellation.
+        let study = is_study_session(session);
         cmd.arg("--dangerously-skip-permissions");
-        cmd.env("AGYDESK_SCOPE", "restricted");
+        cmd.env("AGYDESK_SCOPE", if study { "study" } else { "restricted" });
+        cmd.env("AGYDESK_SESSION", session);
+        cmd.env("AGYDESK_API_URL", "http://127.0.0.1:8780");
         if let Some(ref drive) = *DRIVE_DIR {
             if drive.exists() {
                 cmd.arg("--add-dir").arg(drive);
+            }
+        }
+        if study {
+            for (_, _, pdir) in PERSONAL_DIRS.iter() {
+                if pdir.exists() {
+                    cmd.arg("--add-dir").arg(pdir);
+                }
             }
         }
         cmd.current_dir(&*VAULT_DIR);

@@ -1,13 +1,17 @@
-use crate::config::{DRIVE_DIR, DRIVE_VAULT_DIR, VAULT_DIR};
+use crate::config::{DRIVE_DIR, DRIVE_VAULT_DIR, PERSONAL_DIRS, ROOT, VAULT_DIR};
 use serde_json::{json, Value};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct GuardPolicy {
     pub vault_dir: PathBuf,
     pub drive_dir: Option<PathBuf>,
     pub drive_vault_dir: Option<PathBuf>,
+    pub personal_dirs: Vec<(String, String, PathBuf)>,
+    pub project_dir: PathBuf,
 }
 
 impl GuardPolicy {
@@ -16,6 +20,11 @@ impl GuardPolicy {
             vault_dir: VAULT_DIR.clone(),
             drive_dir: DRIVE_DIR.clone(),
             drive_vault_dir: DRIVE_VAULT_DIR.clone(),
+            personal_dirs: PERSONAL_DIRS
+                .iter()
+                .map(|(k, l, p)| ((*k).to_string(), (*l).to_string(), p.clone()))
+                .collect(),
+            project_dir: ROOT.clone(),
         }
     }
 }
@@ -66,10 +75,26 @@ fn is_under(target_norm: &str, root: &Path) -> bool {
 }
 
 fn touches_agents_dir(target_norm: &str) -> bool {
-    target_norm.contains(r"\.agents\")
-        || target_norm.ends_with(r"\.agents")
-        || target_norm.contains(r"\.agent\")
-        || target_norm.ends_with(r"\.agent")
+    const SENSITIVE: &[&str] = &[".agents", ".agent", ".gemini", ".git", ".ssh"];
+    for seg in target_norm.split('\\') {
+        if SENSITIVE.contains(&seg) {
+            return true;
+        }
+    }
+    false
+}
+
+fn touches_forbidden_dir(target_norm: &str, policy: &GuardPolicy) -> bool {
+    touches_agents_dir(target_norm) || is_under(target_norm, &policy.project_dir)
+}
+
+fn match_personal_dir(target_norm: &str, policy: &GuardPolicy) -> Option<(String, String)> {
+    for (key, label, dir) in &policy.personal_dirs {
+        if is_under(target_norm, dir) {
+            return Some((key.clone(), label.clone()));
+        }
+    }
+    None
 }
 
 fn extract_path_arg(args: &Value) -> Option<String> {
@@ -103,15 +128,58 @@ fn allow() -> Value {
     json!({ "decision": "allow" })
 }
 
+#[derive(Debug, Clone)]
+pub enum GuardDecision {
+    Allow,
+    Deny(String),
+    AskApproval {
+        tool: String,
+        action: String,
+        root_key: String,
+        root_label: String,
+        path: String,
+        dst_path: Option<String>,
+    },
+}
+
+#[allow(dead_code)]
 pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Value {
-    // Only enforce restrictions for AgyNote / AgyStudy restricted sessions.
-    if scope != "restricted" {
-        return allow();
+    match evaluate_hook_decision(payload, scope, policy) {
+        GuardDecision::Allow => allow(),
+        GuardDecision::Deny(r) => deny(&r),
+        GuardDecision::AskApproval {
+            tool,
+            action,
+            root_key,
+            root_label,
+            path,
+            dst_path,
+        } => json!({
+            "decision": "ask",
+            "tool": tool,
+            "action": action,
+            "root_key": root_key,
+            "root_label": root_label,
+            "path": path,
+            "dst_path": dst_path,
+        }),
     }
+}
+
+pub fn evaluate_hook_decision(payload: &Value, scope: &str, policy: &GuardPolicy) -> GuardDecision {
+    // Only enforce restrictions for AgyNote (`restricted`) and AgyStudy (`study`) sessions.
+    if scope != "restricted" && scope != "study" {
+        return GuardDecision::Allow;
+    }
+    let allow_personal = scope == "study";
 
     let tool_call = match payload.get("toolCall") {
         Some(tc) => tc,
-        None => return deny("AgyNote/AgyStudy güvenlik kalkanı: geçersiz araç çağrısı."),
+        None => {
+            return GuardDecision::Deny(
+                "AgyNote/AgyStudy güvenlik kalkanı: geçersiz araç çağrısı.".to_string(),
+            )
+        }
     };
     let raw_name = tool_call
         .get("name")
@@ -131,7 +199,7 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
 
     // 1. Read-only web search (no download/upload capability) & built-in image generation
     if name == "search_web" || name == "generate_image" {
-        return allow();
+        return GuardDecision::Allow;
     }
 
     // 2. Image generation subagent ONLY (block self/research/other subagents)
@@ -144,14 +212,16 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             .trim()
             .to_ascii_lowercase();
         if tname == "image-generator" {
-            return allow();
+            return GuardDecision::Allow;
         }
-        return deny(
-            "AgyNote/AgyStudy kısıtlı modda: yalnızca image-generator alt ajanı kullanılabilir.",
+        return GuardDecision::Deny(
+            "AgyNote/AgyStudy kısıtlı modda: yalnızca image-generator alt ajanı kullanılabilir."
+                .to_string(),
         );
     }
 
-    // 3. Read / search tools -> allowed inside VAULT_DIR or DRIVE_DIR
+    // 3. Read / search tools -> auto-allowed inside VAULT_DIR or DRIVE_DIR;
+    //    approval-gated for personal dirs in AgyStudy (`study` scope).
     if matches!(
         name,
         "read_file"
@@ -163,9 +233,16 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             | "list_dir"
     ) {
         let Some(pstr) = extract_path_arg(&args) else {
-            return deny("AgyNote/AgyStudy kısıtlı modda: dosya/klasör yolu belirtilmelidir.");
+            return GuardDecision::Deny(
+                "AgyNote/AgyStudy kısıtlı modda: dosya/klasör yolu belirtilmelidir.".to_string(),
+            );
         };
         let norm = normalize_win(Path::new(&pstr), &cwd);
+        if touches_forbidden_dir(&norm, policy) {
+            return GuardDecision::Deny(
+                "AgyNote/AgyStudy güvenlik kalkanı: proje ve yapılandırma klasörlerine erişim kapalıdır. Proje işleri için AgyAI sekmesini kullanın.".to_string(),
+            );
+        }
         let in_vault = is_under(&norm, &policy.vault_dir);
         let in_drive = policy
             .drive_dir
@@ -173,14 +250,30 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             .map(|d| is_under(&norm, d))
             .unwrap_or(false);
         if in_vault || in_drive {
-            return allow();
+            return GuardDecision::Allow;
         }
-        return deny(
-            "AgyNote/AgyStudy kısıtlı modda: yalnızca AgyDesk kasası ve Google Drive içindeki dosyalar okunabilir. Proje/sistem dosyaları için AgyAI sekmesini kullanın.",
+        if allow_personal {
+            if let Some((rk, rl)) = match_personal_dir(&norm, policy) {
+                let disp = resolve_win_preserve_case(Path::new(&pstr), &cwd)
+                    .to_string_lossy()
+                    .to_string();
+                return GuardDecision::AskApproval {
+                    tool: name.to_string(),
+                    action: "Okuma / Listeleme".to_string(),
+                    root_key: rk,
+                    root_label: rl,
+                    path: disp,
+                    dst_path: None,
+                };
+            }
+        }
+        return GuardDecision::Deny(
+            "AgyNote/AgyStudy kısıtlı modda: yalnızca AgyDesk kasası ve Google Drive (AgyStudy'de onaylı kişisel klasörler) okunabilir. Proje/sistem dosyaları için AgyAI sekmesini kullanın.".to_string(),
         );
     }
 
-    // 4. Write / edit tools -> allowed ONLY inside VAULT_DIR or DRIVE_VAULT_DIR (never `.agents`)
+    // 4. Write / edit tools -> auto-allowed inside VAULT_DIR or DRIVE_VAULT_DIR;
+    //    approval-gated for personal dirs & personal Drive in AgyStudy (`study` scope).
     if matches!(
         name,
         "write_file"
@@ -190,11 +283,16 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             | "multi_replace_file_content"
     ) {
         let Some(pstr) = extract_path_arg(&args) else {
-            return deny("AgyNote/AgyStudy kısıtlı modda: hedef dosya yolu belirtilmelidir.");
+            return GuardDecision::Deny(
+                "AgyNote/AgyStudy kısıtlı modda: hedef dosya yolu belirtilmelidir.".to_string(),
+            );
         };
         let norm = normalize_win(Path::new(&pstr), &cwd);
-        if touches_agents_dir(&norm) {
-            return deny("AgyNote/AgyStudy güvenlik kalkanı: .agents yapılandırması değiştirilemez.");
+        if touches_forbidden_dir(&norm, policy) {
+            return GuardDecision::Deny(
+                "AgyNote/AgyStudy güvenlik kalkanı: proje ve yapılandırma dosyaları değiştirilemez."
+                    .to_string(),
+            );
         }
         let in_vault = is_under(&norm, &policy.vault_dir);
         let in_drive_vault = policy
@@ -203,14 +301,44 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             .map(|d| is_under(&norm, d))
             .unwrap_or(false);
         if in_vault || in_drive_vault {
-            return allow();
+            return GuardDecision::Allow;
         }
-        return deny(
-            "AgyNote/AgyStudy kısıtlı modda: yazma/düzenleme yalnızca AgyDesk_Belgeler kasası ve G:\\Drive'ım\\AgyDesk_Belgeler içinde yapılabilir.",
+        if allow_personal {
+            let disp = resolve_win_preserve_case(Path::new(&pstr), &cwd)
+                .to_string_lossy()
+                .to_string();
+            if let Some((rk, rl)) = match_personal_dir(&norm, policy) {
+                return GuardDecision::AskApproval {
+                    tool: name.to_string(),
+                    action: "Yazma / Düzenleme".to_string(),
+                    root_key: rk,
+                    root_label: rl,
+                    path: disp,
+                    dst_path: None,
+                };
+            }
+            let in_drive = policy
+                .drive_dir
+                .as_ref()
+                .map(|d| is_under(&norm, d))
+                .unwrap_or(false);
+            if in_drive {
+                return GuardDecision::AskApproval {
+                    tool: name.to_string(),
+                    action: "Google Drive Yazma / Düzenleme".to_string(),
+                    root_key: "drive".to_string(),
+                    root_label: "Google Drive".to_string(),
+                    path: disp,
+                    dst_path: None,
+                };
+            }
+        }
+        return GuardDecision::Deny(
+            "AgyNote/AgyStudy kısıtlı modda: yazma/düzenleme yalnızca AgyDesk_Belgeler kasası ve G:\\Drive'ım\\AgyDesk_Belgeler içinde (AgyStudy'de onaylı kişisel klasörlerde) yapılabilir.".to_string(),
         );
     }
 
-    // 4b. Strictly sandboxed PDF export helper ONLY (zero shell metacharacters, vault/Drive paths only)
+    // 4b. Strictly sandboxed agydesk-guard helpers ONLY (zero shell metacharacters)
     if name == "run_command" {
         let cmdline = args
             .get("CommandLine")
@@ -218,17 +346,37 @@ pub fn evaluate_hook(payload: &Value, scope: &str, policy: &GuardPolicy) -> Valu
             .or_else(|| args.get("command"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if parse_safe_pdf_export_cmd(cmdline, &cwd, policy).is_some() {
-            return allow();
+        if let Some((mode, src_p, dst_p, approval)) =
+            parse_safe_guard_cmd(cmdline, &cwd, policy, allow_personal)
+        {
+            if let Some((rk, rl)) = approval {
+                let action = match mode.as_str() {
+                    "--list" => "Klasör Listeleme",
+                    "--copy" => "Kopyalama",
+                    "--move" => "Taşıma",
+                    "--sync" => "Klasör Senkronizasyonu",
+                    "--md-to-pdf" | "--html-to-pdf" => "PDF Dönüşümü",
+                    _ => "Dosya İşlemi",
+                };
+                return GuardDecision::AskApproval {
+                    tool: format!("agydesk-guard {}", mode),
+                    action: action.to_string(),
+                    root_key: rk,
+                    root_label: rl,
+                    path: src_p.to_string_lossy().to_string(),
+                    dst_path: dst_p.map(|p| p.to_string_lossy().to_string()),
+                };
+            }
+            return GuardDecision::Allow;
         }
-        return deny(
-            "AgyNote/AgyStudy kısıtlı modda: genel terminal komutları kapalıdır. Yalnızca PDF üretimi için `C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --md-to-pdf \"<girdi.md>\" \"<cikti.pdf>\"` (veya `--html-to-pdf`) izinlidir. Genel terminal için AgyAI sekmesini kullanın.",
+        return GuardDecision::Deny(
+            "AgyNote/AgyStudy kısıtlı modda: genel terminal komutları kapalıdır. Yalnızca `C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe` ile `--list`, `--md-to-pdf`, `--html-to-pdf`, `--copy`, `--move`, `--sync` izinlidir. Genel terminal için AgyAI sekmesini kullanın.".to_string(),
         );
     }
 
     // 5. Everything else (MCP/browser/graphify, swarm, run_workflow, schedule, etc.) -> HARD DENY
-    deny(
-        "AgyNote/AgyStudy kısıtlı modda: terminal komutu, proje değişikliği, MCP/tarayıcı ve dosya indirme/yükleme kapalıdır. Tam erişim için AgyAI sekmesini kullanın.",
+    GuardDecision::Deny(
+        "AgyNote/AgyStudy kısıtlı modda: terminal komutu, proje değişikliği, MCP/tarayıcı ve dosya indirme/yükleme kapalıdır. Tam erişim için AgyAI sekmesini kullanın.".to_string(),
     )
 }
 
@@ -273,10 +421,11 @@ fn validate_pdf_paths(
     out_raw: &str,
     cwd: &Path,
     policy: &GuardPolicy,
-) -> Option<(PathBuf, PathBuf)> {
+    allow_personal: bool,
+) -> Option<(PathBuf, PathBuf, Option<(String, String)>)> {
     let in_norm = normalize_win(Path::new(in_raw), cwd);
     let out_norm = normalize_win(Path::new(out_raw), cwd);
-    if touches_agents_dir(&in_norm) || touches_agents_dir(&out_norm) {
+    if touches_forbidden_dir(&in_norm, policy) || touches_forbidden_dir(&out_norm, policy) {
         return None;
     }
     let in_low = in_norm.to_ascii_lowercase();
@@ -289,32 +438,223 @@ fn validate_pdf_paths(
     if !valid_in_ext || !out_low.ends_with(".pdf") {
         return None;
     }
-    let in_ok = is_under(&in_norm, &policy.vault_dir)
+    let in_auto = is_under(&in_norm, &policy.vault_dir)
         || policy
             .drive_dir
             .as_ref()
             .map(|d| is_under(&in_norm, d))
             .unwrap_or(false);
-    let out_ok = is_under(&out_norm, &policy.vault_dir)
+    let out_auto = is_under(&out_norm, &policy.vault_dir)
         || policy
             .drive_vault_dir
             .as_ref()
             .map(|d| is_under(&out_norm, d))
             .unwrap_or(false);
+    let mut approval: Option<(String, String)> = None;
+    let in_ok = if in_auto {
+        true
+    } else if allow_personal {
+        if let Some(p) = match_personal_dir(&in_norm, policy) {
+            approval = Some(p);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let out_ok = if out_auto {
+        true
+    } else if allow_personal {
+        if let Some(p) = match_personal_dir(&out_norm, policy) {
+            approval = Some(p);
+            true
+        } else if policy
+            .drive_dir
+            .as_ref()
+            .map(|d| is_under(&out_norm, d))
+            .unwrap_or(false)
+        {
+            approval = Some(("drive".to_string(), "Google Drive".to_string()));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
     if in_ok && out_ok {
-        Some((PathBuf::from(in_norm), PathBuf::from(out_norm)))
+        Some((
+            resolve_win_preserve_case(Path::new(in_raw), cwd),
+            resolve_win_preserve_case(Path::new(out_raw), cwd),
+            approval,
+        ))
     } else {
         None
     }
 }
 
-fn parse_safe_pdf_export_cmd(
+/// Lexically resolve `.` and `..` while preserving original filename casing on Windows.
+fn resolve_win_preserve_case(p: &Path, base: &Path) -> PathBuf {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        base.join(p)
+    };
+    let mut parts: Vec<String> = Vec::new();
+    let mut prefix_str = String::new();
+    for comp in abs.components() {
+        match comp {
+            Component::Prefix(pr) => {
+                let s = pr.as_os_str().to_string_lossy().to_string();
+                prefix_str = s.strip_prefix(r"\\?\").unwrap_or(&s).to_string();
+            }
+            Component::RootDir | Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(os) => {
+                parts.push(os.to_string_lossy().to_string());
+            }
+        }
+    }
+    if prefix_str.is_empty() {
+        PathBuf::from(format!(r"\{}", parts.join(r"\")))
+    } else if parts.is_empty() {
+        PathBuf::from(format!(r"{}\", prefix_str))
+    } else {
+        PathBuf::from(format!(r"{}\{}", prefix_str, parts.join(r"\")))
+    }
+}
+
+fn validate_file_op_paths(
+    mode: &str,
+    src_raw: &str,
+    dst_raw: &str,
+    cwd: &Path,
+    policy: &GuardPolicy,
+    allow_personal: bool,
+) -> Option<(PathBuf, PathBuf, Option<(String, String)>)> {
+    let src_norm = normalize_win(Path::new(src_raw), cwd);
+    let dst_norm = normalize_win(Path::new(dst_raw), cwd);
+    if touches_forbidden_dir(&src_norm, policy) || touches_forbidden_dir(&dst_norm, policy) {
+        return None;
+    }
+    // Reject copying/moving/syncing a directory into itself
+    let src_trim = src_norm.trim_end_matches('\\');
+    let dst_trim = dst_norm.trim_end_matches('\\');
+    if dst_trim == src_trim || dst_trim.starts_with(&format!(r"{}\", src_trim)) {
+        return None;
+    }
+    let src_in_vault = is_under(&src_norm, &policy.vault_dir);
+    let src_in_drive = policy
+        .drive_dir
+        .as_ref()
+        .map(|d| is_under(&src_norm, d))
+        .unwrap_or(false);
+    let src_in_drive_vault = policy
+        .drive_vault_dir
+        .as_ref()
+        .map(|d| is_under(&src_norm, d))
+        .unwrap_or(false);
+
+    let mut approval: Option<(String, String)> = None;
+
+    // `--move` modifies source (removes it), so auto-allow only if writable (VAULT_DIR or DRIVE_VAULT_DIR)
+    let src_auto = match mode {
+        "--copy" | "--sync" => src_in_vault || src_in_drive,
+        "--move" => src_in_vault || src_in_drive_vault,
+        _ => false,
+    };
+    let src_ok = if src_auto {
+        true
+    } else if allow_personal {
+        if let Some(p) = match_personal_dir(&src_norm, policy) {
+            approval = Some(p);
+            true
+        } else if mode == "--move" && src_in_drive {
+            approval = Some(("drive".to_string(), "Google Drive".to_string()));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let dst_auto = is_under(&dst_norm, &policy.vault_dir)
+        || policy
+            .drive_vault_dir
+            .as_ref()
+            .map(|d| is_under(&dst_norm, d))
+            .unwrap_or(false);
+    let dst_ok = if dst_auto {
+        true
+    } else if allow_personal {
+        if let Some(p) = match_personal_dir(&dst_norm, policy) {
+            approval = Some(p);
+            true
+        } else if policy
+            .drive_dir
+            .as_ref()
+            .map(|d| is_under(&dst_norm, d))
+            .unwrap_or(false)
+        {
+            approval = Some(("drive".to_string(), "Google Drive".to_string()));
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if src_ok && dst_ok {
+        Some((
+            resolve_win_preserve_case(Path::new(src_raw), cwd),
+            resolve_win_preserve_case(Path::new(dst_raw), cwd),
+            approval,
+        ))
+    } else {
+        None
+    }
+}
+
+fn validate_list_path(
+    dir_raw: &str,
+    cwd: &Path,
+    policy: &GuardPolicy,
+    allow_personal: bool,
+) -> Option<(PathBuf, Option<(String, String)>)> {
+    let norm = normalize_win(Path::new(dir_raw), cwd);
+    if touches_forbidden_dir(&norm, policy) {
+        return None;
+    }
+    let in_vault = is_under(&norm, &policy.vault_dir);
+    let in_drive = policy
+        .drive_dir
+        .as_ref()
+        .map(|d| is_under(&norm, d))
+        .unwrap_or(false);
+    if in_vault || in_drive {
+        return Some((resolve_win_preserve_case(Path::new(dir_raw), cwd), None));
+    }
+    if allow_personal {
+        if let Some(p) = match_personal_dir(&norm, policy) {
+            return Some((resolve_win_preserve_case(Path::new(dir_raw), cwd), Some(p)));
+        }
+    }
+    None
+}
+
+fn parse_safe_guard_cmd(
     cmdline: &str,
     cwd: &Path,
     policy: &GuardPolicy,
-) -> Option<(String, PathBuf, PathBuf)> {
+    allow_personal: bool,
+) -> Option<(String, PathBuf, Option<PathBuf>, Option<(String, String)>)> {
     let tokens = split_simple_tokens(cmdline.trim())?;
-    if tokens.len() != 4 {
+    if tokens.len() != 3 && tokens.len() != 4 {
         return None;
     }
     let exe_norm = tokens[0].replace('/', "\\").to_ascii_lowercase();
@@ -327,11 +667,23 @@ fn parse_safe_pdf_export_cmd(
         return None;
     }
     let mode = tokens[1].as_str();
-    if mode != "--md-to-pdf" && mode != "--html-to-pdf" {
-        return None;
+    match (tokens.len(), mode) {
+        (3, "--list") => {
+            let (dir_p, appr) = validate_list_path(&tokens[2], cwd, policy, allow_personal)?;
+            Some((mode.to_string(), dir_p, None, appr))
+        }
+        (4, "--md-to-pdf" | "--html-to-pdf") => {
+            let (in_p, out_p, appr) =
+                validate_pdf_paths(mode, &tokens[2], &tokens[3], cwd, policy, allow_personal)?;
+            Some((mode.to_string(), in_p, Some(out_p), appr))
+        }
+        (4, "--copy" | "--move" | "--sync") => {
+            let (src_p, dst_p, appr) =
+                validate_file_op_paths(mode, &tokens[2], &tokens[3], cwd, policy, allow_personal)?;
+            Some((mode.to_string(), src_p, Some(dst_p), appr))
+        }
+        _ => None,
     }
-    let (in_p, out_p) = validate_pdf_paths(mode, &tokens[2], &tokens[3], cwd, policy)?;
-    Some((mode.to_string(), in_p, out_p))
 }
 
 fn html_escape(s: &str) -> String {
@@ -613,9 +965,12 @@ pub fn run_pdf_export(mode: &str, in_arg: &str, out_arg: &str) -> i32 {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let policy = GuardPolicy::from_config();
+    let allow_personal = std::env::var("AGYDESK_SCOPE").ok().as_deref() == Some("study");
     let cwd = std::env::current_dir().unwrap_or_else(|_| policy.vault_dir.clone());
-    let Some((in_path, out_path)) = validate_pdf_paths(mode, in_arg, out_arg, &cwd, &policy) else {
-        eprintln!("HATA: Yalnızca AgyDesk kasası veya G:\\Drive'ım\\AgyDesk_Belgeler içindeki .md/.html -> .pdf dönüşümüne izin verilir.");
+    let Some((in_path, out_path, _)) =
+        validate_pdf_paths(mode, in_arg, out_arg, &cwd, &policy, allow_personal)
+    else {
+        eprintln!("HATA: Yalnızca AgyDesk kasası veya izinli klasörler içindeki .md/.html -> .pdf dönüşümüne izin verilir.");
         return 2;
     };
     let Ok(raw) = std::fs::read_to_string(&in_path) else {
@@ -701,14 +1056,431 @@ pub fn run_pdf_export(mode: &str, in_arg: &str, out_arg: &str) -> i32 {
     }
 }
 
-/// Entrypoint for `AgyDesk.exe --vault-guard` invoked by `PreToolUse` hook.
+fn is_agents_entry(name: &std::ffi::OsStr) -> bool {
+    let s = name.to_string_lossy().to_ascii_lowercase();
+    s == ".agents" || s == ".agent"
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path, skip_up_to_date: bool) -> io::Result<(usize, usize)> {
+    std::fs::create_dir_all(dst)?;
+    let mut copied = 0usize;
+    let mut skipped = 0usize;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        if is_agents_entry(&entry.file_name()) {
+            continue;
+        }
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            continue;
+        }
+        let s_path = entry.path();
+        let d_path = dst.join(entry.file_name());
+        if ft.is_dir() {
+            let (c, sk) = copy_dir_recursive(&s_path, &d_path, skip_up_to_date)?;
+            copied += c;
+            skipped += sk;
+        } else if ft.is_file() {
+            if skip_up_to_date && d_path.exists() {
+                if let (Ok(sm), Ok(dm)) = (std::fs::metadata(&s_path), std::fs::metadata(&d_path)) {
+                    let same_size = sm.len() == dm.len();
+                    let not_newer = match (sm.modified(), dm.modified()) {
+                        (Ok(st), Ok(dt)) => st <= dt,
+                        _ => false,
+                    };
+                    if same_size && not_newer {
+                        skipped += 1;
+                        continue;
+                    }
+                }
+            }
+            if let Some(parent) = d_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&s_path, &d_path)?;
+            copied += 1;
+        }
+    }
+    Ok((copied, skipped))
+}
+
+/// Strictly sandboxed binary/folder file operations between Vault and Drive:
+/// `agydesk-guard.exe --copy "<src>" "<dst>"`
+/// `agydesk-guard.exe --move "<src>" "<dst>"`
+/// `agydesk-guard.exe --sync "<src_dir>" "<dst_dir>"`
+#[allow(dead_code)]
+pub fn run_file_op(mode: &str, src_arg: &str, dst_arg: &str) -> i32 {
+    let policy = GuardPolicy::from_config();
+    let allow_personal = std::env::var("AGYDESK_SCOPE").ok().as_deref() == Some("study");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| policy.vault_dir.clone());
+    let Some((src_path, dst_path, _)) =
+        validate_file_op_paths(mode, src_arg, dst_arg, &cwd, &policy, allow_personal)
+    else {
+        eprintln!(
+            "HATA: {} yalnızca AgyDesk kasası ve izinli klasör sınırları içinde izinlidir.",
+            mode
+        );
+        return 2;
+    };
+    if !src_path.exists() {
+        eprintln!("HATA: Kaynak bulunamadı: {}", src_path.display());
+        return 3;
+    }
+
+    match mode {
+        "--copy" => {
+            if src_path.is_dir() {
+                match copy_dir_recursive(&src_path, &dst_path, false) {
+                    Ok((c, _)) => {
+                        println!(
+                            "OK: Klasör kopyalandı ({} dosya): {} -> {}",
+                            c,
+                            src_path.display(),
+                            dst_path.display()
+                        );
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("HATA: Klasör kopyalanamadı: {}", e);
+                        4
+                    }
+                }
+            } else {
+                let final_dst = if dst_path.is_dir() {
+                    match src_path.file_name() {
+                        Some(name) => dst_path.join(name),
+                        None => dst_path.clone(),
+                    }
+                } else {
+                    dst_path.clone()
+                };
+                if let Some(parent) = final_dst.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match std::fs::copy(&src_path, &final_dst) {
+                    Ok(bytes) => {
+                        println!(
+                            "OK: Kopyalandı ({} bayt): {} -> {}",
+                            bytes,
+                            src_path.display(),
+                            final_dst.display()
+                        );
+                        0
+                    }
+                    Err(e) => {
+                        eprintln!("HATA: Dosya kopyalanamadı: {}", e);
+                        4
+                    }
+                }
+            }
+        }
+        "--move" => {
+            let final_dst = if src_path.is_file() && dst_path.is_dir() {
+                match src_path.file_name() {
+                    Some(name) => dst_path.join(name),
+                    None => dst_path.clone(),
+                }
+            } else {
+                dst_path.clone()
+            };
+            if let Some(parent) = final_dst.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if std::fs::rename(&src_path, &final_dst).is_ok() {
+                println!(
+                    "OK: Taşındı: {} -> {}",
+                    src_path.display(),
+                    final_dst.display()
+                );
+                return 0;
+            }
+            // Cross-volume fallback (e.g. C:\ <-> G:\)
+            if src_path.is_dir() {
+                match copy_dir_recursive(&src_path, &final_dst, false) {
+                    Ok((c, _)) => match std::fs::remove_dir_all(&src_path) {
+                        Ok(()) => {
+                            println!(
+                                "OK: Klasör taşındı ({} dosya): {} -> {}",
+                                c,
+                                src_path.display(),
+                                final_dst.display()
+                            );
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("HATA: Kopyalandı ama kaynak klasör silinemedi: {}", e);
+                            5
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("HATA: Klasör taşınamadı: {}", e);
+                        5
+                    }
+                }
+            } else {
+                match std::fs::copy(&src_path, &final_dst) {
+                    Ok(bytes) => match std::fs::remove_file(&src_path) {
+                        Ok(()) => {
+                            println!(
+                                "OK: Taşındı ({} bayt): {} -> {}",
+                                bytes,
+                                src_path.display(),
+                                final_dst.display()
+                            );
+                            0
+                        }
+                        Err(e) => {
+                            eprintln!("HATA: Kopyalandı ama kaynak dosya silinemedi: {}", e);
+                            5
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("HATA: Dosya taşınamadı: {}", e);
+                        5
+                    }
+                }
+            }
+        }
+        "--sync" => {
+            if !src_path.is_dir() {
+                eprintln!("HATA: --sync için kaynak bir klasör olmalıdır: {}", src_path.display());
+                return 3;
+            }
+            match copy_dir_recursive(&src_path, &dst_path, true) {
+                Ok((c, sk)) => {
+                    println!(
+                        "OK: Senkronize edildi (kopyalanan: {}, güncel/atlanan: {}): {} -> {}",
+                        c,
+                        sk,
+                        src_path.display(),
+                        dst_path.display()
+                    );
+                    0
+                }
+                Err(e) => {
+                    eprintln!("HATA: Senkronizasyon başarısız: {}", e);
+                    6
+                }
+            }
+        }
+        _ => {
+            eprintln!("HATA: Bilinmeyen mod: {}", mode);
+            2
+        }
+    }
+}
+
+fn fmt_tr_datetime(unix_secs: u64) -> String {
+    // Turkey permanent UTC+3
+    let local = unix_secs.saturating_add(3 * 3600);
+    let days = (local / 86400) as i64;
+    let rem = local % 86400;
+    let hour = rem / 3600;
+    let min = (rem % 3600) / 60;
+    // Howard Hinnant civil_from_days
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02} {:02}:{:02}", year, m, d, hour, min)
+}
+
+fn fmt_human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = 1024.0 * 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:>6.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:>6.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:>6.1} KB", b / KB)
+    } else {
+        format!("{:>6} B ", bytes)
+    }
+}
+
+fn list_dir_entries(dir_path: &Path, policy: &GuardPolicy) -> io::Result<Vec<(u64, bool, u64, String)>> {
+    const SENSITIVE: &[&str] = &[".agents", ".agent", ".gemini", ".git", ".ssh"];
+    let mut items = Vec::new();
+    for entry in std::fs::read_dir(dir_path)? {
+        let Ok(entry) = entry else { continue };
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let low = name.to_ascii_lowercase();
+        if SENSITIVE.contains(&low.as_str()) {
+            continue;
+        }
+        let entry_path = entry.path();
+        let entry_norm = normalize_win(&entry_path, dir_path);
+        if touches_forbidden_dir(&entry_norm, policy) {
+            continue;
+        }
+        let meta = entry.metadata().ok();
+        let mtime = meta
+            .as_ref()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let is_dir = ft.is_dir();
+        let size = if is_dir {
+            0
+        } else {
+            meta.as_ref().map(|m| m.len()).unwrap_or(0)
+        };
+        items.push((mtime, is_dir, size, name));
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.3.to_lowercase().cmp(&b.3.to_lowercase())));
+    Ok(items)
+}
+
+/// Strictly sandboxed directory listing sorted newest-first (`agydesk-guard.exe --list <dir>`).
+#[allow(dead_code)]
+pub fn run_list_dir(dir_arg: &str) -> i32 {
+    let policy = GuardPolicy::from_config();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| policy.vault_dir.clone());
+    let allow_personal = std::env::var("AGYDESK_SCOPE").ok().as_deref() == Some("study");
+    let Some((dir_path, _)) = validate_list_path(dir_arg, &cwd, &policy, allow_personal) else {
+        eprintln!("HATA: Bu klasörü listeleme yetkisi yok: {}", dir_arg);
+        return 2;
+    };
+    if !dir_path.is_dir() {
+        eprintln!("HATA: Klasör bulunamadı: {}", dir_path.display());
+        return 3;
+    }
+    let items = match list_dir_entries(&dir_path, &policy) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("HATA: Klasör okunamadı: {}", e);
+            return 4;
+        }
+    };
+    const MAX_SHOW: usize = 100;
+    println!(
+        "KLASÖR: {} (toplam {} öğe, en yeniden eskiye)",
+        dir_path.display(),
+        items.len()
+    );
+    for (mtime, is_dir, size, name) in items.iter().take(MAX_SHOW) {
+        let kind = if *is_dir { "[KLASÖR]" } else { "[DOSYA] " };
+        let dt = fmt_tr_datetime(*mtime);
+        let sz = if *is_dir {
+            "        -".to_string()
+        } else {
+            fmt_human_size(*size)
+        };
+        println!("{} {}  {}  {}", kind, dt, sz, name);
+    }
+    if items.len() > MAX_SHOW {
+        println!("... ve {} öğe daha", items.len() - MAX_SHOW);
+    }
+    0
+}
+
+fn request_ui_approval(
+    session: &str,
+    tool: &str,
+    action: &str,
+    root_key: &str,
+    root_label: &str,
+    path: &str,
+    dst_path: Option<&str>,
+) -> Value {
+    let api_url = std::env::var("AGYDESK_API_URL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8780".to_string());
+    let host_port = api_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or("127.0.0.1:8780");
+
+    let body = json!({
+        "session": session,
+        "tool": tool,
+        "action": action,
+        "root_key": root_key,
+        "root_label": root_label,
+        "path": path,
+        "dst_path": dst_path,
+    })
+    .to_string();
+
+    let Ok(mut stream) = TcpStream::connect(host_port) else {
+        return deny("AgyDesk onay servisine bağlanılamadı.");
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(125)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+
+    let req = format!(
+        "POST /api/guard/approve HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        host_port,
+        body.len(),
+        body
+    );
+    if stream.write_all(req.as_bytes()).is_err() {
+        return deny("AgyDesk onay isteği gönderilemedi.");
+    }
+
+    let mut resp = String::new();
+    if stream.read_to_string(&mut resp).is_err() {
+        return deny("AgyDesk onay yanıtı alınamadı (zaman aşımı).");
+    }
+    let Some((_, body_str)) = resp.split_once("\r\n\r\n") else {
+        return deny("AgyDesk onay yanıtı geçersiz.");
+    };
+    let trimmed = body_str.trim();
+    // Handle possible HTTP chunked framing or direct JSON body
+    let json_slice = if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        &trimmed[start..=end]
+    } else {
+        trimmed
+    };
+    serde_json::from_str::<Value>(json_slice)
+        .unwrap_or_else(|_| deny("AgyDesk onay yanıtı ayrıştırılamadı."))
+}
+
+/// Entrypoint for `agydesk-guard.exe` invoked by `PreToolUse` hook.
 pub fn run_cli_guard() -> i32 {
     let mut input = String::new();
     let _ = io::stdin().read_to_string(&mut input);
     let payload: Value = serde_json::from_str(&input).unwrap_or_else(|_| json!({}));
     let scope = std::env::var("AGYDESK_SCOPE").unwrap_or_default();
+    let session = std::env::var("AGYDESK_SESSION").unwrap_or_default();
     let policy = GuardPolicy::from_config();
-    let decision = evaluate_hook(&payload, &scope, &policy);
+    let decision = match evaluate_hook_decision(&payload, &scope, &policy) {
+        GuardDecision::Allow => allow(),
+        GuardDecision::Deny(r) => deny(&r),
+        GuardDecision::AskApproval {
+            tool,
+            action,
+            root_key,
+            root_label,
+            path,
+            dst_path,
+        } => request_ui_approval(
+            &session,
+            &tool,
+            &action,
+            &root_key,
+            &root_label,
+            &path,
+            dst_path.as_deref(),
+        ),
+    };
     println!("{}", decision);
     0
 }
@@ -722,6 +1494,13 @@ mod tests {
             vault_dir: PathBuf::from(r"C:\Users\cavit\Desktop\AgyDesk_Belgeler"),
             drive_dir: Some(PathBuf::from(r"G:\Drive'ım")),
             drive_vault_dir: Some(PathBuf::from(r"G:\Drive'ım\AgyDesk_Belgeler")),
+            personal_dirs: vec![
+                ("downloads".to_string(), "İndirilenler".to_string(), PathBuf::from(r"C:\Users\cavit\Downloads")),
+                ("desktop".to_string(), "Masaüstü".to_string(), PathBuf::from(r"C:\Users\cavit\Desktop")),
+                ("documents".to_string(), "Belgeler".to_string(), PathBuf::from(r"C:\Users\cavit\Documents")),
+                ("pictures".to_string(), "Resimler".to_string(), PathBuf::from(r"C:\Users\cavit\Pictures")),
+            ],
+            project_dir: PathBuf::from(r"C:\Users\cavit\ai-workstation"),
         }
     }
 
@@ -846,5 +1625,197 @@ mod tests {
             evaluate_hook(&hook_call("run_command", json!({ "CommandLine": escape })), "restricted", &p)["decision"],
             "deny"
         );
+    }
+
+    #[test]
+    fn restricted_allows_safe_file_ops_and_blocks_escapes() {
+        let p = test_policy();
+        // Vault PDF -> Drive Vault (allowed)
+        let ok_copy_pdf = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "C:\Users\cavit\Desktop\AgyDesk_Belgeler\AgyDesk_Dokuman\Is_Sagligi_ve_Guvenligi\cikmis.pdf" "G:\Drive'ım\AgyDesk_Belgeler\AgyDesk_Dokuman\Is_Sagligi_ve_Guvenligi\cikmis.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": ok_copy_pdf })), "restricted", &p)["decision"],
+            "allow"
+        );
+        // Personal Drive -> Vault (read-only Drive to Vault copy allowed)
+        let ok_drive_to_vault = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "G:\Drive'ım\Dönem 7\ders.pdf" "AgyDesk_Dokuman\ders.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": ok_drive_to_vault })), "restricted", &p)["decision"],
+            "allow"
+        );
+        // Sync folder Vault -> Drive Vault (allowed)
+        let ok_sync = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --sync "AgyDesk_Dokuman\Is_Sagligi_ve_Guvenligi" "G:\Drive'ım\AgyDesk_Belgeler\AgyDesk_Dokuman\Is_Sagligi_ve_Guvenligi""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": ok_sync })), "restricted", &p)["decision"],
+            "allow"
+        );
+        // Move inside Vault (allowed)
+        let ok_move = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --move "AgyDesk_Dokuman\eski.pdf" "AgyDesk_Dokuman\yeni.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": ok_move })), "restricted", &p)["decision"],
+            "allow"
+        );
+        // Move OUT of personal Drive blocked (personal Drive is read-only)
+        let bad_move_drive = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --move "G:\Drive'ım\Dönem 7\ders.pdf" "AgyDesk_Dokuman\ders.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": bad_move_drive })), "restricted", &p)["decision"],
+            "deny"
+        );
+        // Copy into personal Drive outside AgyDesk_Belgeler blocked
+        let bad_copy_drive = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "AgyDesk_Dokuman\ders.pdf" "G:\Drive'ım\İKA\ders.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": bad_copy_drive })), "restricted", &p)["decision"],
+            "deny"
+        );
+        // Copy from project repo blocked
+        let bad_copy_proj = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "C:\Users\cavit\ai-workstation\atolye.db" "AgyDesk_Dokuman\atolye.db""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": bad_copy_proj })), "restricted", &p)["decision"],
+            "deny"
+        );
+        // Touching .agents blocked
+        let bad_agents = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "AgyDesk_Notlar\test.md" ".agents\hooks.json""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": bad_agents })), "restricted", &p)["decision"],
+            "deny"
+        );
+        // Shell injection blocked
+        let bad_inj = format!("{} && calc.exe", ok_copy_pdf);
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": bad_inj })), "restricted", &p)["decision"],
+            "deny"
+        );
+    }
+
+    #[test]
+    fn copy_dir_recursive_preserves_binary_and_skips_agents() {
+        let base = std::env::temp_dir().join(format!("agydesk_guard_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let src = base.join("src");
+        let dst = base.join("dst");
+        std::fs::create_dir_all(src.join(".agents")).unwrap();
+        let pdf_bytes: Vec<u8> = vec![0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x37, 0x00, 0xFF];
+        std::fs::write(src.join("Sinav_2025.pdf"), &pdf_bytes).unwrap();
+        std::fs::write(src.join(".agents").join("hooks.json"), b"{}").unwrap();
+
+        let (c1, s1) = copy_dir_recursive(&src, &dst, true).unwrap();
+        assert_eq!((c1, s1), (1, 0));
+        assert_eq!(std::fs::read(dst.join("Sinav_2025.pdf")).unwrap(), pdf_bytes);
+        assert!(!dst.join(".agents").exists());
+
+        // Second sync skips identical up-to-date file
+        let (c2, s2) = copy_dir_recursive(&src, &dst, true).unwrap();
+        assert_eq!((c2, s2), (0, 1));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn study_scope_asks_approval_for_personal_dirs_but_hard_denies_projects() {
+        let p = test_policy();
+        // Downloads read -> ask in study, deny in restricted (AgyNote)
+        let dl_read = hook_call("read_file", json!({ "Path": r"C:\Users\cavit\Downloads\odev.pdf" }));
+        let res_study = evaluate_hook(&dl_read, "study", &p);
+        assert_eq!(res_study["decision"], "ask");
+        assert_eq!(res_study["root_key"], "downloads");
+        assert_eq!(evaluate_hook(&dl_read, "restricted", &p)["decision"], "deny");
+
+        // Downloads write -> ask in study
+        let dl_write = hook_call("write_file", json!({ "Path": r"C:\Users\cavit\Downloads\ozet.md" }));
+        assert_eq!(evaluate_hook(&dl_write, "study", &p)["decision"], "ask");
+
+        // Desktop outside vault -> ask; inside vault -> auto allow
+        let desk_out = hook_call("read_file", json!({ "Path": r"C:\Users\cavit\Desktop\rapor.pdf" }));
+        assert_eq!(evaluate_hook(&desk_out, "study", &p)["decision"], "ask");
+        let desk_in = hook_call("read_file", json!({ "Path": r"C:\Users\cavit\Desktop\AgyDesk_Belgeler\not.md" }));
+        assert_eq!(evaluate_hook(&desk_in, "study", &p)["decision"], "allow");
+
+        // Personal Drive write -> ask in study, deny in restricted
+        let drv_write = hook_call("write_file", json!({ "Path": r"G:\Drive'ım\İKA\rapor.md" }));
+        let res_drv = evaluate_hook(&drv_write, "study", &p);
+        assert_eq!(res_drv["decision"], "ask");
+        assert_eq!(res_drv["root_key"], "drive");
+        assert_eq!(evaluate_hook(&drv_write, "restricted", &p)["decision"], "deny");
+
+        // Copy from Downloads -> Vault -> ask in study, deny in restricted
+        let dl_copy = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --copy "C:\Users\cavit\Downloads\slayt.pdf" "AgyDesk_Dokuman\slayt.pdf""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": dl_copy })), "study", &p)["decision"],
+            "ask"
+        );
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": dl_copy })), "restricted", &p)["decision"],
+            "deny"
+        );
+
+        // Project repo, .git, .gemini, .agents, general shell -> HARD DENY even in study
+        assert_eq!(
+            evaluate_hook(&hook_call("read_file", json!({ "Path": r"C:\Users\cavit\ai-workstation\src-rust\src\main.rs" })), "study", &p)["decision"],
+            "deny"
+        );
+        assert_eq!(
+            evaluate_hook(&hook_call("read_file", json!({ "Path": r"C:\Users\cavit\Documents\myrepo\.git\config" })), "study", &p)["decision"],
+            "deny"
+        );
+        assert_eq!(
+            evaluate_hook(&hook_call("read_file", json!({ "Path": r"C:\Users\cavit\.gemini\settings.json" })), "study", &p)["decision"],
+            "deny"
+        );
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": "dir C:\\Users\\cavit\\Downloads" })), "study", &p)["decision"],
+            "deny"
+        );
+    }
+
+    #[test]
+    fn guard_list_dir_policy_and_ordering() {
+        let p = test_policy();
+        // Downloads --list -> ask in study, deny in restricted
+        let dl_list = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --list "C:\Users\cavit\Downloads""#;
+        let res_study = evaluate_hook(&hook_call("run_command", json!({ "CommandLine": dl_list })), "study", &p);
+        assert_eq!(res_study["decision"], "ask");
+        assert_eq!(res_study["root_key"], "downloads");
+        assert_eq!(res_study["action"], "Klasör Listeleme");
+        assert!(res_study["dst_path"].is_null());
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": dl_list })), "restricted", &p)["decision"],
+            "deny"
+        );
+
+        // Vault and Drive --list -> auto allow in both restricted and study
+        let vault_list = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --list "C:\Users\cavit\Desktop\AgyDesk_Belgeler""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": vault_list })), "restricted", &p)["decision"],
+            "allow"
+        );
+        let drive_list = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --list "G:\Drive'ım""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": drive_list })), "study", &p)["decision"],
+            "allow"
+        );
+
+        // Project dir, .git, shell injection -> HARD DENY even in study
+        let proj_list = r#"C:\Users\cavit\ai-workstation\agydesk-guard.exe --list "C:\Users\cavit\ai-workstation""#;
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": proj_list })), "study", &p)["decision"],
+            "deny"
+        );
+        let inj_list = format!("{}; whoami", dl_list);
+        assert_eq!(
+            evaluate_hook(&hook_call("run_command", json!({ "CommandLine": inj_list })), "study", &p)["decision"],
+            "deny"
+        );
+
+        // list_dir_entries skips sensitive dirs and returns entries
+        let base = std::env::temp_dir().join(format!("agydesk_list_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        std::fs::create_dir_all(base.join("AltKlasor")).unwrap();
+        std::fs::write(base.join("not.pdf"), b"abc").unwrap();
+        let items = list_dir_entries(&base, &p).unwrap();
+        let names: Vec<&str> = items.iter().map(|i| i.3.as_str()).collect();
+        assert!(names.contains(&"not.pdf"));
+        assert!(names.contains(&"AltKlasor"));
+        assert!(!names.contains(&".git"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -15,12 +15,13 @@ pub const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec { id: "claude-opus",     label: "Claude Opus 5.5",   limit: Some(40),  window_h: 5,  cloud: true },
     ProviderSpec { id: "claude-sonnet",   label: "Claude Sonnet 5.5", limit: Some(150), window_h: 5,  cloud: true },
     ProviderSpec { id: "gemini-argon",    label: "Gemini 4 Argon",    limit: Some(100), window_h: 5,  cloud: true },
+    ProviderSpec { id: "gemini-neon",     label: "Gemini 4 Neon",     limit: Some(300), window_h: 24, cloud: true },
     ProviderSpec { id: "gemini-hydrogen", label: "Gemini 4 Hydrogen", limit: Some(500), window_h: 24, cloud: true },
     ProviderSpec { id: "local",           label: "Yerel (Ollama)",    limit: None,      window_h: 0,  cloud: false },
 ];
 
 pub fn provider_spec(id: &str) -> &'static ProviderSpec {
-    PROVIDERS.iter().find(|p| p.id == id).unwrap_or(&PROVIDERS[3])
+    PROVIDERS.iter().find(|p| p.id == id).unwrap_or(&PROVIDERS[4])
 }
 
 pub static ROOT: Lazy<PathBuf> = Lazy::new(|| {
@@ -117,10 +118,35 @@ pub static DRIVE_VAULT_DIR: Lazy<Option<PathBuf>> = Lazy::new(|| {
     DRIVE_DIR.as_ref().map(|d| d.join("AgyDesk_Belgeler"))
 });
 
+/// Personal user folders eligible for approval-gated read/write in AgyStudy sessions.
+pub static PERSONAL_DIRS: Lazy<Vec<(&'static str, &'static str, PathBuf)>> = Lazy::new(|| {
+    let mut out = Vec::new();
+    if let Ok(up) = env::var("USERPROFILE") {
+        let home = Path::new(&up);
+        for (key, label, sub) in [
+            ("downloads", "İndirilenler", "Downloads"),
+            ("desktop", "Masaüstü", "Desktop"),
+            ("documents", "Belgeler", "Documents"),
+            ("pictures", "Resimler", "Pictures"),
+        ] {
+            let p = home.join(sub);
+            if p.exists() {
+                out.push((key, label, p));
+            }
+        }
+    }
+    out
+});
+
+/// AgyStudy (`src_ai`, `src_ai__*`) runs in study scope (Vault/Drive auto + approval-gated personal folders).
+pub fn is_study_session(session: &str) -> bool {
+    session == "src_ai" || session.starts_with("src_ai__")
+}
+
 /// AgyNote (`side_ai`) and AgyStudy (`src_ai`, `src_ai__*`) run in restricted vault/Drive scope.
 /// AgyAI (`ai1`, `ai2`, ...) runs in full CLI scope.
 pub fn is_restricted_session(session: &str) -> bool {
-    session == "side_ai" || session == "src_ai" || session.starts_with("src_ai__")
+    session == "side_ai" || is_study_session(session)
 }
 
 pub static AGY_BIN: Lazy<String> = Lazy::new(|| {
@@ -177,10 +203,10 @@ pub fn normalize_effort(effort: &str) -> &'static str {
     }
 }
 
-/// Only Gemini 4 Hydrogen exposes an xhigh variant in `agy models`; other cloud models cap at high.
+/// Gemini 4 Hydrogen and Gemini 4 Neon expose an xhigh variant in `agy models`; other cloud models cap at high.
 pub fn effective_effort(provider: &str, effort: &str) -> &'static str {
     let norm = normalize_effort(effort);
-    if provider != "gemini-hydrogen" && norm == "xhigh" {
+    if !matches!(provider, "gemini-hydrogen" | "gemini-neon") && norm == "xhigh" {
         "high"
     } else {
         norm
@@ -194,6 +220,7 @@ pub fn model_for(provider: &str, effort: &str) -> String {
     let eff = effective_effort(provider, effort);
     let (env_key, base) = match provider {
         "gemini-hydrogen" => ("AGY_HYDROGEN_MODEL", "gemini-4-hydrogen"),
+        "gemini-neon" => ("AGY_NEON_MODEL", "gemini-4-neon"),
         "gemini-argon" => ("AGY_ARGON_MODEL", "gemini-4-argon"),
         "claude-sonnet" => ("AGY_SONNET_MODEL", "claude-sonnet-5-5"),
         "claude-opus" => ("AGY_OPUS_MODEL", "claude-opus-5-5"),
@@ -218,6 +245,8 @@ mod tests {
         assert_eq!(model_for("gemini-hydrogen", "high"), "gemini-4-hydrogen-high");
         assert_eq!(model_for("gemini-hydrogen", "xhigh"), "gemini-4-hydrogen-xhigh");
         assert_eq!(model_for("gemini-hydrogen", "unknown"), "gemini-4-hydrogen-low");
+        assert_eq!(model_for("gemini-neon", "medium"), "gemini-4-neon-medium");
+        assert_eq!(model_for("gemini-neon", "xhigh"), "gemini-4-neon-xhigh");
         assert_eq!(model_for("gemini-argon", "xhigh"), "gemini-4-argon-high");
         assert_eq!(model_for("claude-sonnet", "xhigh"), "claude-sonnet-5-5-high");
         assert_eq!(model_for("claude-opus", "medium"), "claude-opus-5-5-medium");
