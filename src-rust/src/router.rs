@@ -53,6 +53,14 @@ pub struct Decision {
 }
 
 fn pick(text: &str, skill: Option<&str>, restricted: bool) -> (&'static str, String) {
+    let is_browser = skill == Some("browser")
+        || text.trim_start().to_ascii_lowercase().starts_with("/browser");
+    if is_browser {
+        if MATH_RE.is_match(text) || HARD_RE.is_match(text) || ARGON_RE.is_match(text) {
+            return ("gemini-neon", "/browser + analiz → Gemini 4 Neon".to_string());
+        }
+        return ("gemini-hydrogen", "/browser (Chrome MCP) → Gemini 4 Hydrogen".to_string());
+    }
     if let Some(s) = skill {
         if LOCAL_SKILLS.contains(&s) {
             return ("local", format!("skill '{}' yerelde çalışır", s));

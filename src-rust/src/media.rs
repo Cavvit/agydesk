@@ -108,6 +108,26 @@ pub fn send_cmd(action: &str, app: &str, position_ms: Option<i64>) -> Value {
     rpc(&json!({"op": "cmd", "action": action, "app": app}))
 }
 
+pub fn open_app(app: &str, title: &str, platform: &str) -> Value {
+    rpc(&json!({"op": "open", "app": app, "title": title, "platform": platform}))
+}
+
+pub fn set_volume(volume: Option<i64>, muted: Option<bool>, toggle_mute: bool) -> Value {
+    let mut payload = json!({"op": "volume"});
+    if let Some(obj) = payload.as_object_mut() {
+        if let Some(v) = volume {
+            obj.insert("volume".to_string(), json!(v.clamp(0, 100)));
+        }
+        if let Some(m) = muted {
+            obj.insert("muted".to_string(), json!(m));
+        }
+        if toggle_mute {
+            obj.insert("toggle_mute".to_string(), json!(true));
+        }
+    }
+    rpc(&payload)
+}
+
 pub fn shutdown() {
     if let Ok(mut guard) = WORKER.try_lock() {
         *guard = None;

@@ -13,7 +13,7 @@ mod vault_guard;
 
 use axum::{
     body::Bytes,
-    extract::{Path as AxumPath, Query, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{
@@ -155,7 +155,7 @@ fn ws_hint_for(session: &str) -> String {
             String::new()
         } else {
             format!(
-                " Kişisel klasörler [{}] ve Drive geneline yazma işlemleri KULLANICI ONAYI ile açıktır: kullanıcı istediğinde `agydesk-guard.exe --list \"<klasor>\"` (en yeniden eskiye listeler), read_file/write_file/edit_file veya `agydesk-guard.exe --copy/--move/--sync` aracını doğrudan çağır, AgyDesk kullanıcıya otomatik onay kartı gösterir (reddedilirse bildiriş yap). Proje klasörleri (ai-workstation, .git, .agents, .gemini), sistem klasörleri ve genel shell kesinlikle kapalıdır.",
+                " Kişisel klasörler [{}], Drive geneline yazma, genel terminal komutları (Python/PowerShell/MATLAB vb. — `.pptx`/`.ppt`/`.docx`/`.xlsx`/grafik/simülasyon üretimi dahil) ve açık Chrome tarayıcı penceresi (`chrome-devtools` MCP: list_pages, select_page, take_snapshot, take_screenshot, click, fill, navigate_page, evaluate_script) KULLANICI ONAYI (veya `/browser` komutu) ile açıktır: kullanıcı istediğinde `agydesk-guard.exe --read-doc \"<dosya>\"` (DOCX/DOC/PPTX/XLSX/ODT/SLX okur), `agydesk-guard.exe --list \"<klasor>\"` (en yeniden eskiye listeler), read_file/write_file/edit_file, `agydesk-guard.exe --copy/--move/--sync`, `run_command` veya açık Chrome penceresi için `chrome-devtools` MCP aracını doğrudan çağır; AgyDesk kullanıcıya otomatik onay kartı gösterir (reddedilirse bildiriş yap). Sunum (.pptx/.ppt), Word (.docx), Excel (.xlsx), grafik veya simülasyon istendiğinde kasaya `.py` (veya `.ps1`) betiği yazıp `run_command` ile doğrudan `python` (`python-pptx`, `python-docx`, `openpyxl`, `matplotlib`, `PIL` kurulu; `.ppt` için PowerPoint COM) çalıştır — asla 'AgyStudy'de terminal/Python kapalı' veya 'yalnızca PDF üretebilirim' deme. Proje klasörleri (ai-workstation, atolye.db, .git, .agents, .gemini, .ssh) ve sistem yapılandırmaları kesinlikle kapalıdır.",
                 pdirs.join(", ")
             )
         }
@@ -163,12 +163,13 @@ fn ws_hint_for(session: &str) -> String {
         String::new()
     };
     let mode_label = if config::is_study_session(session) {
-        "AgyStudy Çalışma Modu (Kasa/Drive otomatik; İndirilenler/Masaüstü/Belgeler/Resimler/Drive-yazma kullanıcı onaylı; proje/genel shell kapalı)"
+        "AgyStudy Çalışma Modu (Kasa/Drive otomatik; İndirilenler/Masaüstü/Belgeler/Resimler/Drive-yazma/terminal/Chrome tarayıcı kullanıcı onaylı; proje/yapılandırma kapalı)"
     } else {
-        "AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/PDF üretimi/Dosya listeleme-kopyalama-taşıma-senkron; proje/genel shell kapalı)"
+        "AgyDesk Kısıtlı Çalışma Modu (yalnızca Kasa/Drive/Görsel/Web arama/Belge okuma/PDF üretimi/Dosya listeleme-kopyalama-taşıma-senkron; proje/genel shell kapalı)"
     };
     format!(
         "[{mode_label}. Kasa: {vd}. {write_rule}{drive_rule}{study_rule} \
+İkili Office/Simulink belgelerini (.docx, .doc, .pptx, .xlsx, .odt, .ods, .odp, .slx) okumak için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --read-doc \"<dosya>\" çalıştır. \
 Klasör içeriğini en yeniden eskiye listelemek için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --list \"<klasor>\" çalıştır. \
 PDF oluşturmak için önce kasaya .md veya .html yaz, sonra run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --md-to-pdf \"<girdi.md>\" \"<cikti.pdf>\" (veya --html-to-pdf) çalıştır. \
 İkili dosya (PDF, görsel, PPTX, DOCX vb.) veya klasör kopyalamak/taşımak/Drive'a yedeklemek için run_command ile: C:\\Users\\cavit\\ai-workstation\\agydesk-guard.exe --copy \"<kaynak>\" \"<hedef>\" (veya --move, --sync) çalıştır. \
@@ -220,6 +221,13 @@ struct LogReq {
 #[derive(Deserialize)]
 struct SessionReq {
     session: String,
+}
+
+#[derive(Deserialize)]
+struct CompactReq {
+    session: String,
+    #[serde(default)]
+    recent_msgs: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -707,15 +715,81 @@ async fn upload_asset_ep(
     Query(q): Query<UploadQuery>,
     body: Bytes,
 ) -> Response {
-    match vault::save_asset(&q.note, &q.name, &body) {
+    let note = q.note;
+    let name = q.name;
+    let res = tokio::task::spawn_blocking(move || vault::save_asset(&note, &name, &body))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
         Ok(res) => Json(res).into_response(),
         Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
     }
 }
 
 async fn get_docx_ep(Query(q): Query<RelQuery>) -> Response {
-    match vault::docx_to_html(&q.rel) {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::docx_to_html(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
         Ok(res) => Json(res).into_response(),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn get_docx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::docx_to_pdf_bytes(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/pdf")
+            .header(axum::http::header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(bytes))
+            .unwrap_or_else(|e| err_resp(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn delete_docx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    vault::evict_docx_pdf(&q.rel);
+    Json(json!({"ok": true})).into_response()
+}
+
+#[derive(Deserialize)]
+struct LocalPathQuery {
+    path: String,
+}
+
+async fn local_raw_file_ep(
+    Query(q): Query<LocalPathQuery>,
+    req: axum::extract::Request,
+) -> Response {
+    let Ok(p) = vault::resolve_preview_path(&q.path) else {
+        return err_resp(StatusCode::BAD_REQUEST, "Geçersiz dosya yolu".to_string());
+    };
+    if !p.is_file() {
+        return err_resp(StatusCode::NOT_FOUND, "Dosya bulunamadı".to_string());
+    }
+    match tower::ServiceExt::oneshot(ServeFile::new(p), req).await {
+        Ok(r) => r.into_response(),
+        Err(e) => err_resp(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn local_text_ep(Query(q): Query<LocalPathQuery>) -> Response {
+    let path = q.path.clone();
+    let res = tokio::task::spawn_blocking(move || vault::read_preview_text(&path))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(v) => Json(v).into_response(),
         Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
     }
 }
@@ -750,6 +824,40 @@ async fn get_pptx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
 }
 
 async fn delete_pptx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    vault::evict_pptx_pdf(&q.rel);
+    Json(json!({"ok": true})).into_response()
+}
+
+async fn get_xlsx_ep(Query(q): Query<RelQuery>) -> Response {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::xlsx_to_sheets(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(val) => Json(val).into_response(),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn get_xlsx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
+    let rel = q.rel.clone();
+    let res = tokio::task::spawn_blocking(move || vault::xlsx_to_pdf_bytes(&rel))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    match res {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CONTENT_TYPE, "application/pdf")
+            .header(axum::http::header::CACHE_CONTROL, "no-store")
+            .body(axum::body::Body::from(bytes))
+            .unwrap_or_else(|e| err_resp(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+        Err(e) => err_resp(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+async fn delete_xlsx_pdf_ep(Query(q): Query<RelQuery>) -> Response {
     vault::evict_pptx_pdf(&q.rel);
     Json(json!({"ok": true})).into_response()
 }
@@ -913,12 +1021,52 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
     };
 
     let img_ctx = vault::build_image_prompt_block(&img_paths);
-    let user_text = if r.text.trim().is_empty() && !img_paths.is_empty() {
+    let trimmed_req = r.text.trim();
+    let is_browser_cmd = r.skill.as_deref() == Some("browser")
+        || trimmed_req
+            .to_ascii_lowercase()
+            .starts_with("/browser");
+    let browser_ctx = if is_browser_cmd && config::is_study_session(&sess) {
+        if let Ok(mut grants) = st.guard_grants.lock() {
+            grants
+                .entry(sess.clone())
+                .or_default()
+                .insert("browser".to_string());
+        }
+        "[AÇIK CHROME TARAYICI MODU (/browser aktif — oturum izni verildi): Kullanıcının şu an açık olan Chrome penceresine `chrome-devtools` MCP araçlarıyla bağlan (`list_pages` ile açık sekmeleri gör, ilgili sekmeyi `select_page` ile seç, `take_snapshot` / `take_screenshot` / `evaluate_script` / `click` / `fill` / `navigate_page` kullan). Yeni izole tarayıcı açma, kullanıcının açık Chrome penceresini kullan.]\n\n"
+    } else {
+        ""
+    };
+    let user_text = if trimmed_req.is_empty() && !img_paths.is_empty() {
         "Eklenen görseli incele ve içeriğini açıkla.".to_string()
+    } else if is_browser_cmd {
+        let rest = trimmed_req
+            .strip_prefix("/browser")
+            .or_else(|| trimmed_req.strip_prefix("/Browser"))
+            .or_else(|| trimmed_req.strip_prefix("/BROWSER"))
+            .unwrap_or(trimmed_req)
+            .trim();
+        if rest.is_empty() {
+            "Şu an açık olan Chrome penceremdeki aktif sekmeyi listele ve içeriğini kısaca özetle.".to_string()
+        } else {
+            rest.to_string()
+        }
     } else {
         r.text.clone()
     };
-    let base_prompt = format!("{}{}{}{}", mem_ctx, src_ctx, img_ctx, user_text);
+    let base_prompt = format!("{}{}{}{}{}", browser_ctx, mem_ctx, src_ctx, img_ctx, user_text);
+    let base_prompt = if conv_id.is_none() {
+        if let Some(compact_ctx) = store::pop_compact_ctx(&sess) {
+            format!(
+                "[Önceki Sohbetin Sıkıştırılmış Özeti]\n{}\n\n[Yeni Kullanıcı İsteği]\n{}",
+                compact_ctx, base_prompt
+            )
+        } else {
+            base_prompt
+        }
+    } else {
+        base_prompt
+    };
     let prompt = if conv_id.is_none() {
         format!("{}{}", ws_hint_for(&sess), base_prompt)
     } else {
@@ -954,6 +1102,7 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
         );
     };
 
+    let turn_started = std::time::SystemTime::now();
     let mut failover_prov: Option<(String, String)> = None;
     let res = providers::complete(
         dec.provider.clone(),
@@ -1014,6 +1163,12 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                 store::add_chat_msg(&sess, "a", &text);
             }
             let cached_quota = store::quota_status();
+            let reply_for_scan = text.clone();
+            let touched_files = tokio::task::spawn_blocking(move || {
+                detect_touched_files(&reply_for_scan, turn_started)
+            })
+            .await
+            .unwrap_or_default();
             st.emit(
                 "done",
                 json!({
@@ -1024,7 +1179,8 @@ async fn run_job(st: AppState, r: RunReq, mut dec: router::Decision) {
                     "conv_id": new_conv,
                     "route": dec,
                     "effort": used_effort,
-                    "quota": cached_quota
+                    "quota": cached_quota,
+                    "touched_files": touched_files
                 }),
             );
             st.emit("log", json!({}));
@@ -1220,6 +1376,7 @@ async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json
         g.remove(&r.session);
     }
     store::set_conv_id(&r.session, None);
+    store::set_compact_ctx(&r.session, None);
     store::clear_chat_msgs(&r.session);
     if let Ok(mut m) = st.src_hashes.lock() {
         m.remove(&r.session);
@@ -1230,6 +1387,111 @@ async fn clear_ep(State(st): State<AppState>, Json(r): Json<SessionReq>) -> Json
     store::add_log(&r.session, "🧹 Oturum bağlamı sıfırlandı", "m");
     st.emit("log", json!({}));
     Json(json!({ "cleared": true }))
+}
+
+const COMPACT_PROMPT: &str = "Bu sohbeti yeni ve temiz bir oturuma aktarmak için sıkıştırılmış teknik özet çıkar. Sadece şunları kısa maddeler halinde yaz: (1) Ana amaç ve çözülen konular, (2) Alınan kararlar ve değiştirilen dosya/sembol adları, (3) Açık kalan işler veya önemli kısıtlar. Gereksiz sohbet cümlelerini atla.";
+
+async fn compact_ep(State(st): State<AppState>, Json(r): Json<CompactReq>) -> Response {
+    let conv_id = store::get_conv_id(&r.session);
+    if conv_id.is_none() {
+        let recent: Vec<String> = r
+            .recent_msgs
+            .iter()
+            .map(|m| m.trim().to_string())
+            .filter(|m| !m.is_empty())
+            .collect();
+        let tail: Vec<&str> = recent
+            .iter()
+            .rev()
+            .take(5)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|s| s.as_str())
+            .collect();
+        let summary = if tail.is_empty() {
+            "(henüz içerik yok)".to_string()
+        } else {
+            tail.join(" · ")
+        };
+        store::clear_chat_msgs(&r.session);
+        return Json(json!({
+            "compacted": true,
+            "real": false,
+            "summary": summary,
+            "label": "yerel özetleyici",
+            "tokens": 0
+        }))
+        .into_response();
+    }
+
+    let mut dec = router::route_for_session(
+        &r.session,
+        "Bu konuşmayı özetle",
+        Some("compact"),
+        false,
+        store::used_pct,
+    );
+    let mut failover_prov: Option<(String, String)> = None;
+    let res = providers::complete(
+        dec.provider.clone(),
+        COMPACT_PROMPT.to_string(),
+        Vec::new(),
+        r.session.clone(),
+        "y".to_string(),
+        "low".to_string(),
+        conv_id,
+        |_| {},
+        |_| {},
+        |new_p, why| {
+            failover_prov = Some((new_p, why));
+        },
+    )
+    .await;
+
+    if let Some((np, why)) = failover_prov {
+        dec.label = provider_spec(&np).label.to_string();
+        dec.provider = np;
+        dec.reason = why;
+        dec.fallback = true;
+    }
+
+    let (text, tokens, real, _) = match res {
+        Ok(v) => v,
+        Err(e) => {
+            return err_resp(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Bağlam sıkıştırma başarısız: {}", e),
+            );
+        }
+    };
+
+    let summary = text.trim().to_string();
+    if !real || summary.is_empty() {
+        return err_resp(
+            StatusCode::BAD_GATEWAY,
+            "Modelden gerçek özet alınamadı; mevcut oturum korundu.".to_string(),
+        );
+    }
+
+    store::record_usage(&dec.provider, tokens, true);
+    store::set_conv_id(&r.session, None);
+    store::set_compact_ctx(&r.session, Some(&summary));
+    store::clear_chat_msgs(&r.session);
+    store::add_log(
+        &r.session,
+        &format!("🗜 Bağlam sıkıştırıldı ({})", dec.label),
+        "m",
+    );
+    st.emit("log", json!({}));
+    Json(json!({
+        "compacted": true,
+        "real": true,
+        "summary": summary,
+        "label": dec.label,
+        "tokens": tokens
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -1322,7 +1584,7 @@ async fn guard_approve_ep(State(st): State<AppState>, Json(r): Json<GuardApprove
         Ok(Ok(true)) => Json(json!({ "decision": "allow" })),
         Ok(Ok(false)) => Json(json!({
             "decision": "deny",
-            "reason": "Kullanıcı bu klasör/dosya erişimini reddetti."
+            "reason": "Kullanıcı bu erişimi/işlemi reddetti."
         })),
         _ => {
             if let Ok(mut pending) = st.guard_pending.lock() {
@@ -1334,7 +1596,7 @@ async fn guard_approve_ep(State(st): State<AppState>, Json(r): Json<GuardApprove
             );
             Json(json!({
                 "decision": "deny",
-                "reason": "Klasör erişim onayı zaman aşımına uğradı veya iptal edildi."
+                "reason": "Erişim/işlem onayı zaman aşımına uğradı veya iptal edildi."
             }))
         }
     }
@@ -1411,6 +1673,26 @@ struct MediaCmdReq {
     position_ms: Option<i64>,
 }
 
+#[derive(Deserialize)]
+struct MediaOpenReq {
+    #[serde(default)]
+    app: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    platform: String,
+}
+
+#[derive(Deserialize)]
+struct MediaVolumeReq {
+    #[serde(default)]
+    volume: Option<i64>,
+    #[serde(default)]
+    muted: Option<bool>,
+    #[serde(default)]
+    toggle_mute: bool,
+}
+
 async fn media_status_ep(Query(q): Query<MediaStatusQuery>) -> Json<Value> {
     let res = tokio::task::spawn_blocking(move || media::get_status(&q.app))
         .await
@@ -1429,6 +1711,38 @@ async fn media_cmd_ep(Json(r): Json<MediaCmdReq>) -> Response {
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("Medya komutu başarısız")
+            .to_string();
+        err_resp(StatusCode::BAD_REQUEST, msg)
+    }
+}
+
+async fn media_open_ep(Json(r): Json<MediaOpenReq>) -> Response {
+    let res = tokio::task::spawn_blocking(move || media::open_app(&r.app, &r.title, &r.platform))
+        .await
+        .unwrap_or_else(|_| json!({"ok": false, "error": "Medya uygulaması açılamadı"}));
+    if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Json(res).into_response()
+    } else {
+        let msg = res
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Medya uygulaması açılamadı")
+            .to_string();
+        err_resp(StatusCode::BAD_REQUEST, msg)
+    }
+}
+
+async fn media_volume_ep(Json(r): Json<MediaVolumeReq>) -> Response {
+    let res = tokio::task::spawn_blocking(move || media::set_volume(r.volume, r.muted, r.toggle_mute))
+        .await
+        .unwrap_or_else(|_| json!({"ok": false, "error": "Ses ayarı başarısız"}));
+    if res.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+        Json(res).into_response()
+    } else {
+        let msg = res
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Ses ayarı başarısız")
             .to_string();
         err_resp(StatusCode::BAD_REQUEST, msg)
     }
@@ -1459,6 +1773,241 @@ fn percent_decode_path(input: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn preview_ext_priority(ext: &str) -> Option<u8> {
+    match ext {
+        ".docx" | ".doc" => Some(0),
+        ".pdf" => Some(1),
+        ".pptx" | ".ppsx" | ".ppt" => Some(2),
+        ".xlsx" | ".xlsm" | ".xls" | ".csv" => Some(3),
+        ".html" | ".htm" => Some(4),
+        ".md" => Some(5),
+        ".png" | ".jpg" | ".jpeg" | ".webp" | ".svg" | ".gif" | ".bmp" => Some(6),
+        ".txt" => Some(7),
+        _ => None,
+    }
+}
+
+fn extract_reply_candidate_paths(reply: &str) -> Vec<String> {
+    use once_cell::sync::Lazy;
+    use regex::Regex;
+    static RE_MD_LINK: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"\]\(((?:file:///|file://|[A-Za-z]:[\\/])[^)\r\n]+)\)").unwrap());
+    static RE_BACKTICK: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"`((?:file:///|file://|[A-Za-z]:[\\/]|~[\\/])[^`\r\n]+)`").unwrap());
+    static RE_WIKI: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[\[([^\]|\r\n]+)").unwrap());
+    static RE_BARE_FILE: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?i)(file:///?[^\s<>"'`)\]]+)"#).unwrap());
+    static RE_BARE_WIN: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r#"(?:^|[\s(>\[])([A-Za-z]:[\\/][^\s<>"'`|?*)\]]+)"#).unwrap());
+
+    let mut out: Vec<String> = Vec::new();
+    for cap in RE_MD_LINK.captures_iter(reply) {
+        if let Some(m) = cap.get(1) {
+            out.push(m.as_str().trim().to_string());
+        }
+    }
+    for cap in RE_BACKTICK.captures_iter(reply) {
+        if let Some(m) = cap.get(1) {
+            out.push(m.as_str().trim().to_string());
+        }
+    }
+    for cap in RE_WIKI.captures_iter(reply) {
+        if let Some(m) = cap.get(1) {
+            out.push(m.as_str().trim().to_string());
+        }
+    }
+    for cap in RE_BARE_FILE.captures_iter(reply) {
+        if let Some(m) = cap.get(1) {
+            out.push(m.as_str().trim_end_matches(&['.', ',', ';', ':', '!', '?'][..]).to_string());
+        }
+    }
+    for cap in RE_BARE_WIN.captures_iter(reply) {
+        if let Some(m) = cap.get(1) {
+            out.push(m.as_str().trim_end_matches(&['.', ',', ';', ':', '!', '?'][..]).to_string());
+        }
+    }
+    out
+}
+
+fn scan_recent_vault_files(
+    dir: &std::path::Path,
+    depth: usize,
+    cutoff: std::time::SystemTime,
+    out: &mut Vec<(std::path::PathBuf, u128)>,
+) {
+    if depth > 6 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for ent in entries.flatten() {
+        let p = ent.path();
+        let name = ent.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name.starts_with("~$") || name == "node_modules" {
+            continue;
+        }
+        if p.is_dir() {
+            scan_recent_vault_files(&p, depth + 1, cutoff, out);
+        } else if p.is_file() {
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!(".{}", e.to_ascii_lowercase()))
+                .unwrap_or_default();
+            if preview_ext_priority(&ext).is_none() {
+                continue;
+            }
+            if let Ok(meta) = ent.metadata() {
+                if let Ok(mt) = meta.modified() {
+                    if mt >= cutoff {
+                        let ts = mt
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis())
+                            .unwrap_or(0);
+                        out.push((p, ts));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn detect_touched_files(reply: &str, turn_started: std::time::SystemTime) -> Vec<Value> {
+    let cutoff = turn_started
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or(turn_started);
+
+    struct Found {
+        path: std::path::PathBuf,
+        rel: Option<String>,
+        ext: String,
+        prio: u8,
+        mentioned: bool,
+        mtime_ms: u128,
+    }
+
+    let mut by_key: std::collections::HashMap<String, Found> = std::collections::HashMap::new();
+    let mut consider = |p: std::path::PathBuf, mentioned: bool| {
+        if !p.is_file() {
+            return;
+        }
+        let fname = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if fname.starts_with("~$") || fname.starts_with('.') {
+            return;
+        }
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{}", e.to_ascii_lowercase()))
+            .unwrap_or_default();
+        let Some(prio) = preview_ext_priority(&ext) else {
+            return;
+        };
+        let Ok(meta) = std::fs::metadata(&p) else {
+            return;
+        };
+        let Ok(mt) = meta.modified() else {
+            return;
+        };
+        if mt < cutoff {
+            return;
+        }
+        let mtime_ms = mt
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        let key = canon.to_string_lossy().to_lowercase();
+        if let Some(ex) = by_key.get_mut(&key) {
+            if mentioned {
+                ex.mentioned = true;
+            }
+            if mtime_ms > ex.mtime_ms {
+                ex.mtime_ms = mtime_ms;
+            }
+            return;
+        }
+        let rel = vault::vault_rel_if_inside(&p);
+        by_key.insert(
+            key,
+            Found {
+                path: p,
+                rel,
+                ext,
+                prio,
+                mentioned,
+                mtime_ms,
+            },
+        );
+    };
+
+    for raw in extract_reply_candidate_paths(reply) {
+        if let Ok(p) = vault::resolve_preview_path(&raw) {
+            consider(p, true);
+        } else if !raw.contains('/') && !raw.contains('\\') && !raw.contains(':') {
+            // Maybe a wiki-style basename inside vault; let vault scan match it below
+            let low = raw.to_ascii_lowercase();
+            let mut recent = Vec::new();
+            scan_recent_vault_files(&VAULT_DIR, 0, cutoff, &mut recent);
+            for (rp, _) in recent {
+                let rn = rp
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let rstem = rp
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if rn == low || rstem == low {
+                    consider(rp, true);
+                }
+            }
+        }
+    }
+
+    let mut recent_vault: Vec<(std::path::PathBuf, u128)> = Vec::new();
+    scan_recent_vault_files(&VAULT_DIR, 0, cutoff, &mut recent_vault);
+    for (rp, _) in recent_vault {
+        consider(rp, false);
+    }
+
+    let mut items: Vec<Found> = by_key.into_values().collect();
+    items.sort_by(|a, b| {
+        b.mentioned
+            .cmp(&a.mentioned)
+            .then_with(|| a.prio.cmp(&b.prio))
+            .then_with(|| b.mtime_ms.cmp(&a.mtime_ms))
+    });
+    items.truncate(5);
+
+    items
+        .into_iter()
+        .map(|f| {
+            let name = f
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            let in_vault = f.rel.is_some();
+            json!({
+                "path": f.path.to_string_lossy(),
+                "rel": f.rel,
+                "in_vault": in_vault,
+                "name": name,
+                "ext": f.ext,
+                "mentioned": f.mentioned
+            })
+        })
+        .collect()
 }
 
 fn open_external_target(raw_target: &str, reveal: bool) -> Result<(String, String), String> {
@@ -1496,12 +2045,25 @@ fn open_external_target(raw_target: &str, reveal: bool) -> Result<(String, Strin
 
     let mut path = std::path::PathBuf::from(&path_str);
     if !path.is_absolute() {
-        let in_root = ROOT.join(&path);
-        let in_vault = VAULT_DIR.join(&path);
-        if in_root.exists() {
-            path = in_root;
-        } else if in_vault.exists() {
-            path = in_vault;
+        if let Ok(resolved) = vault::resolve_preview_path(&path_str) {
+            if resolved.exists() {
+                path = resolved;
+            }
+        }
+        if !path.is_absolute() {
+            let in_root = ROOT.join(&path);
+            let in_vault = VAULT_DIR.join(&path);
+            if in_root.exists() {
+                path = in_root;
+            } else if in_vault.exists() {
+                path = in_vault;
+            }
+        }
+    } else if !path.exists() {
+        if let Ok(resolved) = vault::resolve_preview_path(&path_str) {
+            if resolved.exists() {
+                path = resolved;
+            }
         }
     }
 
@@ -1666,6 +2228,7 @@ enum WinCmd {
     ToggleMaximize,
     Close,
     Detach(DetachReq),
+    SetTitle(String),
 }
 
 fn percent_encode_query(s: &str) -> String {
@@ -1865,6 +2428,10 @@ fn run_native_window() {
     let make_ipc = |p: tao::event_loop::EventLoopProxy<WinCmd>| {
         move |req: wry::http::Request<String>| {
             let body = req.body().as_str();
+            if let Some(rest) = body.strip_prefix("title:") {
+                let _ = p.send_event(WinCmd::SetTitle(rest.to_string()));
+                return;
+            }
             if let Some(rest) = body.strip_prefix("detach:") {
                 if let Ok(dreq) = serde_json::from_str::<DetachReq>(rest) {
                     let _ = p.send_event(WinCmd::Detach(dreq));
@@ -1982,6 +2549,9 @@ fn run_native_window() {
                         std::process::exit(0);
                     });
                     *control_flow = ControlFlow::Exit;
+                }
+                WinCmd::SetTitle(t) => {
+                    window.set_title(&t);
                 }
                 WinCmd::Detach(dreq) => {
                     if let Ok(exe) = std::env::current_exe() {
@@ -2110,12 +2680,20 @@ fn build_router() -> Router {
         .route("/api/note/create", post(create_note_ep))
         .route("/api/calendar", get(get_calendar_ep).post(post_calendar_ep))
         .route("/api/calendar/:ev_id", delete(delete_calendar_ep))
-        .route("/api/upload", post(upload_asset_ep))
+        .route(
+            "/api/upload",
+            post(upload_asset_ep).layer(DefaultBodyLimit::max(105 * 1024 * 1024)),
+        )
         .route("/api/docx", get(get_docx_ep))
+        .route("/api/docx_pdf", get(get_docx_pdf_ep).delete(delete_docx_pdf_ep))
         .route("/api/pptx", get(get_pptx_ep))
         .route("/api/pptx_pdf", get(get_pptx_pdf_ep).delete(delete_pptx_pdf_ep))
+        .route("/api/xlsx", get(get_xlsx_ep))
+        .route("/api/xlsx_pdf", get(get_xlsx_pdf_ep).delete(delete_xlsx_pdf_ep))
         .route("/api/pdf_info", get(get_pdf_info_ep))
         .route("/api/raw/*rel", get(raw_file_ep))
+        .route("/api/local_raw", get(local_raw_file_ep))
+        .route("/api/local_text", get(local_text_ep))
         .route("/api/chats", get(get_chats_ep).post(post_chat_ep))
         .route("/api/quota", get(quota_ep))
         .route("/api/log", get(get_log_ep).post(post_log_ep))
@@ -2123,19 +2701,46 @@ fn build_router() -> Router {
         .route("/api/run", post(run_ep))
         .route("/api/stop", post(stop_ep))
         .route("/api/clear", post(clear_ep))
+        .route("/api/compact", post(compact_ep))
         .route("/api/undo", post(undo_ep))
         .route("/api/guard/approve", post(guard_approve_ep))
         .route("/api/guard/decide", post(guard_decide_ep))
         .route("/api/media/status", get(media_status_ep))
         .route("/api/media/cmd", post(media_cmd_ep))
+        .route("/api/media/open", post(media_open_ep))
+        .route("/api/media/volume", post(media_volume_ep))
         .route("/api/open", post(open_target_ep))
         .route("/api/memory/stats", get(memory_stats_ep))
         .route("/api/memory/reindex", post(memory_reindex_ep))
         .route("/api/memory/query", get(memory_query_ep))
         .fallback_service(ServeDir::new(frontend_dir).append_index_html_on_directories(true))
+        .layer(DefaultBodyLimit::max(16 * 1024 * 1024))
         .layer(middleware::from_fn(no_cache_mw))
         .layer(CorsLayer::permissive())
         .with_state(state)
+}
+
+fn ensure_background_daemon() -> bool {
+    if is_port_listening() {
+        return true;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--daemon-only")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        if cmd.spawn().is_ok() {
+            for _ in 0..100 {
+                if is_port_listening() {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+        }
+    }
+    is_port_listening()
 }
 
 fn main() {
@@ -2160,7 +2765,7 @@ fn main() {
         return;
     }
 
-    if !is_port_listening() {
+    if !ensure_background_daemon() {
         std::thread::spawn(|| {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
@@ -2180,4 +2785,51 @@ fn main() {
 
     run_native_window();
     providers::kill_all_procs();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn upload_large_chat_image_over_2mb_and_serve_raw() {
+        let app = build_router();
+        let mut payload = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        payload.resize(3 * 1024 * 1024 + 128, 0x42);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/upload?name=agydesk_test_large.png&note=.chat_images")
+            .header("content-type", "image/png")
+            .body(Body::from(payload.clone()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "upload >2MB must not hit 413");
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let json_val: Value = serde_json::from_slice(&body_bytes).unwrap();
+        let rel = json_val["rel"].as_str().expect("rel field").to_string();
+        assert!(rel.starts_with(".chat_images/"));
+
+        let get_req = Request::builder()
+            .method("GET")
+            .uri(format!("/api/raw/{}", rel))
+            .body(Body::empty())
+            .unwrap();
+        let get_resp = app.oneshot(get_req).await.unwrap();
+        assert_eq!(get_resp.status(), StatusCode::OK, "raw serve must return 200");
+        let served = axum::body::to_bytes(get_resp.into_body(), 4 * 1024 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(served.len(), payload.len());
+
+        if let Ok(p) = vault::safe_path(&rel) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }

@@ -12,7 +12,7 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link rel="stylesheet" href="/styles.css?v=ctx19">
+<link rel="stylesheet" href="/styles.css?v=ctx21">
 </head>
 <body>
 <div class="app" id="app">
@@ -26,9 +26,9 @@
     <button class="rbtn" data-mode="ai" data-tip="AgyAI">◆</button>
     <div class="sp"></div>
     <button class="rbtn mbtn-rail" id="mediaBtn" data-tip="AgyPlay"></button>
-    <button class="rbtn" id="themeBtn" data-tip="AgyTheme">◑</button>
     <button class="rbtn" id="fontBtn" data-tip="AgyType (Ctrl +/−)" style="font:600 13px var(--sans)">Aa</button>
     <button class="rbtn" id="zenBtn" data-tip="AgyZen (Ctrl+.)">◐</button>
+    <button class="rbtn" id="settingsBtn" data-tip="Ayarlar">⚙</button>
     <div class="rail-pomo" id="railPomo" style="--p:100;display:none" onclick="togglePomoPop(event)" oncontextmenu="event.preventDefault();gcalPomoToggle()" title="Pomodoro · Tıkla: Mini kontrol · Sağ tık: Duraklat/Başlat">
       <div class="rail-pomo-ring"><span id="railPomoMin">25m</span></div>
       <small id="railPomoTime">25:00</small>
@@ -38,6 +38,7 @@
   <div class="upop" id="upop"></div>
   <div class="tpop" id="tpop"></div>
   <div class="tpop fpop" id="fpop"></div>
+  <div class="tpop spop" id="spop"></div>
   <div class="mpop" id="mpop"></div>
   <div class="ppop" id="ppop"></div>
 
@@ -113,7 +114,7 @@
   <!-- ORTA -->
   <section class="center">
     <button class="pdf-zen-fab" id="pdfZenFab" onclick="toggleZen()" title="Odak modundan çık (Esc veya Ctrl+.)">◐ Odak</button>
-    <div class="resizer resizer-l" id="resLeft" title="Sürükle: Sol paneli boyutlandır (200–480 px) · Çift tıkla: Sıfırla"></div>
+    <div class="resizer resizer-l" id="resLeft" title="Sürükle: Sol paneli boyutlandır · Çift tıkla: Sıfırla"></div>
     <div class="center-stage">
       <div class="main" id="main"></div>
       <div class="pdf-cache-stage" id="pdfCacheStage"></div>
@@ -125,7 +126,7 @@
 
   <!-- SAĞ -->
   <aside class="right" id="right">
-    <div class="resizer resizer-r" id="resRight" title="Sürükle: Sağ paneli boyutlandır (280–680 px) · Çift tıkla: Sıfırla"></div>
+    <div class="resizer resizer-r" id="resRight" title="Sürükle: Sağ paneli boyutlandır · Çift tıkla: Sıfırla"></div>
     <div class="pane-in">
     <div class="rtabs" id="rtabsBar">
       <div class="rt" data-rt="studio" style="display:none">Studio</div>
@@ -140,6 +141,7 @@
       <div class="rview-head" id="rvHead">
         <span>👁</span><b id="rvTitle">Dosya Önizleme</b>
         <button class="hb" id="rvNightBtn" style="padding:3px 7px;font-size:11px;display:none" onclick="toggleRightViewerNight()" title="PDF Gece Okuma Filtresi (Karanlık Mod)">🌙</button>
+        <button class="hb" id="rvExtOpen" style="padding:3px 8px;font-size:11.5px;display:none" title="Varsayılan uygulamada veya tarayıcıda aç (Word, PowerPoint, Chrome vb.)">↗ Uygulamada Aç</button>
         <button class="hb" id="rvOpen" style="padding:3px 9px;font-size:11.5px;display:none;border-color:var(--cu);color:var(--cu);background:var(--cu-d);font-weight:500" title="Tarayıcıya çıkmadan AgyDesk içinde yeni sekmede tam ekran aç">⤢ Sekmede Tam Ekran</button>
         <button class="hb" id="rvDel" style="padding:3px 7px;font-size:11.5px" onclick="if(rvCurrentRel)deleteActiveNote('note:'+rvCurrentRel)" title="Bu dosyayı kasadan sil">🗑 Sil</button><button class="hb" style="padding:3px 7px;font-size:11.5px" onclick="closeRightViewer()" title="Önizlemeyi kapat">✕</button>
       </div>
@@ -204,6 +206,6 @@
 <div class="notion-tmenu" id="notionTreeMenu" role="menu"></div>
 <div class="agydrop-pop" id="agyDropMenu" role="listbox"></div>
 
-<script src="/app.js?v=ctx24"></script>
+<script src="/app.js?v=ctx32"></script>
 </body>
 </html>

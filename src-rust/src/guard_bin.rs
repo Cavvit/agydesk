@@ -4,8 +4,12 @@ mod vault_guard;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() == 3 && args[1] == "--list" {
-        std::process::exit(vault_guard::run_list_dir(&args[2]));
+    if args.len() == 3 {
+        match args[1].as_str() {
+            "--list" => std::process::exit(vault_guard::run_list_dir(&args[2])),
+            "--read-doc" | "--read" => std::process::exit(vault_guard::run_read_doc(&args[2])),
+            _ => {}
+        }
     }
     if args.len() == 4 {
         match args[1].as_str() {

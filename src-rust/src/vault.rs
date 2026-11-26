@@ -15,10 +15,10 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-const MAX_ASSET: usize = 50 * 1024 * 1024;
+const MAX_ASSET: usize = 100 * 1024 * 1024;
 
-const IMG_EXT: &[&str] = &[".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif"];
-const DOC_EXT: &[&str] = &[".pdf", ".docx", ".doc", ".pptx", ".ppsx", ".ppt", ".xlsx", ".xls", ".csv", ".txt"];
+const IMG_EXT: &[&str] = &[".png", ".jpg", ".jpeg", ".jfif", ".gif", ".webp", ".bmp", ".svg", ".avif"];
+const DOC_EXT: &[&str] = &[".pdf", ".docx", ".doc", ".pptx", ".ppsx", ".ppt", ".xlsx", ".xlsm", ".xls", ".csv", ".txt"];
 
 fn is_img_ext(ext: &str) -> bool {
     IMG_EXT.contains(&ext)
@@ -838,6 +838,130 @@ pub fn safe_path(rel: &str) -> Result<PathBuf, String> {
         return Ok(secondary);
     }
     Ok(primary)
+}
+
+fn percent_decode_str(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    out.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub fn vault_rel_if_inside(path: &Path) -> Option<String> {
+    let v_canon = fs::canonicalize(&*VAULT_DIR).unwrap_or_else(|_| VAULT_DIR.to_path_buf());
+    let p_canon = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let v_str = v_canon.to_string_lossy().replace('\\', "/");
+    let p_str = p_canon.to_string_lossy().replace('\\', "/");
+    let v_low = v_str.trim_end_matches('/').to_lowercase();
+    let p_low = p_str.to_lowercase();
+    if p_low.starts_with(&(v_low.clone() + "/")) {
+        let tail = p_str[v_low.len() + 1..].to_string();
+        if is_split_vault() {
+            Some(strip_split_prefix(&tail).to_string())
+        } else {
+            Some(tail)
+        }
+    } else {
+        None
+    }
+}
+
+pub fn resolve_preview_path(rel_or_abs: &str) -> Result<PathBuf, String> {
+    let raw = rel_or_abs
+        .trim()
+        .trim_matches(|c| c == '<' || c == '>' || c == '"' || c == '\'');
+    if raw.is_empty() {
+        return Err("Boş dosya yolu".to_string());
+    }
+    let low = raw.to_ascii_lowercase();
+    let mut cleaned = if low.starts_with("file:///") {
+        percent_decode_str(&raw[8..])
+    } else if low.starts_with("file://") {
+        percent_decode_str(&raw[7..])
+    } else {
+        raw.to_string()
+    };
+    if let Some(idx) = cleaned.find('#') {
+        cleaned.truncate(idx);
+    }
+    if cleaned.starts_with("~/") || cleaned.starts_with("~\\") {
+        if let Ok(home) = std::env::var("USERPROFILE") {
+            cleaned = format!("{}{}", home, &cleaned[1..]);
+        }
+    }
+    let trimmed_lead = cleaned.trim_start_matches('/');
+    let looks_win_abs = trimmed_lead.len() >= 3
+        && trimmed_lead.as_bytes()[0].is_ascii_alphabetic()
+        && trimmed_lead.as_bytes()[1] == b':'
+        && (trimmed_lead.as_bytes()[2] == b'\\' || trimmed_lead.as_bytes()[2] == b'/');
+    let looks_unc = cleaned.starts_with("\\\\");
+    if looks_win_abs || looks_unc {
+        let win_str = if looks_win_abs {
+            trimmed_lead.replace('/', "\\")
+        } else {
+            cleaned.replace('/', "\\")
+        };
+        let pb = PathBuf::from(&win_str);
+        if pb
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err("Geçersiz dosya yolu".to_string());
+        }
+        if pb.is_file() {
+            return Ok(pb);
+        }
+        if let Some(rel) = vault_rel_if_inside(&pb) {
+            if let Ok(vp) = safe_path(&rel) {
+                if vp.is_file() {
+                    return Ok(vp);
+                }
+            }
+        }
+        return Err(format!("Dosya bulunamadı: {}", pb.display()));
+    }
+    safe_path(&cleaned)
+}
+
+pub fn read_preview_text(rel_or_abs: &str) -> Result<Value, String> {
+    let p = resolve_preview_path(rel_or_abs)?;
+    if !p.exists() || p.is_dir() {
+        return Err(format!("Dosya bulunamadı: {}", rel_or_abs));
+    }
+    let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+    if meta.len() > 2 * 1024 * 1024 {
+        return Err("Metin önizleme için dosya çok büyük (>2 MB)".to_string());
+    }
+    let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+    let content = String::from_utf8_lossy(&bytes).into_owned();
+    let title = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    let ext = ext_lower(&p);
+    let rel = vault_rel_if_inside(&p);
+    Ok(json!({
+        "path": p.to_string_lossy(),
+        "rel": rel,
+        "in_vault": rel.is_some(),
+        "title": title,
+        "ext": ext,
+        "content": content
+    }))
 }
 
 fn split_target_dir(clean_dir_rel: &str, for_md: bool) -> Result<PathBuf, String> {
@@ -2652,9 +2776,23 @@ fn html_escape(s: &str) -> String {
 }
 
 pub fn docx_to_html(rel: &str) -> Result<Value, String> {
-    let p = safe_path(rel)?;
+    let p = resolve_preview_path(rel)?;
     if !p.exists() {
         return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    let fname = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if ext == ".doc" {
+        return Ok(json!({
+            "rel": rel,
+            "title": fname,
+            "is_legacy_doc": true,
+            "html": "<p>Eski ikili .doc formatı doğrudan XML olarak okunamıyor. 'Tam Görünüm (RAM PDF)' ile açılıyor…</p>"
+        }));
     }
     let file = fs::File::open(&p).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
@@ -2665,7 +2803,7 @@ pub fn docx_to_html(rel: &str) -> Result<Value, String> {
     if doc_xml.is_empty() {
         return Ok(json!({
             "rel": rel,
-            "title": p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+            "title": fname,
             "html": "<p>(Boş belge)</p>"
         }));
     }
@@ -2674,37 +2812,221 @@ pub fn docx_to_html(rel: &str) -> Result<Value, String> {
     reader.trim_text(false);
     let mut out: Vec<String> = Vec::new();
     let mut in_p = false;
+    let mut in_r = false;
     let mut in_t = false;
+    let mut in_tbl = false;
+    let mut in_tc = false;
+    let mut run_bold = false;
+    let mut run_italic = false;
+    let mut p_heading: u8 = 0;
     let mut cur_p = String::new();
+    let mut cur_r_txt = String::new();
+    let mut cur_cell = String::new();
+    let mut cur_row: Vec<String> = Vec::new();
+    let mut cur_table: Vec<Vec<String>> = Vec::new();
+
+    let flush_run = |cur_p: &mut String, cur_r_txt: &mut String, bold: bool, italic: bool| {
+        if cur_r_txt.is_empty() {
+            return;
+        }
+        let esc = html_escape(cur_r_txt);
+        if bold && italic {
+            cur_p.push_str(&format!("<b><i>{}</i></b>", esc));
+        } else if bold {
+            cur_p.push_str(&format!("<b>{}</b>", esc));
+        } else if italic {
+            cur_p.push_str(&format!("<i>{}</i>", esc));
+        } else {
+            cur_p.push_str(&esc);
+        }
+        cur_r_txt.clear();
+    };
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = e.local_name();
-                if name.as_ref() == b"p" {
-                    in_p = true;
-                    cur_p.clear();
-                } else if name.as_ref() == b"t" && in_p {
-                    in_t = true;
+                match name.as_ref() {
+                    b"tbl" => {
+                        in_tbl = true;
+                        cur_table.clear();
+                    }
+                    b"tr" if in_tbl => {
+                        cur_row.clear();
+                    }
+                    b"tc" if in_tbl => {
+                        in_tc = true;
+                        cur_cell.clear();
+                    }
+                    b"p" => {
+                        in_p = true;
+                        p_heading = 0;
+                        cur_p.clear();
+                    }
+                    b"r" if in_p => {
+                        in_r = true;
+                        run_bold = false;
+                        run_italic = false;
+                        cur_r_txt.clear();
+                    }
+                    b"t" if in_p => {
+                        in_t = true;
+                    }
+                    b"b" if in_r => {
+                        run_bold = true;
+                    }
+                    b"i" if in_r => {
+                        run_italic = true;
+                    }
+                    b"pStyle" if in_p => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    let vl = v.to_ascii_lowercase();
+                                    if vl.contains("heading1") || vl == "title" || vl.contains("baslik1") {
+                                        p_heading = 1;
+                                    } else if vl.contains("heading2") || vl.contains("subtitle") || vl.contains("baslik2") {
+                                        p_heading = 2;
+                                    } else if vl.contains("heading") || vl.contains("baslik") {
+                                        p_heading = 3;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = e.local_name();
+                match name.as_ref() {
+                    b"b" if in_r => {
+                        let mut off = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    if v == "0" || v.eq_ignore_ascii_case("false") {
+                                        off = true;
+                                    }
+                                }
+                            }
+                        }
+                        if !off {
+                            run_bold = true;
+                        }
+                    }
+                    b"i" if in_r => {
+                        let mut off = false;
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    if v == "0" || v.eq_ignore_ascii_case("false") {
+                                        off = true;
+                                    }
+                                }
+                            }
+                        }
+                        if !off {
+                            run_italic = true;
+                        }
+                    }
+                    b"br" if in_p => {
+                        flush_run(&mut cur_p, &mut cur_r_txt, run_bold, run_italic);
+                        cur_p.push_str("<br>");
+                    }
+                    b"pStyle" if in_p => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                if let Ok(v) = attr.unescape_value() {
+                                    let vl = v.to_ascii_lowercase();
+                                    if vl.contains("heading1") || vl == "title" || vl.contains("baslik1") {
+                                        p_heading = 1;
+                                    } else if vl.contains("heading2") || vl.contains("subtitle") || vl.contains("baslik2") {
+                                        p_heading = 2;
+                                    } else if vl.contains("heading") || vl.contains("baslik") {
+                                        p_heading = 3;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::Text(e)) => {
                 if in_t {
                     if let Ok(txt) = e.unescape() {
-                        cur_p.push_str(&txt);
+                        if in_r {
+                            cur_r_txt.push_str(&txt);
+                        } else {
+                            cur_p.push_str(&html_escape(&txt));
+                        }
                     }
                 }
             }
             Ok(Event::End(e)) => {
                 let name = e.local_name();
-                if name.as_ref() == b"t" {
-                    in_t = false;
-                } else if name.as_ref() == b"p" {
-                    in_p = false;
-                    let trimmed = cur_p.trim();
-                    if !trimmed.is_empty() {
-                        out.push(format!("<p>{}</p>", html_escape(trimmed)));
+                match name.as_ref() {
+                    b"t" => {
+                        in_t = false;
                     }
+                    b"r" => {
+                        flush_run(&mut cur_p, &mut cur_r_txt, run_bold, run_italic);
+                        in_r = false;
+                        run_bold = false;
+                        run_italic = false;
+                    }
+                    b"p" => {
+                        flush_run(&mut cur_p, &mut cur_r_txt, run_bold, run_italic);
+                        in_p = false;
+                        let trimmed = cur_p.trim();
+                        if !trimmed.is_empty() {
+                            if in_tc {
+                                if !cur_cell.is_empty() {
+                                    cur_cell.push_str("<br>");
+                                }
+                                cur_cell.push_str(trimmed);
+                            } else {
+                                let block = match p_heading {
+                                    1 => format!("<h1>{}</h1>", trimmed),
+                                    2 => format!("<h2>{}</h2>", trimmed),
+                                    3 => format!("<h3>{}</h3>", trimmed),
+                                    _ => format!("<p>{}</p>", trimmed),
+                                };
+                                out.push(block);
+                            }
+                        }
+                        cur_p.clear();
+                    }
+                    b"tc" if in_tbl => {
+                        in_tc = false;
+                        cur_row.push(cur_cell.clone());
+                        cur_cell.clear();
+                    }
+                    b"tr" if in_tbl => {
+                        if !cur_row.is_empty() {
+                            cur_table.push(cur_row.clone());
+                            cur_row.clear();
+                        }
+                    }
+                    b"tbl" => {
+                        in_tbl = false;
+                        if !cur_table.is_empty() {
+                            let mut thtml = String::from("<table class=\"docx-tbl\">");
+                            for (ri, row) in cur_table.iter().enumerate() {
+                                thtml.push_str("<tr>");
+                                let tag = if ri == 0 { "th" } else { "td" };
+                                for cell in row {
+                                    thtml.push_str(&format!("<{t}>{c}</{t}>", t = tag, c = cell));
+                                }
+                                thtml.push_str("</tr>");
+                            }
+                            thtml.push_str("</table>");
+                            out.push(thtml);
+                            cur_table.clear();
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::Eof) | Err(_) => break,
@@ -2719,9 +3041,161 @@ pub fn docx_to_html(rel: &str) -> Result<Value, String> {
     };
     Ok(json!({
         "rel": rel,
-        "title": p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        "title": fname,
         "html": html_str
     }))
+}
+
+pub fn docx_to_pdf_bytes(rel: &str) -> Result<Vec<u8>, String> {
+    let p = resolve_preview_path(rel)?;
+    if !p.exists() {
+        return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    if ext != ".doc" && ext != ".docx" {
+        return Err("Desteklenmeyen Word formatı".to_string());
+    }
+    let cache_key = format!("docx:{}", p.to_string_lossy().to_lowercase());
+    let mtime = fs::metadata(&p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if let Some(entry) = guard.get_mut(&cache_key) {
+            if entry.mtime == mtime {
+                entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+
+    let _conv_guard = PPTX_CONV_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if let Some(entry) = guard.get_mut(&cache_key) {
+            if entry.mtime == mtime {
+                entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir();
+    let temp_pdf = temp_dir.join(format!("agydesk_docx_{}.pdf", stamp));
+    let in_str = p.to_string_lossy().to_string();
+    let out_str = temp_pdf.to_string_lossy().to_string();
+
+    let ps_script = format!(
+        "$ErrorActionPreference='Stop'; \
+         $inF='{in_esc}'; $outF='{out_esc}'; \
+         $wd=[Activator]::CreateInstance([Type]::GetTypeFromProgID('Word.Application')); \
+         try {{ \
+           $wd.Visible = $false; \
+           $doc = $wd.Documents.Open($inF, $false, $true); \
+           try {{ \
+             $doc.SaveAs2($outF, 17); \
+           }} finally {{ \
+             try {{ $doc.Close($false) }} catch {{}} \
+           }} \
+         }} finally {{ \
+           try {{ $wd.Quit($false) }} catch {{}} \
+         }}",
+        in_esc = in_str.replace('\'', "''"),
+        out_esc = out_str.replace('\'', "''")
+    );
+
+    let ps_res = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    let mut converted = ps_res
+        .as_ref()
+        .map(|o| o.status.success() && temp_pdf.exists())
+        .unwrap_or(false);
+
+    if !converted {
+        let _ = std::fs::remove_file(&temp_pdf);
+        let lo_dir = temp_dir.join(format!("agydesk_lo_docx_{}", stamp));
+        let _ = fs::create_dir_all(&lo_dir);
+        if let Ok(lo_out) = std::process::Command::new("soffice")
+            .args([
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                &lo_dir.to_string_lossy(),
+                &in_str,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if lo_out.status.success() {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let cand = lo_dir.join(format!("{}.pdf", stem));
+                    if cand.exists() && fs::rename(&cand, &temp_pdf).is_ok() {
+                        converted = true;
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&lo_dir);
+    }
+
+    if !converted || !temp_pdf.exists() {
+        let _ = fs::remove_file(&temp_pdf);
+        let err_detail = ps_res
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Microsoft Word veya LibreOffice bulunamadı".to_string());
+        return Err(format!("Word belgesi PDF'e dönüştürülemedi: {}", err_detail));
+    }
+
+    let bytes = fs::read(&temp_pdf);
+    let _ = fs::remove_file(&temp_pdf);
+    let bytes = bytes.map_err(|e| format!("Geçici PDF okunamadı: {}", e))?;
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if guard.len() >= 4 {
+            if let Some(oldest_k) = guard
+                .iter()
+                .min_by_key(|(_, v)| v.last_used)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest_k);
+            }
+        }
+        guard.insert(
+            cache_key,
+            CachedPptxPdf {
+                mtime,
+                last_used: PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                bytes: bytes.clone(),
+            },
+        );
+    }
+    Ok(bytes)
+}
+
+pub fn evict_docx_pdf(rel: &str) {
+    if let Ok(p) = resolve_preview_path(rel) {
+        let key = format!("docx:{}", p.to_string_lossy().to_lowercase());
+        if let Ok(mut guard) = pptx_cache().lock() {
+            guard.remove(&key);
+        }
+    }
+    evict_pptx_pdf(rel);
 }
 
 fn b64_encode(data: &[u8]) -> String {
@@ -2762,7 +3236,7 @@ pub fn evict_pptx_pdf(rel: &str) {
 }
 
 pub fn pptx_to_pdf_bytes(rel: &str) -> Result<Vec<u8>, String> {
-    let p = safe_path(rel)?;
+    let p = resolve_preview_path(rel)?;
     if !p.exists() {
         return Err(format!("Dosya bulunamadı: {}", rel));
     }
@@ -2910,8 +3384,534 @@ pub fn pptx_to_pdf_bytes(rel: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+pub fn xlsx_to_pdf_bytes(rel: &str) -> Result<Vec<u8>, String> {
+    let p = resolve_preview_path(rel)?;
+    if !p.exists() {
+        return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    if ext != ".xls" && ext != ".xlsx" && ext != ".xlsm" && ext != ".csv" {
+        return Err("Desteklenmeyen tablo formatı".to_string());
+    }
+    let mtime = fs::metadata(&p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if let Some(entry) = guard.get_mut(rel) {
+            if entry.mtime == mtime {
+                entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+
+    let _conv_guard = PPTX_CONV_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .map_err(|e| e.to_string())?;
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        if let Some(entry) = guard.get_mut(rel) {
+            if entry.mtime == mtime {
+                entry.last_used = PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                return Ok(entry.bytes.clone());
+            }
+        }
+    }
+
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir();
+    let temp_pdf = temp_dir.join(format!("agydesk_xlsx_{}.pdf", stamp));
+    let in_str = p.to_string_lossy().to_string();
+    let out_str = temp_pdf.to_string_lossy().to_string();
+
+    // Excel COM: Landscape + Fit all columns to 1 page wide so horizontal sheets stay readable
+    let ps_script = format!(
+        "$ErrorActionPreference='Stop'; \
+         $inF='{in_esc}'; $outF='{out_esc}'; \
+         $xl=[Activator]::CreateInstance([Type]::GetTypeFromProgID('Excel.Application')); \
+         try {{ \
+           $xl.Visible=$false; $xl.DisplayAlerts=$false; \
+           $wb=$xl.Workbooks.Open($inF, 0, $true); \
+           try {{ \
+             foreach($ws in $wb.Worksheets){{ \
+               try {{ \
+                 $ws.PageSetup.Orientation=2; \
+                 $ws.PageSetup.Zoom=$false; \
+                 $ws.PageSetup.FitToPagesWide=1; \
+                 $ws.PageSetup.FitToPagesTall=$false; \
+               }} catch {{}} \
+             }} \
+             $wb.ExportAsFixedFormat(0, $outF); \
+           }} finally {{ \
+             try {{ $wb.Close($false) }} catch {{}} \
+           }} \
+         }} finally {{ \
+           try {{ $xl.Quit() }} catch {{}} \
+         }}",
+        in_esc = in_str.replace('\'', "''"),
+        out_esc = out_str.replace('\'', "''")
+    );
+
+    let ps_res = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output();
+
+    let mut converted = ps_res
+        .as_ref()
+        .map(|o| o.status.success() && temp_pdf.exists())
+        .unwrap_or(false);
+
+    if !converted {
+        let _ = std::fs::remove_file(&temp_pdf);
+        let lo_dir = temp_dir.join(format!("agydesk_lo_xl_{}", stamp));
+        let _ = fs::create_dir_all(&lo_dir);
+        if let Ok(lo_out) = std::process::Command::new("soffice")
+            .args([
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                &lo_dir.to_string_lossy(),
+                &in_str,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
+            if lo_out.status.success() {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    let cand = lo_dir.join(format!("{}.pdf", stem));
+                    if cand.exists() && fs::rename(&cand, &temp_pdf).is_ok() {
+                        converted = true;
+                    }
+                }
+            }
+        }
+        let _ = fs::remove_dir_all(&lo_dir);
+    }
+
+    if !converted || !temp_pdf.exists() {
+        let _ = fs::remove_file(&temp_pdf);
+        let err_detail = ps_res
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Excel veya LibreOffice bulunamadı".to_string());
+        return Err(format!("Tablo PDF'e dönüştürülemedi: {}", err_detail));
+    }
+
+    let bytes = fs::read(&temp_pdf);
+    let _ = fs::remove_file(&temp_pdf);
+    let bytes = bytes.map_err(|e| format!("Geçici PDF okunamadı: {}", e))?;
+
+    if let Ok(mut guard) = pptx_cache().lock() {
+        while guard.len() >= 6 {
+            if let Some(oldest_k) = guard
+                .iter()
+                .min_by_key(|(_, v)| v.last_used)
+                .map(|(k, _)| k.clone())
+            {
+                guard.remove(&oldest_k);
+            } else {
+                break;
+            }
+        }
+        guard.insert(
+            rel.to_string(),
+            CachedPptxPdf {
+                mtime,
+                last_used: PPTX_USE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                bytes: bytes.clone(),
+            },
+        );
+    }
+
+    Ok(bytes)
+}
+
+fn xlsx_col_index(cell_ref: &str) -> Option<usize> {
+    let mut col: usize = 0;
+    let mut seen = false;
+    for b in cell_ref.bytes() {
+        if b.is_ascii_alphabetic() {
+            seen = true;
+            col = col * 26 + ((b.to_ascii_uppercase() - b'A') as usize + 1);
+        } else {
+            break;
+        }
+    }
+    if seen && col > 0 { Some(col - 1) } else { None }
+}
+
+fn parse_csv_line(line: &str, delim: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_quotes {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    cur.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                cur.push(c);
+            }
+        } else if c == '"' && cur.is_empty() {
+            in_quotes = true;
+        } else if c == delim {
+            out.push(cur.trim().to_string());
+            cur.clear();
+        } else {
+            cur.push(c);
+        }
+    }
+    out.push(cur.trim().to_string());
+    out
+}
+
+pub fn xlsx_to_sheets(rel: &str) -> Result<Value, String> {
+    const MAX_ROWS: usize = 1500;
+    const MAX_COLS: usize = 80;
+
+    let p = resolve_preview_path(rel)?;
+    if !p.exists() {
+        return Err(format!("Dosya bulunamadı: {}", rel));
+    }
+    let ext = ext_lower(&p);
+    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+
+    if ext == ".xls" {
+        return Ok(json!({
+            "rel": rel,
+            "title": fname,
+            "sheets": [],
+            "is_legacy_xls": true,
+            "note": "Eski ikili .xls formatı doğrudan XML olarak okunamıyor. 'Tam Görünüm (RAM PDF)' ile açılıyor…"
+        }));
+    }
+
+    if ext == ".csv" {
+        let raw = fs::read_to_string(&p)
+            .or_else(|_| fs::read(&p).map(|b| String::from_utf8_lossy(&b).to_string()))
+            .map_err(|e| e.to_string())?;
+        let text = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
+        let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let delim = if first_line.matches(';').count() > first_line.matches(',').count() {
+            ';'
+        } else if first_line.matches('\t').count() > first_line.matches(',').count() {
+            '\t'
+        } else {
+            ','
+        };
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut max_cols = 0usize;
+        let mut truncated = false;
+        for line in text.lines() {
+            if rows.len() >= MAX_ROWS {
+                truncated = true;
+                break;
+            }
+            let mut cols = parse_csv_line(line, delim);
+            if cols.len() > MAX_COLS {
+                cols.truncate(MAX_COLS);
+                truncated = true;
+            }
+            if cols.len() > max_cols {
+                max_cols = cols.len();
+            }
+            rows.push(cols);
+        }
+        return Ok(json!({
+            "rel": rel,
+            "title": fname,
+            "sheets": [{
+                "name": "CSV",
+                "rows": rows,
+                "row_count": rows.len(),
+                "col_count": max_cols,
+                "truncated": truncated
+            }]
+        }));
+    }
+
+    let file = fs::File::open(&p).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Excel arşivi açılamadı: {}", e))?;
+
+    // 1. Parse xl/sharedStrings.xml
+    let mut shared_strings: Vec<String> = Vec::new();
+    let mut ss_xml = String::new();
+    if let Ok(mut sf) = archive.by_name("xl/sharedStrings.xml") {
+        let _ = sf.read_to_string(&mut ss_xml);
+    }
+    if !ss_xml.is_empty() {
+        let mut reader = Reader::from_str(&ss_xml);
+        let mut in_si = false;
+        let mut in_t = false;
+        let mut cur_si = String::new();
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                    b"si" => {
+                        in_si = true;
+                        cur_si.clear();
+                    }
+                    b"t" if in_si => in_t = true,
+                    _ => {}
+                },
+                Ok(Event::End(e)) => match e.local_name().as_ref() {
+                    b"si" => {
+                        shared_strings.push(cur_si.clone());
+                        in_si = false;
+                        in_t = false;
+                    }
+                    b"t" => in_t = false,
+                    _ => {}
+                },
+                Ok(Event::Text(e)) if in_si && in_t => {
+                    if let Ok(txt) = e.unescape() {
+                        cur_si.push_str(&txt);
+                    }
+                }
+                Ok(Event::CData(e)) if in_si && in_t => {
+                    cur_si.push_str(&String::from_utf8_lossy(&e));
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+
+    // 2. Parse xl/_rels/workbook.xml.rels -> rId -> Target
+    let mut rel_targets: HashMap<String, String> = HashMap::new();
+    let mut rels_xml = String::new();
+    if let Ok(mut rf) = archive.by_name("xl/_rels/workbook.xml.rels") {
+        let _ = rf.read_to_string(&mut rels_xml);
+    }
+    if !rels_xml.is_empty() {
+        let mut reader = Reader::from_str(&rels_xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                    if e.local_name().as_ref() == b"Relationship" {
+                        let mut id = String::new();
+                        let mut target = String::new();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"Id" => id = String::from_utf8_lossy(&attr.value).to_string(),
+                                b"Target" => target = String::from_utf8_lossy(&attr.value).to_string(),
+                                _ => {}
+                            }
+                        }
+                        if !id.is_empty() && !target.is_empty() {
+                            let norm = target.trim_start_matches('/').to_string();
+                            let full = if norm.starts_with("xl/") {
+                                norm
+                            } else {
+                                format!("xl/{}", norm.trim_start_matches("../"))
+                            };
+                            rel_targets.insert(id, full);
+                        }
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+
+    // 3. Parse xl/workbook.xml -> ordered (name, target_path)
+    let mut sheet_defs: Vec<(String, String)> = Vec::new();
+    let mut wb_xml = String::new();
+    if let Ok(mut wf) = archive.by_name("xl/workbook.xml") {
+        let _ = wf.read_to_string(&mut wb_xml);
+    }
+    if !wb_xml.is_empty() {
+        let mut reader = Reader::from_str(&wb_xml);
+        let mut idx = 1usize;
+        loop {
+            match reader.read_event() {
+                Ok(Event::Empty(e)) | Ok(Event::Start(e)) => {
+                    if e.local_name().as_ref() == b"sheet" {
+                        let mut name = format!("Sayfa {}", idx);
+                        let mut rid = String::new();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"name" => {
+                                    if let Ok(v) = attr.unescape_value() {
+                                        name = v.to_string();
+                                    }
+                                }
+                                b"id" => rid = String::from_utf8_lossy(&attr.value).to_string(),
+                                _ => {}
+                            }
+                        }
+                        let path = rel_targets
+                            .get(&rid)
+                            .cloned()
+                            .unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", idx));
+                        sheet_defs.push((name, path));
+                        idx += 1;
+                    }
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }
+
+    if sheet_defs.is_empty() {
+        let mut names: Vec<String> = (0..archive.len())
+            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter(|n| n.starts_with("xl/worksheets/sheet") && n.ends_with(".xml"))
+            .collect();
+        names.sort();
+        for (i, n) in names.into_iter().enumerate() {
+            sheet_defs.push((format!("Sayfa {}", i + 1), n));
+        }
+    }
+
+    // 4. Parse each worksheet
+    let mut sheets_json: Vec<Value> = Vec::new();
+    for (sheet_name, sheet_path) in sheet_defs {
+        let mut sxml = String::new();
+        if let Ok(mut sf) = archive.by_name(&sheet_path) {
+            let _ = sf.read_to_string(&mut sxml);
+        }
+        if sxml.is_empty() {
+            continue;
+        }
+        let mut reader = Reader::from_str(&sxml);
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut cur_row: Vec<String> = Vec::new();
+        let mut in_row = false;
+        let mut in_cell = false;
+        let mut cell_type = String::new();
+        let mut cell_col: Option<usize> = None;
+        let mut in_v = false;
+        let mut in_t = false;
+        let mut cell_buf = String::new();
+        let mut max_cols = 0usize;
+        let mut truncated = false;
+
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                    b"row" => {
+                        if rows.len() >= MAX_ROWS {
+                            truncated = true;
+                            break;
+                        }
+                        in_row = true;
+                        cur_row.clear();
+                    }
+                    b"c" if in_row => {
+                        in_cell = true;
+                        cell_type.clear();
+                        cell_col = None;
+                        cell_buf.clear();
+                        for attr in e.attributes().flatten() {
+                            match attr.key.local_name().as_ref() {
+                                b"r" => {
+                                    let r_str = String::from_utf8_lossy(&attr.value);
+                                    cell_col = xlsx_col_index(&r_str);
+                                }
+                                b"t" => {
+                                    cell_type = String::from_utf8_lossy(&attr.value).to_string();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"v" if in_cell => in_v = true,
+                    b"t" if in_cell => in_t = true,
+                    _ => {}
+                },
+                Ok(Event::End(e)) => match e.local_name().as_ref() {
+                    b"v" => in_v = false,
+                    b"t" => in_t = false,
+                    b"c" if in_cell => {
+                        let val = match cell_type.as_str() {
+                            "s" => cell_buf
+                                .trim()
+                                .parse::<usize>()
+                                .ok()
+                                .and_then(|i| shared_strings.get(i))
+                                .cloned()
+                                .unwrap_or_default(),
+                            "b" => if cell_buf.trim() == "1" { "TRUE".to_string() } else { "FALSE".to_string() },
+                            _ => cell_buf.clone(),
+                        };
+                        let col_idx = cell_col.unwrap_or(cur_row.len());
+                        if col_idx < MAX_COLS {
+                            if cur_row.len() <= col_idx {
+                                cur_row.resize(col_idx + 1, String::new());
+                            }
+                            cur_row[col_idx] = val;
+                        } else {
+                            truncated = true;
+                        }
+                        in_cell = false;
+                        in_v = false;
+                        in_t = false;
+                    }
+                    b"row" if in_row => {
+                        while cur_row.last().map(|s| s.is_empty()).unwrap_or(false) {
+                            cur_row.pop();
+                        }
+                        if cur_row.len() > max_cols {
+                            max_cols = cur_row.len();
+                        }
+                        rows.push(cur_row.clone());
+                        in_row = false;
+                    }
+                    _ => {}
+                },
+                Ok(Event::Text(e)) if in_cell && (in_v || in_t) => {
+                    if let Ok(txt) = e.unescape() {
+                        cell_buf.push_str(&txt);
+                    }
+                }
+                Ok(Event::CData(e)) if in_cell && (in_v || in_t) => {
+                    cell_buf.push_str(&String::from_utf8_lossy(&e));
+                }
+                Ok(Event::Eof) | Err(_) => break,
+                _ => {}
+            }
+        }
+
+        while rows.last().map(|r| r.is_empty()).unwrap_or(false) {
+            rows.pop();
+        }
+        sheets_json.push(json!({
+            "name": sheet_name,
+            "rows": rows,
+            "row_count": rows.len(),
+            "col_count": max_cols,
+            "truncated": truncated
+        }));
+    }
+
+    Ok(json!({
+        "rel": rel,
+        "title": fname,
+        "sheets": sheets_json
+    }))
+}
+
 pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
-    let p = safe_path(rel)?;
+    let p = resolve_preview_path(rel)?;
     if !p.exists() {
         return Err(format!("Dosya bulunamadı: {}", rel));
     }
@@ -3309,7 +4309,7 @@ pub fn pptx_to_slides(rel: &str) -> Result<Value, String> {
 }
 
 pub fn pdf_info(rel: &str) -> Result<Value, String> {
-    let p = safe_path(rel)?;
+    let p = resolve_preview_path(rel)?;
     if !p.exists() || p.is_dir() {
         return Err(format!("Dosya bulunamadı: {}", rel));
     }
@@ -3536,7 +4536,7 @@ pub fn save_asset(note_rel: &str, name: &str, data: &[u8]) -> Result<Value, Stri
         );
     }
     if data.is_empty() || data.len() > MAX_ASSET {
-        return Err("Dosya boş veya 50 MB sınırını aşıyor".to_string());
+        return Err("Dosya boş veya 100 MB sınırını aşıyor".to_string());
     }
 
     let stem_raw = name_path

@@ -610,18 +610,44 @@ function resolveLocalNoteId(target){
   const wiki=resolveWiki(base);
   return wiki?.id||null;
 }
-async function openTargetLink(ev,target,forceReveal=false){
-  if(ev){ev.preventDefault();ev.stopPropagation();}
-  if(!target)return false;
-  const reveal=forceReveal||!!(ev&&(ev.ctrlKey||ev.metaKey));
-  if(!reveal){
-    const noteId=resolveLocalNoteId(target);
-    if(noteId && typeof openPage==='function'){
-      const newTab=!!(ev&&(ev.button===1||ev.shiftKey));
-      openPage(noteId,true,newTab?{newTab:true}:{});
-      return false;
-    }
+function isLocalAbsPathOrUri(target){
+  const s=String(target||'').trim();
+  return /^(file:\/\/\/?|[A-Za-z]:[\\/]|~[\\/]|\\\\)/i.test(s);
+}
+function cleanLocalPathTarget(target){
+  let s=String(target||'').trim();
+  if(/^file:\/\/\//i.test(s)) s=s.slice(8);
+  else if(/^file:\/\//i.test(s)) s=s.slice(7);
+  try{ s=decodeURIComponent(s); }catch(e){}
+  s=s.split('#')[0].split('?')[0].replace(/^\/+(?=[A-Za-z]:[\\/])/,'');
+  return s;
+}
+function rawUrlForRel(rel,extraQuery=''){
+  const s=String(rel||'').trim();
+  if(isLocalAbsPathOrUri(s)){
+    return '/api/local_raw?path='+encodeURIComponent(cleanLocalPathTarget(s))+(extraQuery?'&'+extraQuery:'');
   }
+  return '/api/raw/'+encodeURI(s)+(extraQuery?'?'+extraQuery:'');
+}
+function findVaultNoteIdForTarget(raw,cleanRel){
+  const mdId=resolveLocalNoteId(raw);
+  if(mdId) return mdId;
+  if(cleanRel){
+    if(pages['note:'+cleanRel]) return 'note:'+cleanRel;
+    const low=('note:'+cleanRel).toLowerCase();
+    const hit=Object.keys(pages).find(k=>k.startsWith('note:')&&k.toLowerCase()===low);
+    if(hit) return hit;
+  }
+  return null;
+}
+async function openExternalTarget(ev,target,forceReveal=false){
+  if(ev){
+    if(ev.type==='auxclick'&&ev.button!==1) return true;
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  if(!target) return false;
+  const reveal=forceReveal||!!(ev&&(ev.ctrlKey||ev.metaKey));
   try{
     const res=await fetch('/api/open',{
       method:'POST',
@@ -638,6 +664,26 @@ async function openTargetLink(ev,target,forceReveal=false){
     toast('⚠ Bağlantı açılamadı');
   }
   return false;
+}
+async function openTargetLink(ev,target,forceReveal=false){
+  if(ev){ev.preventDefault();ev.stopPropagation();}
+  if(!target)return false;
+  const reveal=forceReveal||!!(ev&&(ev.ctrlKey||ev.metaKey));
+  if(reveal || (ev&&ev.button===1)){
+    return openExternalTarget(null,target,reveal);
+  }
+  if(!/^https?:\/\//i.test(String(target).trim()) || String(target).includes('/api/raw/')){
+    if(typeof openRightViewer==='function'){
+      await openRightViewer(target);
+      return false;
+    }
+    const noteId=resolveLocalNoteId(target);
+    if(noteId && typeof openPage==='function'){
+      openPage(noteId,true);
+      return false;
+    }
+  }
+  return openExternalTarget(null,target,false);
 }
 function revealTargetFolder(ev,target){
   return openTargetLink(ev,target,true);
@@ -689,7 +735,7 @@ function mdToHtml(md,base){
     const ic=ext==='.pdf'?'📄':(ext.startsWith('.ppt')?'📊':(ext.startsWith('.xls')||ext==='.csv'?'📗':'📘'));
     const lbl=alt||rel.split('/').pop()||t.split('/').pop();
     const safeRel=escAttr(rel), safeLbl=escAttr(lbl), safeT=escAttr(t);
-    const tag=`<span class="doc-chip" data-rel="${safeRel}" data-lbl="${safeLbl}" onclick="openRightViewer(this.dataset.rel,this.dataset.lbl)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.lbl)" title="Tıkla: Sağda önizle · Çift tıkla: Sekmede tam ekran aç (${safeRel})">${ic} ${escHtml(lbl)} <small style="opacity:.65">👁 önizle</small><small style="opacity:.85;margin-left:3px;padding:1px 5px;border-radius:4px;background:var(--cu-d);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent)" onclick="event.stopPropagation();openDocInTab(this.parentElement.dataset.rel,this.parentElement.dataset.lbl)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢ sekmede aç</small><button class="emb-x" data-raw="${safeT}" onclick="event.stopPropagation();removeEmbed(this.dataset.raw)" title="Bu eki nottan kaldır">✕ kaldır</button></span>`;
+    const tag=`<span class="doc-chip" data-rel="${safeRel}" data-lbl="${safeLbl}" onclick="openRightViewer(this.dataset.rel,this.dataset.lbl)" onauxclick="return openExternalTarget(event,this.dataset.rel)" ondblclick="openDocInTab(this.dataset.rel,this.dataset.lbl)" title="Sol tık: Sağda önizle · Orta tık (scroll): Uygulamada aç · Çift tıkla: Sekmede tam ekran aç (${safeRel})">${ic} ${escHtml(lbl)} <small style="opacity:.65">👁 önizle</small><small style="opacity:.85;margin-left:3px;padding:1px 5px;border-radius:4px;background:var(--cu-d);border:1px solid color-mix(in srgb,var(--cu) 35%,transparent)" onclick="event.stopPropagation();openDocInTab(this.parentElement.dataset.rel,this.parentElement.dataset.lbl)" title="AgyDesk içinde yeni sekmede tam ekran aç">⤢ sekmede aç</small><button class="emb-x" data-raw="${safeT}" onclick="event.stopPropagation();removeEmbed(this.dataset.raw)" title="Bu eki nottan kaldır">✕ kaldır</button></span>`;
     return `@@CODE_${codeBlocks.push(tag)-1}@@`;
   };
   s=s.replace(/```sema[ \t]+([\w-]+)[^\n]*\n([\s\S]*?)```/g,(_,n)=>{
@@ -737,11 +783,11 @@ function mdToHtml(md,base){
     return r;
   };
   const makeUrlTag=(url,lbl)=>{
-    const tag=`<a class="ext-link" href="${escAttr(url)}" data-target="${escAttr(url)}" onclick="return openTargetLink(event,this.dataset.target)" title="Tarayıcıda aç: ${escAttr(url)}">${lbl}</a>`;
+    const tag=`<a class="ext-link" href="${escAttr(url)}" data-target="${escAttr(url)}" onclick="return openTargetLink(event,this.dataset.target)" onauxclick="return openExternalTarget(event,this.dataset.target)" title="Tarayıcıda aç: ${escAttr(url)}">${lbl}</a>`;
     return `@@CODE_${codeBlocks.push(tag)-1}@@`;
   };
   const makePathTag=(p,lbl)=>{
-    const tag=`<a class="path-link" href="#" data-target="${escAttr(p)}" onclick="return openTargetLink(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Tıkla: Dosya/klasörü aç · Ctrl+Tık / Sağ tık: Klasörde göster">${lbl}</a>`;
+    const tag=`<a class="path-link" href="#" data-target="${escAttr(p)}" onclick="return openTargetLink(event,this.dataset.target)" onauxclick="return openExternalTarget(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Sol tık: Sağ panelde önizle · Orta tık (scroll): Uygulamada/tarayıcıda aç · Sağ tık: Klasörde göster">${lbl}</a>`;
     return `@@CODE_${codeBlocks.push(tag)-1}@@`;
   };
   s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(full,lbl,rawTgt)=>{
@@ -753,7 +799,7 @@ function mdToHtml(md,base){
   s=s.replace(/`([^`\n]+)`/g,(_,rawInner)=>{
     const clean=unescHtml(rawInner.trim());
     if(isExtUrl(clean)||isLocalPath(clean)){
-      const tag=`<code class="path-code" data-target="${escAttr(clean)}" onclick="return openTargetLink(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Tıkla: Aç · Ctrl+Tık / Sağ tık: Klasörde göster">${rawInner}</code>`;
+      const tag=`<code class="path-code" data-target="${escAttr(clean)}" onclick="return openTargetLink(event,this.dataset.target)" onauxclick="return openExternalTarget(event,this.dataset.target)" oncontextmenu="return revealTargetFolder(event,this.dataset.target)" title="Sol tık: Sağ panelde önizle · Orta tık (scroll): Uygulamada/tarayıcıda aç · Sağ tık: Klasörde göster">${rawInner}</code>`;
       return `@@CODE_${codeBlocks.push(tag)-1}@@`;
     }
     return `@@CODE_${codeBlocks.push(`<code>${rawInner}</code>`)-1}@@`;
@@ -1027,6 +1073,8 @@ function saveSessionTabs(isClosing=false){
       writeNoRight:typeof writeNoRight==='boolean'?writeNoRight:true,
       studyNoLeft:typeof studyNoLeft==='boolean'?studyNoLeft:false,
       studyNoRight:typeof studyNoRight==='boolean'?studyNoRight:false,
+      leftPct:typeof leftPct==='number'&&Number.isFinite(leftPct)?Math.round(leftPct*10000)/10000:LEFT_PCT_DEF,
+      rightPct:typeof rightPct==='number'&&Number.isFinite(rightPct)?Math.round(rightPct*10000)/10000:RIGHT_PCT_DEF,
       leftW:typeof leftW==='number'?leftW:248,
       rightW:typeof rightW==='number'?rightW:340,
       rightTab:curRt?curRt.dataset.rt:'ai',
@@ -1199,8 +1247,11 @@ function restoreSessionTabs(){
     layoutMode(targetMode);
     if(typeof saved.noLeft==='boolean') app.classList.toggle('no-left',saved.noLeft);
     if(typeof saved.noRight==='boolean') app.classList.toggle('no-right',saved.noRight);
-    if(typeof saved.leftW==='number'&&Number.isFinite(saved.leftW)) leftW=clampLeft(saved.leftW);
-    if(typeof saved.rightW==='number'&&Number.isFinite(saved.rightW)) rightW=clampRight(saved.rightW);
+    const avail=paneAvailW();
+    if(typeof saved.leftPct==='number'&&Number.isFinite(saved.leftPct)&&saved.leftPct>0) leftPct=clampLeftPct(saved.leftPct);
+    else if(typeof saved.leftW==='number'&&Number.isFinite(saved.leftW)) leftPct=clampLeftPct(saved.leftW/avail);
+    if(typeof saved.rightPct==='number'&&Number.isFinite(saved.rightPct)&&saved.rightPct>0) rightPct=clampRightPct(saved.rightPct);
+    else if(typeof saved.rightW==='number'&&Number.isFinite(saved.rightW)) rightPct=clampRightPct(saved.rightW/avail);
     applyPaneWidths();
     if(typeof saved.rightTab==='string'&&saved.rightTab&&!viewerPrev){
       const rtEl=document.querySelector(`.rt[data-rt="${saved.rightTab}"]`);
@@ -1706,7 +1757,7 @@ async function loadVault(){
   try{
     const v=await api('/api/vault');
     if(v&&v.pages){
-      Object.keys(pages).forEach(k=>{ if(k.startsWith('note:')) delete pages[k]; });
+      Object.keys(pages).forEach(k=>{ if(k.startsWith('note:')&&!(pages[k]&&pages[k].isLocalAbs&&openTabs.includes(k))) delete pages[k]; });
       Object.assign(pages,v.pages);
       const valid=openTabs.filter(t=>!String(t).startsWith('note:')||Boolean(pages[t]));
       if(valid.length!==openTabs.length){
@@ -2291,117 +2342,296 @@ function renderTree(){
   });
   build(tree,root);
 }
-const SIDE_EXT=['.pdf','.docx','.doc','.pptx','.ppsx','.ppt','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.avif'];
+const SIDE_EXT=['.pdf','.docx','.doc','.pptx','.ppsx','.ppt','.xlsx','.xlsm','.xls','.csv','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg','.avif'];
 function isSideDoc(relOrId){
   const s=String(relOrId||'').toLowerCase();
   if(SIDE_EXT.some(e=>s.endsWith(e)))return true;
   const p=pages[relOrId];
   return !!(p&&p.ext&&SIDE_EXT.includes(p.ext));
 }
+const RAIL_W=52;
+const LEFT_MIN=200, RIGHT_MIN=280, CENTER_MIN=420;
+const LEFT_PCT_DEF=0.17, RIGHT_PCT_DEF=0.24, VIEWER_PCT_MIN=0.34;
+const LEFT_PCT_MIN=0.04, LEFT_PCT_MAX=0.38, RIGHT_PCT_MIN=0.06, RIGHT_PCT_MAX=0.50;
+let leftPct=LEFT_PCT_DEF, rightPct=RIGHT_PCT_DEF;
 let leftW=248, rightW=340, viewerPrev=null;
-const LEFT_MIN=200, LEFT_MAX=480, RIGHT_MIN=280, RIGHT_MAX=680, CENTER_MIN=420;
+function paneAvailW(){
+  const w=(app&&app.clientWidth)||window.innerWidth||document.documentElement.clientWidth||1440;
+  return Math.max(1,w-RAIL_W);
+}
+function clampLeftPct(p){
+  return Math.max(LEFT_PCT_MIN,Math.min(LEFT_PCT_MAX,p));
+}
+function clampRightPct(p){
+  return Math.max(RIGHT_PCT_MIN,Math.min(RIGHT_PCT_MAX,p));
+}
 function clampLeft(w){
+  const avail=paneAvailW();
   const rOpen=!app.classList.contains('no-right');
-  const maxByCenter=window.innerWidth-52-(rOpen?rightW:0)-CENTER_MIN;
-  const hi=Math.max(LEFT_MIN,Math.min(LEFT_MAX,Math.floor(window.innerWidth*0.38),maxByCenter));
+  const maxByCenter=avail-(rOpen?rightW:0)-CENTER_MIN;
+  const hi=Math.max(LEFT_MIN,Math.min(Math.floor(avail*LEFT_PCT_MAX),maxByCenter));
   return Math.max(LEFT_MIN,Math.min(hi,Math.round(w)));
 }
 function clampRight(w){
+  const avail=paneAvailW();
   const lOpen=!app.classList.contains('no-left');
-  const maxByCenter=window.innerWidth-52-(lOpen?leftW:0)-CENTER_MIN;
-  const hi=Math.max(RIGHT_MIN,Math.min(RIGHT_MAX,Math.floor(window.innerWidth*0.50),maxByCenter));
+  const maxByCenter=avail-(lOpen?leftW:0)-CENTER_MIN;
+  const hi=Math.max(RIGHT_MIN,Math.min(Math.floor(avail*RIGHT_PCT_MAX),maxByCenter));
   return Math.max(RIGHT_MIN,Math.min(hi,Math.round(w)));
 }
 function applyPaneWidths(){
+  if(!app) return;
+  const avail=paneAvailW();
+  const lOpen=!app.classList.contains('no-left');
+  const rOpen=!app.classList.contains('no-right');
+  const maxSum=Math.max(0,avail-CENTER_MIN);
+  let l=Math.max(LEFT_MIN,Math.min(Math.max(LEFT_MIN,Math.floor(avail*LEFT_PCT_MAX)),Math.round(avail*leftPct)));
+  let r=Math.max(RIGHT_MIN,Math.min(Math.max(RIGHT_MIN,Math.floor(avail*RIGHT_PCT_MAX)),Math.round(avail*rightPct)));
+  if(lOpen&&rOpen&&l+r>maxSum){
+    const over=l+r-maxSum;
+    const flexL=Math.max(0,l-LEFT_MIN);
+    const flexR=Math.max(0,r-RIGHT_MIN);
+    const flexSum=flexL+flexR;
+    if(flexSum>0){
+      const cutL=Math.min(flexL,Math.round(over*(flexL/flexSum)));
+      const cutR=Math.min(flexR,over-cutL);
+      l-=cutL;
+      r-=cutR;
+      const rem=l+r-maxSum;
+      if(rem>0) l=Math.max(LEFT_MIN,l-rem);
+    }else{
+      l=LEFT_MIN;
+      r=RIGHT_MIN;
+    }
+  }else if(lOpen&&!rOpen){
+    l=Math.max(LEFT_MIN,Math.min(l,Math.max(LEFT_MIN,maxSum)));
+  }else if(!lOpen&&rOpen){
+    r=Math.max(RIGHT_MIN,Math.min(r,Math.max(RIGHT_MIN,maxSum)));
+  }
+  leftW=l;
+  rightW=r;
   app.style.setProperty('--left',leftW+'px');
   app.style.setProperty('--right',rightW+'px');
 }
-let rvCurrentRel='', rvCurrentTitle='', rvNight=localStorage.getItem('agydesk_pdf_night')==='1';
-function toggleRightViewerNight(){
-  rvNight=!rvNight;
-  localStorage.setItem('agydesk_pdf_night',rvNight?'1':'0');
+let rvCurrentRel='', rvCurrentTitle='', rvMode='sepia';
+let rvNight=false;
+const RV_MODES={
+  normal:{ic:'☀',lbl:'Orijinal',filt:'none'},
+  night:{ic:'🌙',lbl:'Gece',filt:'invert(0.90) hue-rotate(180deg) contrast(0.96)'},
+  sepia:{ic:'📜',lbl:'Sepya',filt:'sepia(0.38) brightness(0.95) contrast(0.95)'}
+};
+function syncRightViewerModeBtn(){
   const nb=$('#rvNightBtn');
-  if(nb){ nb.classList.toggle('on',rvNight); nb.style.borderColor=rvNight?'var(--cu)':''; nb.style.color=rvNight?'var(--cu)':''; }
+  if(!nb) return;
+  const m=RV_MODES[rvMode]||RV_MODES.sepia;
+  const active=rvMode!=='normal';
+  nb.textContent=m.ic;
+  nb.title=`Okuma Modu: ${m.lbl} (tıkla: Orijinal / Gece / Sepya)`;
+  nb.classList.toggle('on',active);
+  nb.style.borderColor=active?'var(--cu)':'';
+  nb.style.color=active?'var(--cu)':'';
+}
+function toggleRightViewerNight(){
+  const order=['normal','night','sepia'];
+  rvMode=order[(order.indexOf(rvMode)+1)%order.length];
+  rvNight=rvMode==='night';
+  syncRightViewerModeBtn();
   const fr=$('#rvBody iframe');
-  if(fr) fr.style.filter=rvNight?'invert(0.90) hue-rotate(180deg) contrast(0.96)':'none';
+  if(fr) fr.style.filter=(RV_MODES[rvMode]||RV_MODES.sepia).filt;
 }
 function openDocInTab(relOrUrl,title){
-  const cleanRel=normalizeVaultAssetRel(relOrUrl,typeof notionState!=='undefined'?notionState.baseDir:'');
-  if(!cleanRel) return;
-  const id='note:'+cleanRel;
+  let raw=String(relOrUrl||'').trim();
+  if(raw.startsWith('note:')) raw=raw.slice(5);
+  if(!raw) return;
+  const isAbs=isLocalAbsPathOrUri(raw);
+  const cleanRel=normalizeVaultAssetRel(raw,typeof notionState!=='undefined'?notionState.baseDir:'');
+  const vaultId=findVaultNoteIdForTarget(raw,cleanRel);
+  const useAbs=isAbs&&!vaultId;
+  const keyRel=vaultId?vaultId.slice(5):(useAbs?cleanLocalPathTarget(raw):cleanRel);
+  if(!keyRel) return;
+  const id='note:'+keyRel;
   if(!pages[id]){
-    const ext=(cleanRel.includes('.')?cleanRel.slice(cleanRel.lastIndexOf('.')):'').toLowerCase();
-    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':(/\.(pptx?|ppsx)$/i.test(ext)?'📊':(/\.(docx?)$/i.test(ext)?'📘':'📄')));
-    const fKey=cleanRel.includes('/')?cleanRel.split('/')[0]:'';
-    const kObj=kasalarData.find(k=>k.key===fKey);
-    pages[id]={t:title||decodeURIComponent(cleanRel.split('/').pop()||cleanRel),i:ic,rel:cleanRel,folder:kObj?kObj.title:(fKey||'Obsidian Kasası'),kasa:fKey,ext:ext||'.pdf'};
+    const ext=(keyRel.includes('.')?keyRel.slice(keyRel.lastIndexOf('.')):'').toLowerCase();
+    const ic=ext==='.pdf'?'📄':(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(ext)?'🖼':(/\.(pptx?|ppsx)$/i.test(ext)?'📊':(/\.(xlsx?|xlsm|csv)$/i.test(ext)?'📗':(/\.(docx?)$/i.test(ext)?'📘':'📄'))));
+    const normSlash=keyRel.replace(/\\/g,'/');
+    const fKey=(!useAbs&&normSlash.includes('/'))?normSlash.split('/')[0]:'';
+    const kObj=fKey?kasalarData.find(k=>k.key===fKey):null;
+    pages[id]={t:title||decodeURIComponent(normSlash.split('/').pop()||keyRel),i:ic,rel:keyRel,folder:useAbs?'Yerel Dosya':(kObj?kObj.title:(fKey||'Obsidian Kasası')),kasa:fKey,ext:ext||'.pdf',isLocalAbs:useAbs};
   }
-  if(viewerPrev) closeRightViewer();
+  if(viewerPrev){
+    if(window._rvPptxRel&&window._rvPptxRel===keyRel) window._rvPptxRel=null;
+    closeRightViewer();
+  }
   openPage(id,true);
 }
+let rvCurrentRawTarget='';
+async function openDocxAsRamPdf(rel,stageEl,btnEl,nightMode){
+  if(!stageEl) return;
+  if(btnEl){ btnEl.disabled=true; btnEl.textContent='⏳ Word RAM PDF hazırlanıyor…'; }
+  stageEl.innerHTML=`<div style="padding:36px;color:var(--mut);text-align:center"><span class="spin"></span> Word belgesi PDF'e dönüştürülüyor (RAM)…</div>`;
+  try{
+    const resp=await fetch('/api/docx_pdf?rel='+encodeURIComponent(rel));
+    if(!resp.ok){
+      const msg=await resp.text();
+      throw new Error(msg||('HTTP '+resp.status));
+    }
+    const blob=await resp.blob();
+    const blobUrl=URL.createObjectURL(blob);
+    const filt=nightMode?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
+    stageEl.style.padding='0';
+    stageEl.innerHTML=`<iframe src="${blobUrl}#view=FitH" style="flex:1;width:100%;height:100%;min-height:70vh;border:0;background:#fff;${filt}"></iframe>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='📘 Metin Görünümüne Dön'; }
+  }catch(e){
+    stageEl.innerHTML=`<div style="padding:20px;color:var(--err)"><b>PDF Dönüştürme Hatası</b><p>${escHtml(e.message)}</p></div>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='📄 Tam Görünüm (RAM PDF)'; }
+  }
+}
 async function openRightViewer(relOrUrl,title){
-  let raw=String(relOrUrl||'');
+  let raw=String(relOrUrl||'').trim();
   if(raw.startsWith('note:'))raw=raw.slice(5);
+  rvCurrentRawTarget=raw;
   const isHttp=/^https?:\/\//i.test(raw)&&!raw.includes('/api/raw/');
+  const isLocalAbs=!isHttp&&isLocalAbsPathOrUri(raw);
+  const cleanAbs=isLocalAbs?cleanLocalPathTarget(raw):'';
   const cleanRel=isHttp?raw:normalizeVaultAssetRel(raw,typeof notionState!=='undefined'?notionState.baseDir:'');
-  const url=isHttp?raw:('/api/raw/'+encodeURI(cleanRel));
-  const low=cleanRel.toLowerCase();
-  const name=title||decodeURIComponent(cleanRel.split('/').pop()||'Dosya');
-  rvCurrentRel=cleanRel; rvCurrentTitle=name;
+  const vaultNoteId=!isHttp?findVaultNoteIdForTarget(raw,cleanRel):null;
+  const apiTarget=(isLocalAbs&&!vaultNoteId)?cleanAbs:(vaultNoteId?vaultNoteId.slice(5):cleanRel);
+  const url=isHttp?raw:rawUrlForRel(apiTarget);
+  const low=apiTarget.split('#')[0].split('?')[0].toLowerCase();
+  const name=title||decodeURIComponent(apiTarget.replace(/\\/g,'/').split('/').pop()||'Dosya');
+  rvCurrentRel=vaultNoteId?vaultNoteId.slice(5):''; rvCurrentTitle=name;
   $('#rvTitle').textContent=name;
+  const extBtn=$('#rvExtOpen');
+  if(extBtn){
+    extBtn.style.display='';
+    extBtn.onclick=e=>{ e.preventDefault(); openExternalTarget(null,rvCurrentRawTarget||apiTarget); };
+  }
   const op=$('#rvOpen');
   if(op){
-    op.style.display='';
-    op.onclick=e=>{ e.preventDefault(); openDocInTab(cleanRel,name); };
+    const canOpenTab=!isHttp;
+    op.style.display=canOpenTab?'':'none';
+    op.onclick=e=>{ e.preventDefault(); openDocInTab(apiTarget,name); };
   }
+  const delBtn=$('#rvDel');
+  if(delBtn) delBtn.style.display=rvCurrentRel?'':'none';
   const nb=$('#rvNightBtn');
   if(nb){
-    nb.style.display=low.endsWith('.pdf')?'':'none';
-    nb.classList.toggle('on',rvNight);
-    nb.style.borderColor=rvNight?'var(--cu)':'';
-    nb.style.color=rvNight?'var(--cu)':'';
+    nb.style.display=(low.endsWith('.pdf')||/\.(pptx?|ppsx)$/i.test(low))?'':'none';
+    syncRightViewerModeBtn();
   }
   const b=$('#rvBody');
   if(!viewerPrev){
     const curRt=$('.rt.on');
-    viewerPrev={wasClosed:app.classList.contains('no-right'),rt:curRt?curRt.dataset.rt:'ai',w:rightW};
+    viewerPrev={wasClosed:app.classList.contains('no-right'),rt:curRt?curRt.dataset.rt:'ai',pct:rightPct,w:rightW};
   }
-  rightW=clampRight(Math.max(rightW,500));
+  rightPct=clampRightPct(Math.max(rightPct,VIEWER_PCT_MIN,500/paneAvailW()));
   applyPaneWidths();
   $('#rtabsBar').style.display='none';
   $$('.rbody').forEach(el=>el.classList.toggle('on',el.id==='rb-viewer'));
   app.classList.remove('no-right');
   syncPaneBtns();
   if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(low)){
-    const safeRel=escAttr(cleanRel), safeName=escAttr(name);
-    b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" data-rel="${safeRel}" data-title="${safeName}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="openDocInTab(this.dataset.rel,this.dataset.title)" title="AgyDesk içinde yeni sekmede tam boy aç"><div class="mono" style="font-size:11px;color:var(--mut)">${escHtml(cleanRel)} · <span class="link" data-rel="${safeRel}" data-title="${safeName}" onclick="openDocInTab(this.dataset.rel,this.dataset.title)">⤢ Sekmede Tam Ekran Aç</span></div></div>`;
+    const safeRel=escAttr(apiTarget), safeName=escAttr(name);
+    b.innerHTML=`<div style="padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px"><img src="${url}" data-rel="${safeRel}" data-title="${safeName}" style="max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line);background:#fff;cursor:zoom-in" onclick="if(!isLocalAbsPathOrUri(this.dataset.rel))openDocInTab(this.dataset.rel,this.dataset.title)" title="Önizleme"><div class="mono" style="font-size:11px;color:var(--mut)">${escHtml(apiTarget)}</div></div>`;
   }else if(low.endsWith('.pdf')){
-    const filt=rvNight?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
+    const f=(RV_MODES[rvMode]||RV_MODES.normal).filt;
+    const filt=f!=='none'?`filter:${f};`:'';
     b.innerHTML=`<iframe src="${url}#view=FitH" style="flex:1;width:100%;height:100%;border:0;background:#fff;transition:filter .2s;${filt}"></iframe>`;
   }else if(/\.(pptx?|ppsx)$/i.test(low)){
-    if(window._rvPptxRel && window._rvPptxRel!==cleanRel) evictPptxPdf(window._rvPptxRel);
-    window._rvPptxRel=cleanRel;
-    b.innerHTML=`<div class="pptx-rv-bar"><span class="mono" style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span><button class="hb" id="rvPptxPdfBtn">📄 Tam Görünüm (RAM PDF)</button></div><div id="rvPptxStage" class="rview-pptx" style="flex:1;overflow:auto"><div style="padding:20px;color:var(--mut)"><span class="spin"></span> Sunum slaytları hazırlanıyor: ${escHtml(name)}…</div></div>`;
+    if(window._rvPptxRel && window._rvPptxRel!==apiTarget) evictPptxPdf(window._rvPptxRel);
+    window._rvPptxRel=apiTarget;
+    b.innerHTML=`<div class="pptx-rv-bar"><span class="mono" style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span><button class="hb" id="rvPptxPdfBtn">⚡ Hızlı Slaytlar</button></div><div id="rvPptxStage" class="rview-pptx" style="flex:1;overflow:auto"><div style="padding:20px;color:var(--mut)"><span class="spin"></span> Sunum tam görünüm (RAM PDF) hazırlanıyor: ${escHtml(name)}…</div></div>`;
     const rvStage=b.querySelector('#rvPptxStage');
     const rvBtn=b.querySelector('#rvPptxPdfBtn');
-    if(rvBtn) rvBtn.onclick=()=>openPptxAsRamPdf(cleanRel,rvStage,rvBtn,rvNight);
+    let rvPptxMode='pdf', rvPptxData=null;
+    const loadFastSlides=async ()=>{
+      if(!rvPptxData) rvPptxData=await api('/api/pptx?rel='+encodeURIComponent(apiTarget));
+      if(rvStage){ rvStage.style.padding=''; rvStage.style.overflow='auto'; rvStage.innerHTML=renderPptxSlidesHtml(rvPptxData); }
+      if(rvBtn) rvBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+    };
+    if(rvBtn) rvBtn.onclick=async ()=>{
+      if(rvPptxMode==='pdf'){
+        rvPptxMode='fast';
+        try{ await loadFastSlides(); }catch(e){ if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${escHtml(e.message)}</div>`; }
+      }else{
+        rvPptxMode='pdf';
+        const ok=await openPptxAsRamPdf(apiTarget,rvStage,rvBtn,rvMode);
+        if(ok&&rvBtn) rvBtn.textContent='⚡ Hızlı Slaytlar';
+      }
+    };
+    const okPdf=await openPptxAsRamPdf(apiTarget,rvStage,rvBtn,rvMode);
+    if(okPdf){
+      if(rvBtn) rvBtn.textContent='⚡ Hızlı Slaytlar';
+    }else{
+      rvPptxMode='fast';
+      try{ await loadFastSlides(); }catch(e){ if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${escHtml(e.message)}</div>`; }
+    }
+  }else if(/\.(xlsx?|xlsm|csv)$/i.test(low)){
+    if(window._rvPptxRel && window._rvPptxRel!==apiTarget) evictPptxPdf(window._rvPptxRel);
+    window._rvPptxRel=apiTarget;
+    b.innerHTML=`<div class="pptx-rv-bar"><span class="mono" style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span><button class="hb" id="rvXlsxPdfBtn" title="Excel ile yatay sığdırılmış RAM PDF görünümü">📄 Tam Görünüm (RAM PDF)</button></div><div id="rvXlsxStage" class="xlsx-stage" style="flex:1;min-height:0"><div style="padding:20px;color:var(--mut)"><span class="spin"></span> Tablo hazırlanıyor: ${escHtml(name)}…</div></div>`;
+    const rvStage=b.querySelector('#rvXlsxStage');
+    const rvBtn=b.querySelector('#rvXlsxPdfBtn');
+    let rvXlsxMode='grid', rvXlsxData=null;
+    if(rvBtn) rvBtn.onclick=async ()=>{
+      if(rvXlsxMode==='pdf'&&rvXlsxData){
+        rvXlsxMode='grid';
+        mountXlsxViewer(rvStage,rvXlsxData);
+        rvBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+        evictXlsxPdf(apiTarget);
+      }else{
+        rvXlsxMode='pdf';
+        await openXlsxAsRamPdf(apiTarget,rvStage,rvBtn,rvNight);
+      }
+    };
     try{
-      const d=await api('/api/pptx?rel='+encodeURIComponent(cleanRel));
-      if(d&&d.is_legacy_ppt){
-        openPptxAsRamPdf(cleanRel,rvStage,rvBtn,rvNight);
+      const d=await api('/api/xlsx?rel='+encodeURIComponent(apiTarget));
+      rvXlsxData=d;
+      if(d&&d.is_legacy_xls){
+        rvXlsxMode='pdf';
+        openXlsxAsRamPdf(apiTarget,rvStage,rvBtn,rvNight);
       }else if(rvStage){
-        rvStage.innerHTML=renderPptxSlidesHtml(d);
+        mountXlsxViewer(rvStage,d);
       }
     }catch(e){
-      if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Sunum okunamadı: ${escHtml(e.message)}</div>`;
+      if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Tablo okunamadı: ${escHtml(e.message)}</div>`;
     }
   }else if(/\.(docx?)$/i.test(low)){
-    b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Word belgesi okunuyor: ${name}…</div>`;
+    b.innerHTML=`<div class="pptx-rv-bar"><span class="mono" style="color:var(--mut);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(name)}</span><button class="hb" id="rvDocxPdfBtn">📄 Tam Görünüm (RAM PDF)</button></div><div id="rvDocxStage" style="flex:1;overflow:auto;display:flex;flex-direction:column"><div style="padding:20px;color:var(--mut)"><span class="spin"></span> Word belgesi okunuyor: ${escHtml(name)}…</div></div>`;
+    const rvStage=b.querySelector('#rvDocxStage');
+    const rvBtn=b.querySelector('#rvDocxPdfBtn');
+    let rvDocxMode='html', rvDocxHtml='';
+    if(rvBtn) rvBtn.onclick=async ()=>{
+      if(rvDocxMode==='pdf'&&rvDocxHtml){
+        rvDocxMode='html';
+        rvStage.style.padding='';
+        rvStage.innerHTML=`<div class="rview-docx">${rvDocxHtml}</div>`;
+        rvBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+      }else{
+        rvDocxMode='pdf';
+        await openDocxAsRamPdf(apiTarget,rvStage,rvBtn,rvNight);
+      }
+    };
     try{
-      const d=await api('/api/docx?rel='+encodeURIComponent(cleanRel));
-      b.innerHTML=`<div class="rview-docx">${d.html}</div>`;
+      const d=await api('/api/docx?rel='+encodeURIComponent(apiTarget));
+      rvDocxHtml=d.html||'';
+      if(d&&d.is_legacy_doc){
+        rvDocxMode='pdf';
+        openDocxAsRamPdf(apiTarget,rvStage,rvBtn,rvNight);
+      }else if(rvStage){
+        rvStage.innerHTML=`<div class="rview-docx">${rvDocxHtml}</div>`;
+      }
     }catch(e){
-      b.innerHTML=`<div style="padding:20px;color:var(--err)">Belge okunamadı: ${e.message}</div>`;
+      if(rvStage) rvStage.innerHTML=`<div style="padding:20px;color:var(--err)">Belge okunamadı: ${escHtml(e.message)}</div>`;
+    }
+  }else if(/\.(md|txt|json|csv|log|py|js|ts|rs|css|yml|yaml|toml|xml)$/i.test(low)){
+    b.innerHTML=`<div style="padding:20px;color:var(--mut)"><span class="spin"></span> Dosya okunuyor: ${escHtml(name)}…</div>`;
+    try{
+      const d=await api('/api/local_text?path='+encodeURIComponent(apiTarget));
+      if(low.endsWith('.md')) b.innerHTML=`<div class="rview-docx">${mdToHtml(d.content||'')}</div>`;
+      else b.innerHTML=`<pre style="margin:0;padding:16px;overflow:auto;font-family:var(--mono);font-size:12px;line-height:1.5;white-space:pre-wrap;color:var(--txt)">${escHtml(d.content||'')}</pre>`;
+    }catch(e){
+      b.innerHTML=`<div style="padding:20px;color:var(--err)">Dosya okunamadı: ${escHtml(e.message)}</div>`;
     }
   }else{
     b.innerHTML=`<iframe src="${url}" style="flex:1;width:100%;height:100%;border:0;background:#fff"></iframe>`;
@@ -2413,7 +2643,9 @@ function closeRightViewer(){
   const prev=viewerPrev;
   viewerPrev=null;
   if(prev){
-    rightW=clampRight(prev.w||340);
+    if(typeof prev.pct==='number'&&Number.isFinite(prev.pct)&&prev.pct>0) rightPct=clampRightPct(prev.pct);
+    else if(typeof prev.w==='number'&&Number.isFinite(prev.w)) rightPct=clampRightPct(prev.w/paneAvailW());
+    else rightPct=RIGHT_PCT_DEF;
     applyPaneWidths();
     const prt=(curMode==='study'&&prev.rt==='ai')?'studio':prev.rt;
     const t=$(`.rt[data-rt=${prt}]`)||$('.rt[data-rt=ai]');
@@ -2751,7 +2983,20 @@ function moveActiveTab(dir){
   renderTabs();
   saveSessionTabs();
 }
+function syncWindowTitle(){
+  if(typeof GCAL!=='undefined'&&GCAL.pomo&&GCAL.pomo.running&&GCAL.pomo.sec>0) return;
+  if(document.title.startsWith('🔔')) return;
+  const info=typeof active!=='undefined'?pg(active):null;
+  const tabName=(info&&info.t?String(info.t).trim():'');
+  const nextTitle=tabName?`AgyDesk - ${tabName}`:'AgyDesk';
+  if(document.title!==nextTitle){
+    document.title=nextTitle;
+    try{ if(window.ipc&&typeof window.ipc.postMessage==='function') window.ipc.postMessage('title:'+nextTitle); }catch(e){}
+  }
+}
+
 function renderTabs(){
+  syncWindowTitle();
   ensureTabBarHoverListeners();
   const t=$('#tabs'); t.innerHTML='';
   if(_tabWidthLocked&&_lockedTabW>0){
@@ -3814,7 +4059,7 @@ function aiBody(id){
   if(isEmptyAiWelcome(id)) return aiHeroHtml();
   const live=(s.running&&s.streamText)?`<div class="msg-row a"><div class="msg a live-stream" data-sid="${escAttr(id)}">${escHtml(s.streamText)}</div></div>`:'';
   return (s.caveman?'<div class="mchip">🪨 caveman modu açık</div>':'')+s.msgs.map((x,i)=>renderMsgRowHtml(id,x,i,false)).join('')+live+
-    (s.running?`<div class="run" data-run-sid="${escAttr(id)}"><span class="spin"></span> Çalışıyor…<div class="st" data-step-sid="${escAttr(id)}">${escHtml(s.step||'')}</div><div class="prog"><i></i></div></div>`:'');
+    (s.running?`<div class="run" data-run-sid="${escAttr(id)}"><span class="spin"></span> <span data-step-sid="${escAttr(id)}">${escHtml(s.step||'Çalışıyor…')}</span></div>`:'');
 }
 function updateChatStepInPlace(sid,stepText){
   const els=$$('[data-step-sid]').filter(el=>el.dataset.stepSid===sid);
@@ -3909,10 +4154,10 @@ function clearSrcAi(){
 function escAttr(v){
   return String(v||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
-const isChatImageFile=f=>f&&((f.type&&f.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
+const isChatImageFile=f=>f&&((f.type&&f.type.startsWith('image/'))||/\.(png|jpe?g|jfif|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
 function normalizedChatImgName(f){
   const raw=(f&&f.name)||'';
-  if(/\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(raw)) return raw;
+  if(/\.(png|jpe?g|jfif|gif|webp|bmp|svg|avif)$/i.test(raw)) return raw;
   const extMap={'image/jpeg':'.jpg','image/jpg':'.jpg','image/webp':'.webp','image/gif':'.gif','image/bmp':'.bmp','image/svg+xml':'.svg','image/avif':'.avif'};
   const ext=extMap[(f&&f.type||'').toLowerCase()]||'.png';
   const base=raw.replace(/\.[^.]+$/,'')||'ekran_goruntusu';
@@ -3929,6 +4174,48 @@ function handleChatImgSelect(files){
   chatImgTarget=null;
   if(files&&files.length) attachChatImages(target,files);
 }
+const MAX_UPLOAD_BYTES=100*1024*1024;
+async function uploadAssetFile(file,name,noteTarget){
+  if(!file) throw new Error('Dosya seçilmedi');
+  if(typeof file.size==='number'){
+    if(file.size===0) throw new Error('Seçilen dosya boş (0 bayt)');
+    if(file.size>MAX_UPLOAD_BYTES) throw new Error('Dosya 100 MB sınırını aşıyor');
+  }
+  let buf;
+  try{
+    buf=await file.arrayBuffer();
+  }catch(e){
+    throw new Error('Dosya okunamadı (OneDrive çevrimiçi dosya veya erişim engeli olabilir)');
+  }
+  if(!buf||!buf.byteLength) throw new Error('Dosya içeriği boş');
+  const url=`/api/upload?name=${encodeURIComponent(name)}&note=${encodeURIComponent(noteTarget||'')}`;
+  let r;
+  try{
+    r=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':(file.type||'application/octet-stream')},
+      body:buf
+    });
+  }catch(err){
+    let alive=false;
+    try{ const p=await fetch('/api/ping',{cache:'no-store'}); alive=p.ok; }catch(_){}
+    if(!alive) throw new Error('AgyDesk yerel sunucusuna (127.0.0.1:8780) ulaşılamıyor — uygulamayı yeniden açın');
+    throw new Error((err&&err.message)||'Ağ yükleme hatası');
+  }
+  if(!r.ok){
+    let m=r.statusText||('HTTP '+r.status);
+    try{
+      const txt=await r.text();
+      if(txt){
+        try{ const j=JSON.parse(txt); m=j.detail||j.error||m; }
+        catch(_){ m=txt.slice(0,220); }
+      }
+    }catch(_){}
+    if(r.status===413) m='Dosya boyutu sunucu sınırını aşıyor (maks. 100 MB)';
+    throw new Error(m);
+  }
+  return await r.json();
+}
 async function attachChatImages(sessionId,fileList){
   const s=ai[sessionId]; if(!s) return;
   if(!s.attachments) s.attachments=[];
@@ -3939,9 +4226,7 @@ async function attachChatImages(sessionId,fileList){
   if(imgs.length>left) toast('İlk '+left+' görsel eklendi (maksimum 8)');
   for(const f of imgs.slice(0,left)){
     try{
-      const r=await fetch(`/api/upload?name=${encodeURIComponent(normalizedChatImgName(f))}&note=.chat_images`,{method:'POST',body:f});
-      if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
-      const u=await r.json();
+      const u=await uploadAssetFile(f,normalizedChatImgName(f),'.chat_images');
       s.attachments.push({rel:u.rel,name:u.name,url:'/api/raw/'+encodeURI(u.rel)});
     }catch(e){ toast('⚠ Görsel yüklenemedi: '+e.message); }
   }
@@ -4193,7 +4478,8 @@ function guardDecide(sessId,reqId,rootKey,allow){
   const remember=!!(allow&&cb&&cb.checked);
   if(s){ s.msgs=s.msgs.filter(m=>m.guardId!==reqId); aiRefresh(sessId); }
   api('/api/guard/decide',{id:reqId,session:sessId,allow,remember,root_key:rootKey}).catch(()=>{});
-  logAct(sessId, allow?`✓ Klasör erişimi onaylandı (${rootKey}${remember?' · oturum boyunca':''})`:`✗ Klasör erişimi reddedildi (${rootKey})`, allow?'ok':'w');
+  const kind=rootKey==='shell'?'Terminal komutu':(rootKey==='browser'?'Chrome tarayıcı erişimi':'Klasör erişimi');
+  logAct(sessId, allow?`✓ ${kind} onaylandı (${rootKey}${remember?' · oturum boyunca':''})`:`✗ ${kind} reddedildi (${rootKey})`, allow?'ok':'w');
 }
 function approve(id,yes){
   const s=ai[id],p=s.pending; if(!p)return;
@@ -4201,6 +4487,35 @@ function approve(id,yes){
   s.msgs=s.msgs.filter(m=>!m.ap); s.pending=null;
   if(yes){logAct(id,`✓ Onaylandı: ${p.text||'[Görsel]'}`,'ok'); aiSend(id,p.text,p.skill,true,true,p.images||[]);}
   else{s.msgs.push({w:'a',h:'✗ Reddedildi. İşlem yapılmadı.'}); logAct(id,`✗ Reddedildi: ${p.text||'[Görsel]'}`,'w'); aiRefresh(id);}
+}
+function getVisibleApprovalSession(){
+  const candidates=[];
+  if(active==='studychat') candidates.push(getStudySessId());
+  else if(isAI(active)) candidates.push(active);
+  if(!app.classList.contains('no-right')&&$('#rb-ai.on')) candidates.push('side_ai');
+  for(const sid of candidates){
+    const s=ai[sid];
+    if(!s) continue;
+    if(s.msgs&&s.msgs.some(m=>m.guardId)) return sid;
+    if(s.pending) return sid;
+  }
+  return null;
+}
+function triggerActiveApproval(sessId,allow){
+  const sid=sessId||getVisibleApprovalSession();
+  const s=sid&&ai[sid]; if(!s) return false;
+  for(let idx=(s.msgs||[]).length-1;idx>=0;idx--){
+    const m=s.msgs[idx];
+    if(m&&m.guardId){
+      guardDecide(sid,m.guardId,m.guardRootKey||'',allow);
+      return true;
+    }
+  }
+  if(s.pending){
+    approve(sid,allow);
+    return true;
+  }
+  return false;
 }
 const chatDrafts={};
 function renderAI(m){
@@ -4227,7 +4542,7 @@ function renderAI(m){
     inp.value='';autoGrow(inp);syncGemBoxState(inp);aiSend(active,v);
   };
   if(inp){ inp.dataset.sessId=active; if(chatDrafts[active]){ inp.value=chatDrafts[active]; autoGrow(inp); syncGemBoxState(inp); } }
-  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();go()}}; inp.oninput=()=>{chatDrafts[active]=inp.value;autoGrow(inp);syncGemBoxState(inp);}; wireAiSlash(inp); inp.focus();
+  $('#aiSend').onclick=go; inp.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();e.stopPropagation();if(!inp.value.trim()&&triggerActiveApproval(active,true))return;go()}}; inp.oninput=()=>{chatDrafts[active]=inp.value;autoGrow(inp);syncGemBoxState(inp);}; wireAiSlash(inp); inp.focus();
   wireChatDrop($('#aidrop'),()=>active,k=>{if(SK[k])aiSend(active,SK[k].prompt||('Skill: '+SK[k].h),k);});
   wireChatDrop($('#aichat'),()=>active);
   renderChatAttachments(active);
@@ -4323,16 +4638,36 @@ async function aiSend(id,text,skill,ok,resume,explicitImgs,extraOpts){
     s.running=false;
     s.pending={text:rawText,skill,risk:res.risk,images:imgs};
     const why=res.risk==='risky'?'Riskli işlem (silme / dış gönderim / geri alınamaz)':'Dosya yazma / komut çalıştırma';
-    s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${(rawText||'[Görsel analizi]').replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button class="btn" onclick="approve('${id}',true)">İzin ver</button><button class="hb" onclick="approve('${id}',false)">Reddet</button></div></div>`});
+    s.msgs.push({w:'a',ap:true,h:`<div class="appr"><b>⚠ Onay gerekli</b><div>${why}:<br><code>${(rawText||'[Görsel analizi]').replace(/</g,'&lt;')}</code></div><label><input type="checkbox" id="alw-${id}"> Bu oturumda bu tür işlemlere hep izin ver</label><div class="ab"><button type="button" class="btn" data-appr-allow="1" onclick="approve('${id}',true)">İzin ver (Enter)</button><button type="button" class="hb" data-appr-deny="1" onclick="approve('${id}',false)">Reddet</button></div></div>`});
     aiRefresh(id); return;
   }
   s._scrollToLastReply=false;
   s.running=true; s.checkpoints=res.checkpoints; s.step='Yönlendiriliyor → '+res.route.label;
   if(!updateChatStepInPlace(id,s.step)) aiRefresh(id);
 }
+async function autoOpenTouchedFiles(touched){
+  if(!Array.isArray(touched)||!touched.length) return;
+  await loadVault();
+  const f=touched[0];
+  if(!f) return;
+  if(f.in_vault&&f.rel){
+    const noteId='note:'+f.rel;
+    if(typeof removePdfSlot==='function'&&String(f.ext||'').toLowerCase()==='.pdf') removePdfSlot(noteId);
+    if(curMode==='ai'){
+      writeNoRight=false;
+      layoutMode('write');
+      rtab('ai');
+    }
+    openDocInTab(f.rel,f.name||f.rel.split('/').pop());
+  }else if(f.path){
+    if(typeof openRightViewer==='function') await openRightViewer(f.path,f.name);
+  }
+}
 /* ---------- Sunucu olayları (SSE) ---------- */
 function startEvents(){
+  if(window._agyEs){ try{window._agyEs.close();}catch(_){} }
   const es=new EventSource('/api/events');
+  window._agyEs=es;
   es.onmessage=e=>{
     const d=JSON.parse(e.data), s=ai[d.session];
     if(d.win_id&&d.win_id!==WIN_ID) return;
@@ -4347,13 +4682,17 @@ function startEvents(){
     }
     else if(d.event==='guard_approval'&&s){
       s.msgs=s.msgs.filter(m=>m.guardId!==d.id);
-      const actEsc=escHtml(d.action||'Erişim');
+      const isShell=d.root_key==='shell';
+      const isBrowser=d.root_key==='browser';
+      const actEsc=escHtml(d.action||(isShell?'Terminal Komutu':(isBrowser?'Chrome Tarayıcı Erişimi':'Erişim')));
       const lblEsc=escHtml(d.root_label||d.root_key||'Kişisel Klasör');
       const pathEsc=escHtml(d.path||'');
       const dstHtml=d.dst_path?` → <code>${escHtml(d.dst_path)}</code>`:'';
       const sidA=escAttr(d.session), idA=escAttr(d.id), rkA=escAttr(d.root_key||'');
-      s.msgs.push({w:'a',guardId:d.id,h:`<div class="appr"><b>🔐 Klasör Erişim Onayı · ${lblEsc}</b><div>${actEsc}:<br><code>${pathEsc}</code>${dstHtml}</div><label><input type="checkbox" id="galw-${idA}"> Bu oturumda "${lblEsc}" klasörüne hep izin ver</label><div class="ab"><button class="btn" onclick="guardDecide('${sidA}','${idA}','${rkA}',true)">İzin ver</button><button class="hb" onclick="guardDecide('${sidA}','${idA}','${rkA}',false)">Reddet</button></div></div>`});
-      if(isStudySessId(d.session)&&active!=='studychat'){ toast(`🔐 AgyStudy erişim onayı bekliyor (${d.root_label||'Klasör'})`,'studychat'); }
+      const titleHtml=isShell?`🔐 Terminal Komutu Onayı · AgyStudy`:(isBrowser?`🌐 Chrome Tarayıcı Erişim Onayı · Açık Pencere`:`🔐 Klasör Erişim Onayı · ${lblEsc}`);
+      const rememberTxt=isShell?`Bu oturumda terminal komutlarına hep izin ver`:(isBrowser?`Bu oturumda Chrome tarayıcı erişimine hep izin ver`:`Bu oturumda "${lblEsc}" klasörüne hep izin ver`);
+      s.msgs.push({w:'a',guardId:d.id,guardRootKey:d.root_key||'',h:`<div class="appr"><b>${titleHtml}</b><div>${actEsc}:<br><code>${pathEsc}</code>${dstHtml}</div><label><input type="checkbox" id="galw-${idA}"> ${rememberTxt}</label><div class="ab"><button type="button" class="btn" data-appr-allow="1" onclick="guardDecide('${sidA}','${idA}','${rkA}',true)">İzin ver (Enter)</button><button type="button" class="hb" data-appr-deny="1" onclick="guardDecide('${sidA}','${idA}','${rkA}',false)">Reddet</button></div></div>`});
+      if(isStudySessId(d.session)&&active!=='studychat'){ toast(isShell?`🔐 AgyStudy terminal komutu onayı bekliyor`:(isBrowser?`🌐 AgyStudy Chrome erişim onayı bekliyor`:`🔐 AgyStudy erişim onayı bekliyor (${d.root_label||'Klasör'})`),'studychat'); }
       aiRefresh(d.session);
     }
     else if(d.event==='guard_approval_done'&&s){
@@ -4362,7 +4701,10 @@ function startEvents(){
       if(s.msgs.length!==before) aiRefresh(d.session);
     }
     else if(d.event==='done'&&s){
+      const wasRunning=!!s.running;
       s.running=false; s.streamText=''; if(d.quota)applyQuota(d.quota);
+      const prevMsg=s.msgs[s.msgs.length-1];
+      if(prevMsg&&prevMsg.w==='a'&&prevMsg.raw===d.reply){ aiRefresh(d.session); return; }
       linkifyAndOpen(d.reply);
       const r=d.route, c=r.provider==='local'?'l':'c', safe=mdToHtml(d.reply);
       const effChip=d.effort?`<span class="chip">${d.effort}</span>`:'';
@@ -4373,7 +4715,7 @@ function startEvents(){
       s.msgs.push({w:'a',h,raw:d.reply});
       s._scrollToLastReply=true;
       if(isStudySessId(d.session)&&studioPendingTitle){ studioAdd(studioPendingTitle,d.reply,safe,getStudyKasaKey(d.session)); studioPendingTitle=null; }
-      api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
+      if(wasRunning) api('/api/chats',{session:d.session,w:'a',h}).catch(()=>{});
       if(!isSideId(d.session)&&isAI(d.session)) touchAiMeta(d.session,{updatedAt:Math.floor(Date.now()/1000),setLastActive:d.session===active});
       if(d.session==='side_ai' && $('#outs')){
         const outBox=document.createElement('div'); outBox.className='out';
@@ -4384,7 +4726,8 @@ function startEvents(){
       if(isStudySessId(d.session)&&active!=='studychat'){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,'studychat');}
       else if(!isSideId(d.session)&&active!==d.session){s.unread=true;toast(`✓ "${s.title}" tamamlandı`,d.session);}
       aiRefresh(d.session);
-      loadVault();
+      if(Array.isArray(d.touched_files)&&d.touched_files.length) autoOpenTouchedFiles(d.touched_files);
+      else loadVault();
     }
     else if(d.event==='auth'){
       lastHealthData.auth_running=d.status==='pending';
@@ -5235,9 +5578,7 @@ async function handleGlobalUpload(fileList){
     }
     const uploaded=[];
     for(const f of fileList){
-      const r=await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(targetRel)}`,{method:'POST',body:f});
-      if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
-      uploaded.push(await r.json());
+      uploaded.push(await uploadAssetFile(f,f.name,targetRel));
     }
     if(targetRel){
       TREE_OPEN[targetRel.split('/')[0]]=true;
@@ -5422,14 +5763,22 @@ function invalidateNoteDomCache(id){
 function getPdfSlot(id){
   return pdfSlotMap.get(id)||null;
 }
+function disposePdfSlot(slot){
+  if(!slot) return;
+  if(slot.dataset&&slot.dataset.blobUrl){
+    try{ URL.revokeObjectURL(slot.dataset.blobUrl); }catch(e){}
+    delete slot.dataset.blobUrl;
+  }
+  slot.remove();
+}
 function removePdfSlot(id){
   const slot=pdfSlotMap.get(id);
-  if(slot){ slot.remove(); pdfSlotMap.delete(id); }
+  if(slot){ disposePdfSlot(slot); pdfSlotMap.delete(id); }
 }
 function syncPdfSlotsWithTabs(){
   const keep=new Set(openTabs);
   for(const [id,slot] of pdfSlotMap.entries()){
-    if(!keep.has(id)){ slot.remove(); pdfSlotMap.delete(id); }
+    if(!keep.has(id)){ disposePdfSlot(slot); pdfSlotMap.delete(id); }
   }
   for(const id of noteDomCache.keys()){
     if(!keep.has(id)) noteDomCache.delete(id);
@@ -5488,26 +5837,39 @@ function saveImgRot(id,rot){
 }
 function getPdfState(id){
   if(!pdfState[id]){
-    pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:localStorage.getItem('agydesk_pdf_filter')||'normal',drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
+    const savedFlt=localStorage.getItem('agydesk_pdf_filter');
+    const initFlt=(savedFlt==='normal'||savedFlt==='night'||savedFlt==='sepia')?savedFlt:'sepia';
+    pdfState[id]={page:1,totalPages:0,zoom:'FitH',filter:initFlt,drawer:null,scratch:localStorage.getItem('agydesk_scratch_'+id)||''};
   }
   return pdfState[id];
 }
 function buildPdfUrl(rel,st,bust=false){
   const z=st.zoom||'FitH';
   const zoomParam=(z==='FitH'||z==='Fit')?`view=${z}`:`zoom=${z}`;
-  const q=bust?`?_pv=${++_pdfNavSeq}`:'';
-  return `/api/raw/${encodeURI(rel)}${q}#page=${st.page||1}&${zoomParam}`;
+  const q=bust?`_pv=${++_pdfNavSeq}`:'';
+  return `${rawUrlForRel(rel,q)}#page=${st.page||1}&${zoomParam}`;
 }
 function updatePdfFrame(id,reloadHash=false){
   const st=getPdfState(id);
   const slot=getPdfSlot(id);
   const root=slot||document;
-  const wrap=slot?slot.querySelector('.pdf-frame-wrap'):$('#pdfFrameWrap');
+  const wrap=slot?slot.querySelector('.pdf-frame-wrap, .pptx-stage, .xlsx-stage, .img-studio'):$('#pdfFrameWrap');
   if(wrap){
     wrap.classList.toggle('night',st.filter==='night');
     wrap.classList.toggle('sepia',st.filter==='sepia');
+    const ifr=wrap.querySelector('iframe');
+    if(ifr&&ifr.style.filter) ifr.style.filter='';
   }
   root.querySelectorAll('.pdf-flt-btn').forEach(b=>b.classList.toggle('on',b.dataset.flt===st.filter));
+  root.querySelectorAll('.pdf-dd[title="Okuma Modu"]').forEach(dd=>{
+    const m={normal:'☀ Orijinal',night:'🌙 Gece',sepia:'📜 Sepya'}[st.filter||'normal']||'☀ Orijinal';
+    const btn=dd.firstElementChild;
+    if(btn) btn.textContent=m+' ▾';
+    dd.querySelectorAll('.pdf-dd-menu button').forEach(b=>{
+      const flt=b.dataset.flt;
+      b.classList.toggle('on',flt?flt===st.filter:Boolean(b.getAttribute('onclick')?.includes(`'${st.filter}'`)));
+    });
+  });
   root.querySelectorAll('.pdf-zm-btn').forEach(b=>b.classList.toggle('on',b.dataset.zm===String(st.zoom)));
   const pgIn=slot?slot.querySelector('.pg-in'):$('#pdfPgIn');
   if(pgIn&&document.activeElement!==pgIn) pgIn.value=st.page;
@@ -5524,11 +5886,26 @@ function updatePdfFrame(id,reloadHash=false){
     }
   }
 }
+function closePdfDds(){
+  document.querySelectorAll('.pdf-dd.open').forEach(d=>d.classList.remove('open'));
+}
+function togglePdfDd(btn){
+  const dd=btn?.closest('.pdf-dd');
+  if(!dd) return;
+  const was=dd.classList.contains('open');
+  closePdfDds();
+  if(!was) dd.classList.add('open');
+}
+document.addEventListener('click',e=>{
+  if(!e.target.closest?.('.pdf-dd')) closePdfDds();
+});
+
 function setPdfFilter(id,flt){
-  const st=getPdfState(id);
-  st.filter=(st.filter===flt&&flt!=='normal')?'normal':flt;
+  const targetId=id||active;
+  const st=getPdfState(targetId);
+  st.filter=(flt==='night'||flt==='sepia'||flt==='normal')?flt:'normal';
   persistUiState({agydesk_pdf_filter:st.filter});
-  updatePdfFrame(id,false);
+  updatePdfFrame(targetId,false);
 }
 function setPdfZoom(id,zm){
   const st=getPdfState(id);
@@ -5699,10 +6076,104 @@ function evictPptxPdf(rel){
   if(!rel) return;
   fetch('/api/pptx_pdf?rel='+encodeURIComponent(rel),{method:'DELETE'}).catch(()=>{});
 }
-async function openPptxAsRamPdf(rel,stageEl,btnEl,nightMode){
+function evictXlsxPdf(rel){
+  if(!rel) return;
+  fetch('/api/xlsx_pdf?rel='+encodeURIComponent(rel),{method:'DELETE'}).catch(()=>{});
+}
+async function openXlsxAsRamPdf(rel,stageEl,btnEl,nightMode){
   if(!stageEl) return;
+  if(btnEl){ btnEl.disabled=true; btnEl.textContent='⏳ Excel RAM PDF hazırlanıyor…'; }
+  stageEl.style.padding='0';
+  stageEl.innerHTML=`<div style="padding:40px;color:var(--mut);text-align:center"><span class="spin"></span> Tablo yatay sayfaya sığdırılıp PDF'e dönüştürülüyor (diskte tutulmaz, kapanınca RAM'den silinir)…</div>`;
+  try{
+    const url='/api/xlsx_pdf?rel='+encodeURIComponent(rel);
+    const resp=await fetch(url);
+    if(!resp.ok){
+      const msg=await resp.text();
+      throw new Error(msg||('HTTP '+resp.status));
+    }
+    const blob=await resp.blob();
+    const blobUrl=URL.createObjectURL(blob);
+    const useCssFilter=stageEl.classList.contains('xlsx-stage')&&stageEl.id==='pdfFrameWrap';
+    const filt=(!useCssFilter&&nightMode)?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
+    stageEl.innerHTML=`<iframe src="${blobUrl}#view=FitH" style="flex:1;width:100%;height:100%;min-height:70vh;border:0;background:#fff;${filt}"></iframe>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='⊞ Tablo Görünümüne Dön'; }
+  }catch(e){
+    stageEl.style.padding='';
+    stageEl.innerHTML=`<div style="padding:24px;color:var(--err)"><b>PDF Dönüştürme Hatası</b><p>${escHtml(e.message)}</p></div>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='📄 Tam Görünüm (RAM PDF)'; }
+  }
+}
+function xlsxColLetter(idx){
+  let s='', n=idx;
+  while(n>=0){ s=String.fromCharCode(65+(n%26))+s; n=Math.floor(n/26)-1; }
+  return s;
+}
+function mountXlsxViewer(stageEl,d){
+  if(!stageEl) return;
+  const sheets=(d&&d.sheets)||[];
+  if(!sheets.length){
+    stageEl.innerHTML=`<div style="padding:24px;color:var(--mut)">${escHtml((d&&d.note)||'Bu dosyada okunabilir sayfa bulunamadı.')}</div>`;
+    return;
+  }
+  let curIdx=0, filterQ='';
+  const render=()=>{
+    const sh=sheets[curIdx]||sheets[0];
+    const colCount=Math.max(1,sh.col_count||0);
+    const allRows=sh.rows||[];
+    const q=filterQ.trim().toLowerCase();
+    const visible=[];
+    allRows.forEach((r,i)=>{
+      if(!q || i===0 || r.some(c=>String(c||'').toLowerCase().includes(q))){
+        visible.push({idx:i+1, cells:r});
+      }
+    });
+    const tabsHtml=sheets.map((s,i)=>`<button class="xlsx-tab${i===curIdx?' on':''}" data-si="${i}">${escHtml(s.name)}</button>`).join('');
+    let th='<tr><th class="xlsx-rn">#</th>';
+    for(let c=0;c<colCount;c++) th+=`<th>${xlsxColLetter(c)}</th>`;
+    th+='</tr>';
+    const tbody=visible.map(({idx,cells})=>{
+      let tds=`<td class="xlsx-rn">${idx}</td>`;
+      for(let c=0;c<colCount;c++){
+        const raw=cells[c]!=null?String(cells[c]):'';
+        const isNum=raw!=='' && /^[+-]?\d+([.,]\d+)?(%|₺|\$|€)?$/.test(raw.trim());
+        tds+=`<td class="${isNum?'num':''}" title="${escAttr(raw)}">${escHtml(raw)}</td>`;
+      }
+      return `<tr class="${idx===1?'xlsx-first-row':''}">${tds}</tr>`;
+    }).join('');
+    const meta=`${visible.length}/${allRows.length} satır · ${colCount} sütun${sh.truncated?' · (kısmi)':''}`;
+    stageEl.innerHTML=`
+      <div class="xlsx-toolbar">
+        <div class="xlsx-tabs">${tabsHtml}</div>
+        <div class="xlsx-tools-r">
+          <input type="text" class="xlsx-search" placeholder="Tabloda ara…" value="${escAttr(filterQ)}">
+          <span class="xlsx-meta mono">${meta}</span>
+        </div>
+      </div>
+      <div class="xlsx-grid-wrap">
+        <table class="xlsx-table"><thead>${th}</thead><tbody>${tbody}</tbody></table>
+      </div>`;
+    stageEl.querySelectorAll('.xlsx-tab').forEach(btn=>{
+      btn.onclick=()=>{ curIdx=parseInt(btn.dataset.si,10)||0; render(); };
+    });
+    const inp=stageEl.querySelector('.xlsx-search');
+    if(inp){
+      inp.oninput=(ev)=>{
+        const pos=ev.target.selectionStart;
+        filterQ=ev.target.value;
+        render();
+        const ni=stageEl.querySelector('.xlsx-search');
+        if(ni){ ni.focus(); ni.setSelectionRange(pos,pos); }
+      };
+    }
+  };
+  render();
+}
+async function openPptxAsRamPdf(rel,stageEl,btnEl,filterMode){
+  if(!stageEl) return false;
   if(btnEl){ btnEl.disabled=true; btnEl.textContent='⏳ PowerPoint RAM PDF hazırlanıyor…'; }
   stageEl.style.padding='0';
+  stageEl.style.overflow='hidden';
   stageEl.innerHTML=`<div style="padding:40px;color:#ccc;text-align:center"><span class="spin"></span> Sunum arka planda PDF'e dönüştürülüyor (diskte dosya tutulmaz, kapanınca RAM'den silinir)…</div>`;
   try{
     const url='/api/pptx_pdf?rel='+encodeURIComponent(rel);
@@ -5713,13 +6184,29 @@ async function openPptxAsRamPdf(rel,stageEl,btnEl,nightMode){
     }
     const blob=await resp.blob();
     const blobUrl=URL.createObjectURL(blob);
-    const filt=nightMode?'filter:invert(0.90) hue-rotate(180deg) contrast(0.96);':'';
-    stageEl.innerHTML=`<iframe src="${blobUrl}#view=FitH" style="flex:1;width:100%;height:100%;min-height:70vh;border:0;background:#fff;${filt}"></iframe>`;
-    if(btnEl){ btnEl.disabled=false; btnEl.textContent='✓ RAM PDF Aktif'; }
+    const slot=stageEl.closest?.('.pdf-tab-slot');
+    if(slot){
+      if(slot.dataset.blobUrl){
+        try{ URL.revokeObjectURL(slot.dataset.blobUrl); }catch(e){}
+      }
+      slot.dataset.blobUrl=blobUrl;
+    }
+    const useCssFilter=stageEl.classList.contains('pptx-stage');
+    let filt='';
+    if(!useCssFilter){
+      const mode=(typeof filterMode==='string')?filterMode:(filterMode?'night':'normal');
+      const f=(RV_MODES[mode]||RV_MODES.normal).filt;
+      if(f&&f!=='none') filt=`filter:${f};`;
+    }
+    stageEl.innerHTML=`<iframe class="pdf-main-frame" src="${blobUrl}#view=FitH" style="flex:1;width:100%;height:100%;min-height:0;border:0;background:#fff;transition:filter .2s;${filt}"></iframe>`;
+    if(btnEl){ btnEl.disabled=false; btnEl.textContent='⚡ Hızlı Slaytlar'; }
+    return true;
   }catch(e){
     stageEl.style.padding='';
+    stageEl.style.overflow='auto';
     stageEl.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">PDF Dönüştürme Hatası</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
     if(btnEl){ btnEl.disabled=false; btnEl.textContent='📄 Tam Görünüm (RAM PDF)'; }
+    return false;
   }
 }
 function renderPptxSlidesHtml(d){
@@ -5786,6 +6273,7 @@ async function renderVaultNote(m,id){
     }
     if(slot){ slot.remove(); pdfSlotMap.delete(id); }
 
+    const modeMeta={normal:{ic:'☀',lbl:'Orijinal'},night:{ic:'🌙',lbl:'Gece'},sepia:{ic:'📜',lbl:'Sepya'}}[st.filter||'normal']||{ic:'☀',lbl:'Orijinal'};
     slot=document.createElement('div');
     slot.className='pdf-tab-slot active';
     slot.dataset.pdfId=id;
@@ -5796,24 +6284,32 @@ async function renderVaultNote(m,id){
         </div>
         <span class="pdf-badge pdf-meta-badge">${st.totalPages?`${st.totalPages} sayfa`:'PDF Stüdyosu'}</span>
 
-        <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
-          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')" title="Orijinal Beyaz Kağıt">☀ Orijinal</button>
-          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')" title="Gece Okuma Modu (Göz Yormayan Karanlık Filtre)">🌙 Gece</button>
-          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')" title="Sıcak Sepya Kitap Modu">📜 Sepya</button>
-        </div>
-
         <span style="flex:1"></span>
+
+        <div class="pdf-dd" title="Okuma Modu">
+          <button class="hb" onclick="event.stopPropagation();togglePdfDd(this)">${modeMeta.ic} ${modeMeta.lbl} ▾</button>
+          <div class="pdf-dd-menu">
+            <button data-flt="normal" class="${st.filter==='normal'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'normal');closePdfDds()">☀ Orijinal</button>
+            <button data-flt="night" class="${st.filter==='night'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'night');closePdfDds()">🌙 Gece</button>
+            <button data-flt="sepia" class="${st.filter==='sepia'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'sepia');closePdfDds()">📜 Sepya</button>
+          </div>
+        </div>
 
         <div class="pdf-grp">
           <button class="pdf-drw-btn ${st.drawer==='text'?'on':''}" data-drw="text" onclick="togglePdfDrawer('${id}','text')" title="PDF içindeki metinleri ve formülleri sayfa sayfa incele / kopyala">🔍 Metin &amp; OCR</button>
           <button class="pdf-drw-btn ${st.drawer==='scratch'?'on':''}" data-drw="scratch" onclick="togglePdfDrawer('${id}','scratch')" title="PDF okurken yan tarafta hızlı çalışma notu tut">✎ Not Tut</button>
         </div>
 
-        <button class="hb pdf-ai-btn" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()" title="Bu PDF'i AI kaynaklarına bağla/çıkar">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
-        <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')" title="Bu PDF'i sağdaki AI asistanına özetlet">✨ AI Özetle</button>
-        <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')" title="Bu PDF'ten A4 Sınav Föyü çıkar">▤ Sınav Föyü</button>
+        <div class="pdf-dd">
+          <button class="hb pdf-ai-btn" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':'border-color:var(--cu);color:var(--cu)'}" onclick="event.stopPropagation();togglePdfDd(this)" title="AI Araçları">✨ AI ▾</button>
+          <div class="pdf-dd-menu">
+            <button class="${isSrcChecked?'on':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));closePdfDds();renderMain()">${isSrcChecked?'✓ AI Kaynağı (Çıkar)':'＋ AI Kaynağına Bağla'}</button>
+            <button onclick="checkedSources.add('${rel}');rebuildTreeAndSources();closePdfDds();runSkill('ozet')">✨ AI ile Özetle</button>
+            <button onclick="checkedSources.add('${rel}');rebuildTreeAndSources();closePdfDds();runSkill('fisle')">▤ A4 Sınav Föyü Çıkar</button>
+          </div>
+        </div>
+
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Bu PDF'i sağ panele sabitleyip not sekmene geri dön (Yan Yana Çalışma)">📌 Sağ Panele Al</button>
-        <button class="hb" onclick="toggleZen()" title="Kenar panellerini gizle / Tam odak modu (Ctrl+.)">◐ Odak</button>
       </div>
       <div class="pdf-stage">
         <div class="pdf-frame-wrap ${filtCls}">
@@ -5855,58 +6351,94 @@ async function renderVaultNote(m,id){
     const st=getPdfState(id);
     const isSrcChecked=checkedSources.has(rel);
     const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
-    m.innerHTML=`<div class="pdf-studio">
+    const cacheStage=$('#pdfCacheStage');
+    let slot=getPdfSlot(id);
+    if(slot&&cacheStage&&slot.parentElement===cacheStage){
+      activatePdfCache(id);
+      const aiBtn=slot.querySelector('.pdf-ai-btn');
+      if(aiBtn){
+        aiBtn.style.borderColor=isSrcChecked?'var(--ok)':'var(--cu)';
+        aiBtn.style.color=isSrcChecked?'var(--ok)':'var(--cu)';
+      }
+      updatePdfFrame(id,false);
+      updateRightProps();
+      return;
+    }
+    if(slot){ disposePdfSlot(slot); pdfSlotMap.delete(id); }
+
+    const modeMeta={normal:{ic:'☀',lbl:'Orijinal'},night:{ic:'🌙',lbl:'Gece'},sepia:{ic:'📜',lbl:'Sepya'}}[st.filter||'normal']||{ic:'☀',lbl:'Orijinal'};
+    slot=document.createElement('div');
+    slot.className='pdf-tab-slot active';
+    slot.dataset.pdfId=id;
+    slot.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
         <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>📊</span><b>${p.t}</b></div>
-        <span class="pdf-badge" id="pptxMetaBadge">Sunum · PDF Görünümü</span>
-        <div class="pdf-grp" title="Okuma Modu (Gece / Sepya / Orijinal)">
-          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')">☀ Orijinal</button>
-          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')">🌙 Gece</button>
-          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')">📜 Sepya</button>
-        </div>
+        <span class="pdf-badge pptx-meta-badge">Sunum · PDF Görünümü</span>
         <span style="flex:1"></span>
-        <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));renderMain()">${isSrcChecked?'✓ AI Kaynağı':'＋ AI\'a Bağla'}</button>
-        <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')">✨ AI Özetle</button>
-        <button class="hb" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('fisle')">▤ Sınav Föyü</button>
-        <button class="hb" id="pptxRamPdfBtn" style="border-color:var(--cu);color:var(--cu)" title="PowerPoint ile RAM üzerinde birebir PDF görünümü aç (diske kaydetmez)">📄 Tam Görünüm (RAM PDF)</button>
-        <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
-        <button class="hb" onclick="window.print()" title="Sunumu PDF olarak kaydet / A4 Yazdır">🖨 PDF / Yazdır</button>
-        <button class="hb" onclick="toggleZen()">◐ Odak</button>
+        <div class="pdf-dd" title="Okuma Modu">
+          <button class="hb" onclick="event.stopPropagation();togglePdfDd(this)">${modeMeta.ic} ${modeMeta.lbl} ▾</button>
+          <div class="pdf-dd-menu">
+            <button data-flt="normal" class="${st.filter==='normal'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'normal');closePdfDds()">☀ Orijinal</button>
+            <button data-flt="night" class="${st.filter==='night'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'night');closePdfDds()">🌙 Gece</button>
+            <button data-flt="sepia" class="${st.filter==='sepia'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'sepia');closePdfDds()">📜 Sepya</button>
+          </div>
+        </div>
+        <div class="pdf-dd">
+          <button class="hb pdf-ai-btn" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':'border-color:var(--cu);color:var(--cu)'}" onclick="event.stopPropagation();togglePdfDd(this)" title="AI Araçları">✨ AI ▾</button>
+          <div class="pdf-dd-menu">
+            <button class="${isSrcChecked?'on':''}" onclick="onSourceCheck('${escAttr(rel)}',!checkedSources.has('${escAttr(rel)}'));closePdfDds();renderMain()">${isSrcChecked?'✓ AI Kaynağı (Çıkar)':'＋ AI Kaynağına Bağla'}</button>
+            <button onclick="checkedSources.add('${escAttr(rel)}');rebuildTreeAndSources();closePdfDds();runSkill('ozet')">✨ AI ile Özetle</button>
+            <button onclick="checkedSources.add('${escAttr(rel)}');rebuildTreeAndSources();closePdfDds();runSkill('fisle')">▤ A4 Sınav Föyü Çıkar</button>
+          </div>
+        </div>
+        <button class="hb pptx-ram-btn" style="border-color:var(--cu);color:var(--cu)" title="Tam Görünüm (RAM PDF) ile Hızlı Slaytlar arasında geçiş yap">⚡ Hızlı Slaytlar</button>
+        <button class="hb" onclick="openExternalTarget(null,'${escAttr(rel)}')" title="PowerPoint uygulamasında aç">↗ Uygulamada Aç</button>
+        <button class="hb" onclick="dockDocToRightAndReturn(this.closest('.pdf-tab-slot')?.dataset.pdfId||active)">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="printPdfFrame('${escAttr(rel)}')" title="Sunumu PDF olarak kaydet / A4 Yazdır">🖨</button>
       </div>
-      <div class="pptx-stage ${filtCls}" id="pdfFrameWrap">
-        <div style="padding:40px;color:#ccc"><span class="spin"></span> Sunum slaytları hazırlanıyor…</div>
+      <div class="pptx-stage ${filtCls}">
+        <div style="padding:40px;color:#ccc"><span class="spin"></span> Sunum tam görünüm (RAM PDF) hazırlanıyor…</div>
       </div>
     </div>`;
-    let pptxMode='fast', pptxData=null;
-    const ramBtn=$('#pptxRamPdfBtn');
-    const stage=$('#pdfFrameWrap');
-    const b=$('#pptxMetaBadge');
+    if(cacheStage){
+      cacheStage.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+      activatePdfCache(id);
+    }else{
+      m.innerHTML='';
+      m.appendChild(slot);
+      pdfSlotMap.set(id,slot);
+    }
+    let pptxMode='pdf', pptxData=null;
+    const ramBtn=slot.querySelector('.pptx-ram-btn');
+    const stage=slot.querySelector('.pptx-stage');
+    const b=slot.querySelector('.pptx-meta-badge');
+    const showFastSlides=async ()=>{
+      if(!pptxData) pptxData=await api('/api/pptx?rel='+encodeURIComponent(rel));
+      if(stage){ stage.style.padding=''; stage.style.overflow='auto'; stage.innerHTML=renderPptxSlidesHtml(pptxData); }
+      if(ramBtn) ramBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+      if(b) b.textContent=`${pptxData.count||0} slayt · Hızlı Görünüm`;
+    };
     if(ramBtn) ramBtn.onclick=async ()=>{
-      if(pptxMode==='pdf'&&pptxData){
+      if(pptxMode==='pdf'){
         pptxMode='fast';
-        if(stage){ stage.style.padding=''; stage.innerHTML=renderPptxSlidesHtml(pptxData); }
-        ramBtn.textContent='📄 Tam Görünüm (RAM PDF)';
-        if(b) b.textContent=`${pptxData.count||0} slayt · Hızlı Görünüm`;
-        evictPptxPdf(rel);
+        try{ await showFastSlides(); }catch(e){ if(stage) stage.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">Sunum okunamadı</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`; }
       }else{
         pptxMode='pdf';
-        await openPptxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
-        if(b) b.textContent='RAM PDF · Tam Görünüm';
+        const ok=await openPptxAsRamPdf(rel,stage,ramBtn,st.filter);
+        if(ok&&b) b.textContent='RAM PDF · Tam Görünüm';
       }
     };
-    try{
-      const d=await api('/api/pptx?rel='+encodeURIComponent(rel));
-      pptxData=d;
-      if(d&&d.is_legacy_ppt){
-        pptxMode='pdf';
-        await openPptxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
-        if(b) b.textContent='RAM PDF · Eski .ppt';
-      }else{
-        if(stage) stage.innerHTML=renderPptxSlidesHtml(d);
-        if(b) b.textContent=`${d.count||0} slayt · Hızlı Görünüm`;
+    const okPdf=await openPptxAsRamPdf(rel,stage,ramBtn,st.filter);
+    if(okPdf){
+      if(b) b.textContent='RAM PDF · Tam Görünüm';
+    }else{
+      pptxMode='fast';
+      try{
+        await showFastSlides();
+      }catch(e){
+        if(stage) stage.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">Sunum okunamadı</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
       }
-    }catch(e){
-      if(stage) stage.innerHTML=`<div class="pptx-slide"><div class="pptx-slide-head"><h2 class="pptx-slide-title">Sunum okunamadı</h2></div><div class="pptx-slide-body"><p>${escHtml(e.message)}</p></div></div>`;
     }
     updateRightProps();
     return;
@@ -5934,18 +6466,17 @@ async function renderVaultNote(m,id){
           <button class="${st.imgInv?'on':''}" onclick="const s=getPdfState('${id}');s.imgInv=!s.imgInv;renderMain()" title="Renkleri Ters Çevir (Şema/Tahta İnceleme)">◑ Kontrast</button>
         </div>
         <div class="pdf-grp" title="Okuma Modu">
-          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter('${id}','normal')">☀</button>
-          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter('${id}','night')">🌙</button>
-          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter('${id}','sepia')">📜</button>
+          <button class="pdf-flt-btn ${st.filter==='normal'?'on':''}" data-flt="normal" onclick="setPdfFilter(active,'normal')">☀</button>
+          <button class="pdf-flt-btn ${st.filter==='night'?'on':''}" data-flt="night" onclick="setPdfFilter(active,'night')">🌙</button>
+          <button class="pdf-flt-btn ${st.filter==='sepia'?'on':''}" data-flt="sepia" onclick="setPdfFilter(active,'sepia')">📜</button>
         </div>
         <span style="flex:1"></span>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')" title="Görseli sağ panele sabitleyip nota dön">📌 Sağ Panele Al</button>
         <button class="hb" onclick="window.print()" title="A4 Yazdır">🖨</button>
-        <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
       <div class="img-studio ${filtCls}" id="pdfFrameWrap">
         <div class="img-rot-box" style="zoom:${(st.imgZoom||100)/100}">
-          <img src="/api/raw/${encodeURI(rel)}" onload="fitImgStudio(this,${st.imgRot||0})" style="transform:rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
+          <img src="${rawUrlForRel(rel)}" onload="fitImgStudio(this,${st.imgRot||0})" style="transform:rotate(${st.imgRot||0}deg);${st.imgInv?'filter:invert(0.92) hue-rotate(180deg)':''}">
         </div>
       </div>
     </div>`;
@@ -5955,22 +6486,115 @@ async function renderVaultNote(m,id){
     return;
   }
 
+  if(/\.(xlsx?|xlsm|csv)$/i.test(ext)){
+    const st=getPdfState(id);
+    const isSrcChecked=checkedSources.has(rel);
+    const filtCls=st.filter==='night'?'night':(st.filter==='sepia'?'sepia':'');
+    const modeMeta={normal:{ic:'☀',lbl:'Orijinal'},night:{ic:'🌙',lbl:'Gece'},sepia:{ic:'📜',lbl:'Sepya'}}[st.filter||'normal']||{ic:'☀',lbl:'Orijinal'};
+    m.innerHTML=`<div class="pdf-studio">
+      <div class="pdf-bar">
+        <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>📗</span><b>${p.t}</b></div>
+        <span class="pdf-badge" id="xlsxMetaBadge">Excel · Tablo Görünümü</span>
+        <span style="flex:1"></span>
+        <div class="pdf-dd" title="Okuma Modu">
+          <button class="hb" onclick="event.stopPropagation();togglePdfDd(this)">${modeMeta.ic} ${modeMeta.lbl} ▾</button>
+          <div class="pdf-dd-menu">
+            <button data-flt="normal" class="${st.filter==='normal'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'normal');closePdfDds()">☀ Orijinal</button>
+            <button data-flt="night" class="${st.filter==='night'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'night');closePdfDds()">🌙 Gece</button>
+            <button data-flt="sepia" class="${st.filter==='sepia'?'on':''}" onclick="setPdfFilter(this.closest('.pdf-tab-slot')?.dataset.pdfId||active,'sepia');closePdfDds()">📜 Sepya</button>
+          </div>
+        </div>
+        <div class="pdf-dd">
+          <button class="hb" style="${isSrcChecked?'border-color:var(--ok);color:var(--ok)':'border-color:var(--cu);color:var(--cu)'}" onclick="event.stopPropagation();togglePdfDd(this)" title="AI Araçları">✨ AI ▾</button>
+          <div class="pdf-dd-menu">
+            <button class="${isSrcChecked?'on':''}" onclick="onSourceCheck('${rel}',!checkedSources.has('${rel}'));closePdfDds();renderMain()">${isSrcChecked?'✓ AI Kaynağı (Çıkar)':'＋ AI Kaynağına Bağla'}</button>
+            <button onclick="checkedSources.add('${rel}');rebuildTreeAndSources();closePdfDds();runSkill('ozet')">✨ AI ile Özetle</button>
+          </div>
+        </div>
+        <button class="hb" id="xlsxRamPdfBtn" style="border-color:var(--cu);color:var(--cu)" title="Excel ile yatay sığdırılmış RAM PDF görünümü aç (diske kaydetmez)">📄 Tam Görünüm</button>
+        <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
+        <button class="hb" onclick="window.print()" title="A4 Yazdır">🖨</button>
+      </div>
+      <div class="xlsx-stage ${filtCls}" id="pdfFrameWrap">
+        <div style="padding:40px;color:var(--mut)"><span class="spin"></span> Tablo yükleniyor…</div>
+      </div>
+    </div>`;
+    let xlsxMode='grid', xlsxData=null;
+    const ramBtn=$('#xlsxRamPdfBtn');
+    const stage=$('#pdfFrameWrap');
+    const b=$('#xlsxMetaBadge');
+    if(ramBtn) ramBtn.onclick=async ()=>{
+      if(xlsxMode==='pdf'&&xlsxData){
+        xlsxMode='grid';
+        mountXlsxViewer(stage,xlsxData);
+        ramBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+        if(b) b.textContent=`${(xlsxData.sheets||[]).length} sayfa · Tablo Görünümü`;
+        evictXlsxPdf(rel);
+      }else{
+        xlsxMode='pdf';
+        await openXlsxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
+        if(b) b.textContent='RAM PDF · Yatay Sığdırılmış';
+      }
+    };
+    try{
+      const d=await api('/api/xlsx?rel='+encodeURIComponent(rel));
+      xlsxData=d;
+      if(d&&d.is_legacy_xls){
+        xlsxMode='pdf';
+        await openXlsxAsRamPdf(rel,stage,ramBtn,st.filter==='night');
+        if(b) b.textContent='RAM PDF · Eski .xls';
+      }else{
+        mountXlsxViewer(stage,d);
+        if(b) b.textContent=`${(d.sheets||[]).length} sayfa · Tablo Görünümü`;
+      }
+    }catch(e){
+      if(stage) stage.innerHTML=`<div style="padding:24px;color:var(--err)"><b>Tablo okunamadı</b><p>${escHtml(e.message)}</p></div>`;
+    }
+    updateRightProps();
+    return;
+  }
+
   if(/\.(docx?)$/i.test(ext)){
     m.innerHTML=`<div class="pdf-studio">
       <div class="pdf-bar">
         <div class="pdf-title-wrap"><span>📘</span><b>${p.t}</b></div>
-        <span class="pdf-badge">Word Belgesi · ${p.folder||''}</span>
+        <span class="pdf-badge" id="docxMetaBadge">Word Belgesi · ${p.folder||''}</span>
         <span style="flex:1"></span>
+        <button class="hb" id="docxRamPdfBtn" style="border-color:var(--cu);color:var(--cu)" title="Word belgesini RAM üzerinde birebir PDF görünümünde aç">📄 Tam Görünüm (RAM PDF)</button>
+        <button class="hb" onclick="openExternalTarget(null,'${escAttr(rel)}')" title="Word uygulamasında aç">↗ Uygulamada Aç</button>
         <button class="hb" style="border-color:var(--cu);color:var(--cu)" onclick="checkedSources.add('${rel}');rebuildTreeAndSources();runSkill('ozet')">✨ AI Özetle</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
         <button class="hb" onclick="window.print()">🖨 A4 Yazdır</button>
       </div>
-      <div style="flex:1;overflow:auto;padding:8px 0"><div class="doc" id="docxMainBody"><span class="spin"></span> Word belgesi okunuyor…</div></div>
+      <div id="docxMainStage" style="flex:1;overflow:auto;display:flex;flex-direction:column;padding:8px 0"><div class="doc" id="docxMainBody"><span class="spin"></span> Word belgesi okunuyor…</div></div>
     </div>`;
+    let docxMode='html', docxHtml='';
+    const ramBtn=$('#docxRamPdfBtn');
+    const stage=$('#docxMainStage');
+    const renderDocxHtml=()=>{
+      if(!stage) return;
+      stage.style.padding='8px 0';
+      stage.innerHTML=`<div class="doc" id="docxMainBody"><h1>${p.t}</h1><div class="meta"><span>📘 ${p.folder||''}</span><span>·</span><span>${rel}</span></div><div class="rview-docx" style="padding:0">${docxHtml}</div></div>`;
+    };
+    if(ramBtn) ramBtn.onclick=async ()=>{
+      if(docxMode==='pdf'&&docxHtml){
+        docxMode='html';
+        renderDocxHtml();
+        ramBtn.textContent='📄 Tam Görünüm (RAM PDF)';
+      }else{
+        docxMode='pdf';
+        await openDocxAsRamPdf(rel,stage,ramBtn,false);
+      }
+    };
     try{
       const d=await api('/api/docx?rel='+encodeURIComponent(rel));
-      const host=$('#docxMainBody');
-      if(host) host.innerHTML=`<h1>${p.t}</h1><div class="meta"><span>📘 ${p.folder||''}</span><span>·</span><span>${rel}</span></div><div class="rview-docx" style="padding:0">${d.html}</div>`;
+      docxHtml=d.html||'';
+      if(d&&d.is_legacy_doc){
+        docxMode='pdf';
+        await openDocxAsRamPdf(rel,stage,ramBtn,false);
+      }else{
+        renderDocxHtml();
+      }
     }catch(e){
       const host=$('#docxMainBody');
       if(host) host.innerHTML=`<h1>Belge okunamadı</h1><p>${e.message}</p>`;
@@ -5996,11 +6620,11 @@ async function renderVaultNote(m,id){
         <div class="pdf-title-wrap" title="${p.folder||''} · ${rel}"><span>${p.i||'🌐'}</span><b>${p.t}</b></div>
         <span class="pdf-badge">${p.folder||''} · ${rel}</span>
         <span style="flex:1"></span>
-        <button class="hb" onclick="const s=getPdfSlot('${id}');const f=s&&s.querySelector('iframe.html-main-frame');if(f){f.src='/api/raw/${encodeURI(rel)}?_t='+Date.now();}" title="HTML sayfasını baştan yükle (sıfırla)">↻ Yenile</button>
+        <button class="hb" onclick="const s=getPdfSlot('${id}');const f=s&&s.querySelector('iframe.html-main-frame');if(f){f.src=rawUrlForRel('${escAttr(rel)}','_t='+Date.now());}" title="HTML sayfasını baştan yükle (sıfırla)">↻ Yenile</button>
         <button class="hb" onclick="dockDocToRightAndReturn('${id}')">📌 Sağ Panele Al</button>
         <button class="hb" onclick="toggleZen()">◐ Odak</button>
       </div>
-      <iframe class="html-main-frame" src="/api/raw/${encodeURI(rel)}" style="flex:1;border:0;width:100%;background:#fff"></iframe>
+      <iframe class="html-main-frame" src="${rawUrlForRel(rel)}" style="flex:1;border:0;width:100%;background:#fff"></iframe>
     </div>`;
     if(stage){
       stage.appendChild(slot);
@@ -7819,14 +8443,12 @@ function scrollToNotionBlock(idx){
 }
 
 /* ---------- Not içine görsel / PDF / DOCX sürükle-bırak & yapıştır ---------- */
-const isUploadable=f=>f&&(f.type.startsWith('image/')||/\.(pdf|docx?|pptx?|xlsx?|csv|txt|md|html|png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
+const isUploadable=f=>f&&(f.type.startsWith('image/')||/\.(pdf|docx?|pptx?|xlsx?|csv|txt|md|html|png|jpe?g|jfif|gif|webp|bmp|svg|avif)$/i.test(f.name||''));
 async function uploadImages(files,rel){
   const out=[];
   for(const f of files){
     if(!isUploadable(f))continue;
-    const r=await fetch(`/api/upload?name=${encodeURIComponent(f.name||'gorsel.png')}&note=${encodeURIComponent(rel)}`,{method:'POST',body:f});
-    if(!r.ok){let m=r.statusText;try{m=(await r.json()).detail||m}catch(e){}throw new Error(m)}
-    out.push(await r.json());
+    out.push(await uploadAssetFile(f,f.name||'gorsel.png',rel));
   }
   return out;
 }
@@ -8016,7 +8638,16 @@ const isLightTheme=()=>typeof curTheme!=='undefined'&&(curTheme==='mono-light'||
 const gcalInk=k=>(isLightTheme()?k.solid:k.color);
 
 // Sabit Haftalık EEM Ders Programı (Pzt=1 .. Cum=5)
-const EEM_WEEKLY_SCHEDULE=[];
+const EEM_WEEKLY_SCHEDULE=[
+  {dow:1,start:'13:00',end:'14:00',title:'Egzersiz ve Beslenme (ÜSD)',kasa:'Universite_Secmeli_Beslenme',loc:'Çevrimiçi',desc:'Doç. Dr. Halil İbrahim CEYLAN · Online ÜSD'},
+  {dow:2,start:'12:00',end:'15:00',title:'Yüksek Gerilim Tekniği ve Tesisi (MEL407)',kasa:'Yuksek_Gerilim_Teknigi',loc:'D5',desc:'Doç. Dr. Muhammed Fatih ÇORAPSIZ'},
+  {dow:3,start:'09:00',end:'11:00',title:'Katıhal Elektroniği (MEL451)',kasa:'Katihal_Elektronigi',loc:'D11',desc:'Prof. Dr. Hasan EFEOĞLU'},
+  {dow:3,start:'14:00',end:'17:00',title:'Kontrol Sistemlerine Giriş (MEL303)',kasa:'Kontrol_Sistemlerine_Giris',loc:'D4',desc:'Dr. Öğr. Üyesi Kaan CAN'},
+  {dow:4,start:'08:00',end:'11:00',title:'Seçmeli Tasarım I (MUH107)',kasa:'Secmeli_Tasarim',loc:'Çevrimiçi',desc:'Doç. Dr. Muhammed Fatih ÇORAPSIZ'},
+  {dow:4,start:'12:00',end:'15:00',title:'Mikrodalga Tekniği (MEL401)',kasa:'Mikrodalga',loc:'D3',desc:'Doç. Dr. Gökhan ÖZTÜRK'},
+  {dow:5,start:'09:00',end:'12:00',title:'Diferansiyel Denklemler (FMT171-H)',kasa:'Difransiyel_Denklemler',loc:'OBS (Mühendislik)',desc:'Doç. Dr. Sıdıka Şule ŞENER KILIÇ'},
+  {dow:5,start:'10:00',end:'12:00',title:'İş Sağlığı ve Güvenliği I (ISG101-B)',kasa:'Is_Sagligi_ve_Guvenligi',loc:'Çevrimiçi',desc:'Doç. Dr. Yunus Emre BENKLİ (FMT171 ile çakışıyor)'}
+];
 
 const SEED_META_DEFAULTS={
   3:{start:'19:00',end:'21:00',loc:'Çalışma Masası',desc:'Blok diyagram indirgeme, Mason kazanç formülü ve Routh-Hurwitz soru çözümü.'},
@@ -8201,10 +8832,10 @@ function packCalMeta(ev){
 
 function getAllEventsForDate(isoDate){
   const list=calEvents.filter(e=>e.date===isoDate && GCAL.kinds[e.kind]!==false);
-  if(GCAL.showSchedule && GCAL.kinds.lecture!==false){
+  if(GCAL.showSchedule && GCAL.kinds.lecture!==false && isoDate>='2026-09-28' && isoDate<='2027-01-03' && isoDate!=='2026-10-29' && isoDate!=='2027-01-01'){
     const d=gcalFromISO(isoDate);
     const dow=d.getDay(); // 0=Paz, 1=Pzt..6=Cmt
-    // Sadece akademik dönem ayları için haftalık dersleri üret
+    // 2026-2027 Güz Eğitim-Öğretim dönemi (28.09.2026 - 03.01.2027, resmi tatiller hariç)
     EEM_WEEKLY_SCHEDULE.filter(s=>s.dow===dow).forEach((s,idx)=>{
       list.push({
         id:`lec_${isoDate}_${idx}`,
@@ -8274,6 +8905,7 @@ function gcalStep(dir){
   if(GCAL.view==='day') d.setDate(d.getDate()+dir);
   else if(GCAL.view==='week') d.setDate(d.getDate()+dir*7);
   else if(GCAL.view==='month') d.setMonth(d.getMonth()+dir);
+  else if(GCAL.view==='schedule') d.setMonth(d.getMonth()+dir);
   else if(GCAL.view==='agenda') d.setMonth(d.getMonth()+dir);
   else if(GCAL.view==='semester') d.setMonth(d.getMonth()+dir*4);
   GCAL.cursor=gcalToISO(d);
@@ -8549,9 +9181,11 @@ function renderTimeGrid(daysList,isSingleDay=false){
   });
 
   return `<div class="gweek">
-    <div class="gweek-top ${colCls}">${topHdr}</div>
-    <div class="gw-allday ${colCls}">${allDayCells}</div>
     <div class="gweek-scroll" id="gweekScroll">
+      <div class="gweek-head">
+        <div class="gweek-top ${colCls}">${topHdr}</div>
+        <div class="gw-allday ${colCls}">${allDayCells}</div>
+      </div>
       <div class="gweek-grid ${colCls}" style="height:${(END_H-START_H)*60}px">
         <div class="gw-times">${timeLabels}</div>
         ${colsHtml}
@@ -8663,6 +9297,7 @@ function renderAgendaStage(){
   const byDate={};
   list.forEach(e=>{ (byDate[e.date]=byDate[e.date]||[]).push(e); });
   const dates=Object.keys(byDate).sort();
+  const anchorIso=dates.find(iso=>iso>=todayIso)||dates[dates.length-1]||'';
 
   return `<div class="gagenda">
     <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-bottom:10px;border-bottom:1px solid var(--line)">
@@ -8677,6 +9312,7 @@ function renderAgendaStage(){
           <button class="${GCAL.agendaFilter==='pending'?'on':''}" onclick="GCAL.agendaFilter='pending';renderCal($('#main'),false)">⏳ Bekleyenler</button>
           <button class="${GCAL.agendaFilter==='done'?'on':''}" onclick="GCAL.agendaFilter='done';renderCal($('#main'),false)">✓ Tamamlananlar</button>
         </div>
+        <button class="gcal-btn" onclick="const a=document.getElementById('gagTodayAnchor');if(a)a.scrollIntoView({behavior:'smooth',block:'start'})">📅 Bugüne Git</button>
         <button class="gcal-btn pri" onclick="gcalAskAiStudyPlan()">✨ AI Çalışma Programı Çıkar</button>
       </div>
     </div>
@@ -8685,7 +9321,8 @@ function renderAgendaStage(){
       const diff=gcalDiffDays(iso,todayIso);
       const isToday=diff===0;
       const relTxt=diff===0?'BUGÜN':diff===1?'YARIN':diff===-1?'DÜN':diff>1?`${diff} gün sonra`:`${Math.abs(diff)} gün önce`;
-      return `<div class="gag-day">
+      const anchorAttr=iso===anchorIso?' id="gagTodayAnchor"':'';
+      return `<div class="gag-day"${anchorAttr}>
         <div class="gag-date ${isToday?'today':''}">
           <span class="dnum">${d.getDate()}</span>
           <div>
@@ -8713,6 +9350,238 @@ function renderAgendaStage(){
       </div>`;
     }).join(''):`<div style="padding:40px;text-align:center;color:var(--mut)">Seçili filtreye uygun etkinlik bulunamadı.</div>`}
   </div>`;
+}
+
+function gcalIsoWeek(d){
+  const t=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+  const day=t.getUTCDay()||7;
+  t.setUTCDate(t.getUTCDate()+4-day);
+  const yStart=new Date(Date.UTC(t.getUTCFullYear(),0,1));
+  return Math.ceil((((t-yStart)/86400000)+1)/7);
+}
+
+function gprogMonthBanner(m,y){
+  const scenes=[
+    // 0: Ocak - Karlı yıldızlı gece, dağlar, çamlar, kulübe ve küçük uçak
+    {bg:'linear-gradient(160deg,#152238 0%,#1f3354 60%,#2c4870 100%)',svg:`
+      <circle cx="310" cy="24" r="14" fill="#fef3c7" opacity=".9"/>
+      <circle cx="315" cy="21" r="12" fill="#1f3354"/>
+      <circle cx="95" cy="20" r="1.6" fill="#fff" opacity=".8"/><circle cx="155" cy="14" r="1.2" fill="#fff" opacity=".6"/><circle cx="230" cy="26" r="1.5" fill="#fff" opacity=".75"/><circle cx="380" cy="18" r="1.4" fill="#fff" opacity=".7"/><circle cx="430" cy="30" r="1.8" fill="#fff" opacity=".8"/>
+      <path d="M0,128 L0,82 L75,48 L155,86 L245,42 L340,84 L430,52 L520,80 L520,128 Z" fill="#2a4060"/>
+      <path d="M0,128 L0,96 Q120,76 250,98 T520,88 L520,128 Z" fill="#dbeafe" opacity=".9"/>
+      <path d="M0,128 L0,108 Q180,94 350,110 T520,104 L520,128 Z" fill="#f8fafc"/>
+      <polygon points="62,102 74,66 86,102" fill="#1e3a2f"/><polygon points="82,104 92,74 102,104" fill="#254b3c"/>
+      <polygon points="410,100 424,60 438,100" fill="#1e3a2f"/><polygon points="436,103 448,70 460,103" fill="#254b3c"/>
+      <rect x="190" y="84" width="28" height="18" rx="2" fill="#7c2d12"/><polygon points="186,85 204,70 222,85" fill="#9a3412"/><rect x="200" y="90" width="8" height="12" fill="#fde68a"/>
+    `},
+    // 1: Şubat - Kış tepeleri, buz gölü ve uçan kuşlar
+    {bg:'linear-gradient(160deg,#1e3a5f 0%,#3a608f 60%,#7aa6cc 100%)',svg:`
+      <circle cx="410" cy="34" r="18" fill="#fde68a" opacity=".85"/>
+      <path d="M0,128 L0,78 Q90,46 185,78 T380,66 L520,84 L520,128 Z" fill="#cbd5e1" opacity=".45"/>
+      <path d="M0,128 L0,94 Q130,78 270,96 T520,90 L520,128 Z" fill="#e2e8f0"/>
+      <path d="M0,128 L0,110 Q200,100 360,112 T520,106 L520,128 Z" fill="#f1f5f9"/>
+      <path d="M120,42 Q126,36 132,42 Q138,36 144,42" stroke="#fff" stroke-width="1.8" fill="none" opacity=".8"/>
+      <path d="M158,32 Q163,27 168,32 Q173,27 178,32" stroke="#fff" stroke-width="1.5" fill="none" opacity=".7"/>
+      <polygon points="330,98 342,64 354,98" fill="#334155"/><polygon points="350,100 360,72 370,100" fill="#475569"/>
+    `},
+    // 2: Mart - Bahar başlangıcı, kiraz çiçekleri ve rüzgarlı tepe
+    {bg:'linear-gradient(160deg,#2d5a4c 0%,#4b8b72 60%,#8fc9a3 100%)',svg:`
+      <circle cx="420" cy="32" r="20" fill="#fef08a" opacity=".9"/>
+      <path d="M0,128 L0,88 Q120,62 240,90 T520,76 L520,128 Z" fill="#3f7d58"/>
+      <path d="M0,128 L0,104 Q170,86 340,104 T520,96 L520,128 Z" fill="#5aa469"/>
+      <rect x="86" y="72" width="6" height="36" fill="#5c4033"/>
+      <circle cx="89" cy="64" r="20" fill="#fbcfe8"/><circle cx="74" cy="70" r="14" fill="#f9a8d4"/><circle cx="104" cy="70" r="14" fill="#f9a8d4"/>
+      <polygon points="310,30 326,42 310,56 294,42" fill="#fb7185"/><path d="M310,56 Q315,74 306,90" stroke="#fff" stroke-width="1.4" fill="none" opacity=".7"/>
+    `},
+    // 3: Nisan - Yağmur bulutları, gökkuşağı ve filizler
+    {bg:'linear-gradient(160deg,#2b4c7e 0%,#4a7ab5 60%,#89b4e0 100%)',svg:`
+      <path d="M180,105 A95,95 0 0,1 370,105" stroke="#fca5a5" stroke-width="5" fill="none" opacity=".55"/>
+      <path d="M188,105 A87,87 0 0,1 362,105" stroke="#fde047" stroke-width="5" fill="none" opacity=".55"/>
+      <path d="M196,105 A79,79 0 0,1 354,105" stroke="#86efac" stroke-width="5" fill="none" opacity=".55"/>
+      <path d="M0,128 L0,96 Q140,76 280,98 T520,92 L520,128 Z" fill="#3b7a57"/>
+      <path d="M0,128 L0,110 Q200,98 380,112 T520,108 L520,128 Z" fill="#4d9b6a"/>
+      <circle cx="110" cy="36" r="16" fill="#fff" opacity=".85"/><circle cx="128" cy="34" r="20" fill="#fff" opacity=".9"/><circle cx="148" cy="38" r="15" fill="#fff" opacity=".85"/>
+    `},
+    // 4: Mayıs - Çiçekli çayır ve sıcak güneş
+    {bg:'linear-gradient(160deg,#1f6f50 0%,#3da36d 55%,#9be29f 100%)',svg:`
+      <circle cx="430" cy="34" r="22" fill="#fde047" opacity=".95"/>
+      <path d="M0,128 L0,90 Q130,68 260,92 T520,82 L520,128 Z" fill="#2e8b57"/>
+      <path d="M0,128 L0,106 Q170,92 340,108 T520,100 L520,128 Z" fill="#43aa68"/>
+      <circle cx="80" cy="108" r="4" fill="#fef08a"/><circle cx="135" cy="112" r="4" fill="#f9a8d4"/><circle cx="215" cy="106" r="4" fill="#fff"/><circle cx="290" cy="114" r="4" fill="#fde047"/><circle cx="370" cy="108" r="4" fill="#f9a8d4"/>
+    `},
+    // 5: Haziran - Deniz, yelkenli ve yaz güneşi
+    {bg:'linear-gradient(160deg,#0f4c81 0%,#1f78b4 55%,#67b7dc 100%)',svg:`
+      <circle cx="425" cy="32" r="20" fill="#fde047" opacity=".95"/>
+      <path d="M0,128 L0,88 Q120,76 260,88 T520,86 L520,128 Z" fill="#0ea5e9"/>
+      <path d="M0,128 L0,104 Q140,94 280,104 T520,102 L520,128 Z" fill="#0284c7"/>
+      <polygon points="220,84 220,42 252,78" fill="#fff"/><polygon points="216,84 216,50 194,80" fill="#e0f2fe"/>
+      <path d="M188,84 L258,84 L248,94 L198,94 Z" fill="#f97316"/>
+    `},
+    // 6: Temmuz - Dağ kampı, çadır ve yaz gökyüzü
+    {bg:'linear-gradient(160deg,#1d4ed8 0%,#3b82f6 55%,#93c5fd 100%)',svg:`
+      <circle cx="110" cy="34" r="20" fill="#fef08a"/>
+      <path d="M0,128 L0,84 L95,44 L190,88 L295,38 L405,86 L520,56 L520,128 Z" fill="#1e3a8a" opacity=".55"/>
+      <path d="M0,128 L0,98 Q180,82 360,102 T520,94 L520,128 Z" fill="#15803d"/>
+      <polygon points="270,104 300,68 330,104" fill="#f59e0b"/><polygon points="292,104 300,80 308,104" fill="#78350f"/>
+      <polygon points="370,102 384,66 398,102" fill="#14532d"/>
+    `},
+    // 7: Ağustos - Altın gün batımı ve palmiyeler
+    {bg:'linear-gradient(160deg,#7c2d12 0%,#ea580c 55%,#fbbf24 100%)',svg:`
+      <circle cx="260" cy="84" r="34" fill="#fef08a" opacity=".92"/>
+      <path d="M0,128 L0,94 Q140,80 280,96 T520,90 L520,128 Z" fill="#9a3412"/>
+      <path d="M0,128 L0,110 Q200,98 380,112 T520,106 L520,128 Z" fill="#431407"/>
+      <path d="M405,108 Q412,76 420,56" stroke="#290d04" stroke-width="5" fill="none"/>
+      <path d="M420,56 Q395,48 382,62 M420,56 Q442,46 456,60 M420,56 Q418,36 432,34 M420,56 Q400,66 394,78" stroke="#290d04" stroke-width="3" fill="none"/>
+    `},
+    // 8: Eylül - Sonbahar tepeleri ve dökülen yapraklar
+    {bg:'linear-gradient(160deg,#78350f 0%,#b45309 55%,#f59e0b 100%)',svg:`
+      <circle cx="415" cy="36" r="18" fill="#fef3c7" opacity=".9"/>
+      <path d="M0,128 L0,88 Q120,62 250,90 T520,80 L520,128 Z" fill="#92400e"/>
+      <path d="M0,128 L0,106 Q170,90 340,108 T520,98 L520,128 Z" fill="#78350f"/>
+      <circle cx="96" cy="70" r="22" fill="#ea580c"/><circle cx="122" cy="76" r="16" fill="#dc2626"/><rect x="104" y="84" width="6" height="24" fill="#451a03"/>
+      <ellipse cx="220" cy="48" rx="5" ry="2.5" fill="#fed7aa" transform="rotate(25 220 48)"/><ellipse cx="275" cy="64" rx="5" ry="2.5" fill="#fca5a5" transform="rotate(-20 275 64)"/>
+    `},
+    // 9: Ekim - Kızıl orman ve sonbahar sisi
+    {bg:'linear-gradient(160deg,#4c1d24 0%,#88292f 55%,#d97706 100%)',svg:`
+      <path d="M0,128 L0,84 Q110,56 230,88 T520,76 L520,128 Z" fill="#7f1d1d" opacity=".7"/>
+      <path d="M0,128 L0,102 Q160,84 320,104 T520,94 L520,128 Z" fill="#450a0a"/>
+      <polygon points="70,104 86,58 102,104" fill="#b45309"/><polygon points="100,106 114,66 128,106" fill="#dc2626"/>
+      <polygon points="360,102 376,56 392,102" fill="#b45309"/><polygon points="392,104 406,66 420,104" fill="#991b1b"/>
+      <circle cx="240" cy="108" r="7" fill="#f97316"/><circle cx="256" cy="110" r="5" fill="#fb923c"/>
+    `},
+    // 10: Kasım - Puslu geç sonbahar tepeleri ve rüzgar
+    {bg:'linear-gradient(160deg,#2c3e50 0%,#4a607a 55%,#8fa3b8 100%)',svg:`
+      <circle cx="385" cy="36" r="18" fill="#fde68a" opacity=".75"/>
+      <path d="M0,128 L0,86 Q125,58 260,88 T520,78 L520,128 Z" fill="#3b4d61"/>
+      <path d="M0,128 L0,104 Q180,88 350,106 T520,98 L520,128 Z" fill="#2b3a4a"/>
+      <path d="M90,104 L90,68 M90,82 L76,70 M90,78 L104,68" stroke="#1e293b" stroke-width="3" fill="none"/>
+      <path d="M180,46 Q240,40 295,48" stroke="#e2e8f0" stroke-width="1.5" fill="none" opacity=".45"/>
+      <path d="M210,58 Q265,52 325,60" stroke="#e2e8f0" stroke-width="1.2" fill="none" opacity=".35"/>
+    `},
+    // 11: Aralık - Karlı çam ormanı ve kutup ışıkları
+    {bg:'linear-gradient(160deg,#0f172a 0%,#1e3a5f 55%,#2dd4bf 100%)',svg:`
+      <path d="M40,48 Q150,12 260,44 T480,26" stroke="#5eead4" stroke-width="16" fill="none" opacity=".22" stroke-linecap="round"/>
+      <circle cx="90" cy="22" r="1.5" fill="#fff" opacity=".85"/><circle cx="195" cy="16" r="1.3" fill="#fff" opacity=".7"/><circle cx="330" cy="24" r="1.7" fill="#fff" opacity=".85"/><circle cx="430" cy="18" r="1.4" fill="#fff" opacity=".75"/>
+      <path d="M0,128 L0,92 Q140,74 280,94 T520,86 L520,128 Z" fill="#cbd5e1"/>
+      <path d="M0,128 L0,108 Q190,96 360,110 T520,104 L520,128 Z" fill="#f1f5f9"/>
+      <polygon points="65,108 80,62 95,108" fill="#0f5132"/><polygon points="94,110 107,72 120,110" fill="#146c43"/>
+      <polygon points="390,106 406,58 422,106" fill="#0f5132"/><polygon points="420,108 434,68 448,108" fill="#146c43"/>
+    `}
+  ];
+  const sc=scenes[m%12];
+  return `<div class="gprog-month" style="background:${sc.bg}">
+    <div class="gprog-month-title">${GCAL_MONTHS[m]} ${y}</div>
+    <svg class="gprog-month-art" viewBox="0 0 520 128" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${sc.svg}</svg>
+  </div>`;
+}
+
+let _gprogState=null;
+
+function gprogBuildRange(startDt,endDt,todayIso,st){
+  let html='';
+  for(let dt=new Date(startDt);dt<=endDt;dt=gcalAddDays(dt,1)){
+    const iso=gcalToISO(dt);
+    const m=dt.getMonth(), y=dt.getFullYear();
+    if(m!==st.curMonth){
+      st.curMonth=m;
+      html+=gprogMonthBanner(m,y);
+    }
+    const dow=gcalDowMon(dt);
+    const wStart=gcalAddDays(dt,-dow);
+    const wEnd=gcalAddDays(wStart,6);
+    const wKey=gcalToISO(wStart);
+    const evs=getAllEventsForDate(iso);
+    const isToday=iso===todayIso;
+    const isAnchor=!st.anchorSet&&iso>=todayIso;
+    if(isAnchor) st.anchorSet=true;
+
+    if(wKey!==st.lastWeekKey){
+      st.lastWeekKey=wKey;
+      const wNo=gcalIsoWeek(dt);
+      const sameMon=wStart.getMonth()===wEnd.getMonth();
+      const rangeTxt=sameMon
+        ?`${wStart.getDate()} – ${wEnd.getDate()} ${GCAL_MONTHS_SHORT[wEnd.getMonth()]}`
+        :`${wStart.getDate()} ${GCAL_MONTHS_SHORT[wStart.getMonth()]} – ${wEnd.getDate()} ${GCAL_MONTHS_SHORT[wEnd.getMonth()]}`;
+      html+=`<div class="gprog-week">${wNo}. Hafta, ${rangeTxt}</div>`;
+    }
+    if(!evs.length && !isToday) continue;
+
+    const anchorAttr=isAnchor?' id="gprogTodayAnchor"':'';
+    const dayAbbr=GCAL_DAYS[dow];
+    html+=`<div class="gprog-day ${isToday?'today':''}"${anchorAttr}>
+      <div class="gprog-date">
+        <span class="dn">${dayAbbr}</span>
+        <span class="dd">${dt.getDate()}</span>
+      </div>
+      <div class="gprog-list">
+        ${evs.length?evs.map(e=>{
+          const k=GCAL_KINDS[e.kind]||GCAL_KINDS.task;
+          const timeTxt=e.allDay?'Tüm Gün':`${e.start}–${e.end}`;
+          return `<div class="gprog-ev ${e.done?'done':''}" onclick="openCalModal('${e.id}')" style="background:${k.solid}">
+            <div class="gprog-ev-title">${k.icon} ${e.title}</div>
+            <div class="gprog-ev-sub">${timeTxt}${e.loc?` · ${e.loc}`:''}</div>
+          </div>`;
+        }).join(''):`<div class="gprog-empty" onclick="openCalModal(null,'${iso}')">Bugün için etkinlik yok · eklemek için tıkla</div>`}
+      </div>
+    </div>`;
+  }
+  return html;
+}
+
+function gprogAppendMore(){
+  if(!_gprogState||_gprogState.loading) return;
+  const inner=document.getElementById('gprogInner');
+  if(!inner) return;
+  _gprogState.loading=true;
+  const nextStart=gcalAddDays(_gprogState.endDt,1);
+  const nextEnd=new Date(nextStart.getFullYear(),nextStart.getMonth()+3,0,12,0,0);
+  const chunk=gprogBuildRange(nextStart,nextEnd,gcalTodayISO(),_gprogState);
+  _gprogState.endDt=nextEnd;
+  if(chunk) inner.insertAdjacentHTML('beforeend',chunk);
+  _gprogState.loading=false;
+}
+
+let _gprogRaf=0;
+function gprogUpdateParallax(sc){
+  if(!sc) return;
+  const sr=sc.getBoundingClientRect();
+  const mid=sr.top+sr.height*0.5;
+  const updates=[];
+  sc.querySelectorAll('.gprog-month').forEach(m=>{
+    const r=m.getBoundingClientRect();
+    if(r.bottom<sr.top-80||r.top>sr.bottom+80) return;
+    const art=m.querySelector('.gprog-month-art');
+    if(!art) return;
+    const shift=Math.max(-18,Math.min(18,-((r.top+r.bottom)*0.5-mid)*0.07));
+    updates.push([art,shift]);
+  });
+  for(let i=0;i<updates.length;i++){
+    updates[i][0].style.transform=`translate3d(0,${updates[i][1].toFixed(1)}px,0) scale(1.18)`;
+  }
+}
+
+function gprogOnScroll(el){
+  if(!el) return;
+  if(el.scrollTop+el.clientHeight>=el.scrollHeight-420) gprogAppendMore();
+  if(!_gprogRaf){
+    _gprogRaf=requestAnimationFrame(()=>{ _gprogRaf=0; gprogUpdateParallax(el); });
+  }
+}
+
+function gprogInit(){
+  const sc=document.querySelector('.gprog');
+  if(!sc) return;
+  gprogUpdateParallax(sc);
+}
+
+function renderScheduleStage(){
+  const todayIso=gcalTodayISO();
+  const cur=gcalFromISO(GCAL.cursor);
+  const start=new Date(cur.getFullYear(),cur.getMonth(),1,12,0,0);
+  const end=new Date(cur.getFullYear(),cur.getMonth()+4,0,12,0,0);
+  _gprogState={curMonth:-1,lastWeekKey:'',anchorSet:false,endDt:end,loading:false};
+  const html=gprogBuildRange(start,end,todayIso,_gprogState);
+  return `<div class="gprog" onscroll="gprogOnScroll(this)"><div class="gprog-inner" id="gprogInner">${html}</div></div>`;
 }
 
 function renderSemesterStage(){
@@ -8824,6 +9693,7 @@ async function renderCal(m,fetchApi=true){
 
   const stageHtml=GCAL.view==='day'?renderDayStage()
     :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='schedule'?renderScheduleStage()
     :GCAL.view==='agenda'?renderAgendaStage()
     :GCAL.view==='semester'?renderSemesterStage()
     :renderMonthStage();
@@ -8870,7 +9740,7 @@ async function renderCal(m,fetchApi=true){
 
       <button class="gcal-btn" onclick="gcalExportICS()" title="AgyCal takvimini .ics olarak indir (Google/Apple/Telefon Takvimine aktar)">📲 .ics</button>
 
-      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();const dd=document.getElementById('gcalViewDd');const host=dd.closest('.gcal');const r=dd.getBoundingClientRect();const hr=host?host.getBoundingClientRect():{left:0,right:innerWidth};dd.classList.toggle('align-right',(hr.right-r.left)<180&&(r.right-hr.left)>=180);dd.classList.toggle('open')" title="Görünüm Değiştir (D/W/M/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
+      <div class="gcal-dd" id="gcalViewDd"><button class="gcal-btn" onclick="event.stopPropagation();const dd=document.getElementById('gcalViewDd');const host=dd.closest('.gcal');const r=dd.getBoundingClientRect();const hr=host?host.getBoundingClientRect():{left:0,right:innerWidth};dd.classList.toggle('align-right',(hr.right-r.left)<180&&(r.right-hr.left)>=180);dd.classList.toggle('open')" title="Görünüm Değiştir (D/W/M/P/A/Y)">${({day:'Gün',week:'Hafta',month:'Ay',schedule:'Program',agenda:'Planlama',semester:'Dönem'})[GCAL.view]||'Ay'} ▾</button><div class="gcal-dd-menu">${[['day','Gün','D'],['week','Hafta','W'],['month','Ay','M'],['schedule','Program','P'],['agenda','Planlama','A'],['semester','Dönem','Y']].map(v=>`<button class="${GCAL.view===v[0]?'on':''}" onclick="gcalSetView('${v[0]}')">${v[1]}<kbd>${v[2]}</kbd></button>`).join('')}</div></div>
 
       <button class="gcal-btn pri" onclick="openCalModal(null,GCAL.cursor)" title="Yeni Etkinlik / Sınav Oluştur (Kısayol: C)">＋ Oluştur</button>
     </div>
@@ -8948,6 +9818,13 @@ async function renderCal(m,fetchApi=true){
     if(typeof prevWeekScroll==='number'&&prevWeekScroll>0) nextWeek.scrollTop=prevWeekScroll;
     else requestAnimationFrame(gcalScrollToNow);
   }
+  if(GCAL.view==='agenda'||GCAL.view==='schedule'){
+    requestAnimationFrame(()=>{
+      const a=document.getElementById(GCAL.view==='agenda'?'gagTodayAnchor':'gprogTodayAnchor');
+      if(a) a.scrollIntoView({block:'start'});
+      if(GCAL.view==='schedule') gprogInit();
+    });
+  }
 }
 
 function gcalScrollToNow(){
@@ -8961,10 +9838,11 @@ function gcalScrollToNow(){
 function renderCalStageOnly(){
   const st=$('#gcalStage');
   if(!st) return;
-  const scrollSel=['.gweek-scroll','.gday-cockpit','.gagenda','.gsem'];
+  const scrollSel=['.gweek-scroll','.gday-cockpit','.gagenda','.gprog','.gsem'];
   const saved=scrollSel.map(sel=>[sel,st.querySelector(sel)?.scrollTop||0]);
   st.innerHTML=GCAL.view==='day'?renderDayStage()
     :GCAL.view==='week'?renderWeekStage()
+    :GCAL.view==='schedule'?renderScheduleStage()
     :GCAL.view==='agenda'?renderAgendaStage()
     :GCAL.view==='semester'?renderSemesterStage()
     :renderMonthStage();
@@ -8972,6 +9850,7 @@ function renderCalStageOnly(){
     const el=st.querySelector(sel);
     if(el&&top) el.scrollTop=top;
   });
+  if(GCAL.view==='schedule') gprogInit();
 }
 
 function gcalCellClick(ev,iso){
@@ -9450,47 +10329,91 @@ function gcalParseNaturalLanguage(raw){
     txt=txt.replace(tagM[0],'').trim();
   }
 
-  // 3) Saat aralığı (14:00-16:00 veya 14:00)
-  const timeM=txt.match(/\b([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3])[:.]([0-5]\d))?\b/);
+  // 3) Saat aralığı (14:00-16:00, 14:00) veya doğal Türkçe saat ("akşam saat 5 de", "saat 17", "sabah 9'da")
+  const timeM=txt.match(/(?<![\p{L}\p{N}])([01]?\d|2[0-3])[:.]([0-5]\d)(?:\s*[-–—]\s*([01]?\d|2[0-3])[:.]([0-5]\d))?(?:\s*['’]?(?:da|de|ta|te|a|e))?(?![\p{L}\p{N}])/iu);
   if(timeM){
     allDay=false;
-    const h1=gcalPad(Number(timeM[1])), m1=timeM[2];
-    start=`${h1}:${m1}`;
+    const h1=Number(timeM[1]), m1=timeM[2];
+    start=`${gcalPad(h1)}:${m1}`;
     if(timeM[3]!==undefined){
       end=`${gcalPad(Number(timeM[3]))}:${timeM[4]}`;
     }else{
-      end=`${gcalPad(Math.min(23,Number(timeM[1])+1))}:${m1}`;
+      end=`${gcalPad(Math.min(23,h1+1))}:${m1}`;
     }
     txt=txt.replace(timeM[0],'').trim();
+  }else{
+    const natM=txt.match(/(?<![\p{L}\p{N}])(?:(sabah|öğle|öğlen|öğleden\s+sonra|akşam|gece)\s+)?(?:saat\s+)?([01]?\d|2[0-3])(?:\s+(buçuk|çeyrek))?(?:\s*['’]?(?:da|de|ta|te|a|e)|\s+(?:da|de|ta|te))(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])(sabah|öğle|öğlen|öğleden\s+sonra|akşam|gece)\s+(?:saat\s+)?([01]?\d|2[0-3])(?:\s+(buçuk|çeyrek))?(?![\p{L}\p{N}])|(?<![\p{L}\p{N}])saat\s+([01]?\d|2[0-3])(?:\s+(buçuk|çeyrek))?(?![\p{L}\p{N}])/iu);
+    if(natM){
+      const hasExplicitPeriod=Boolean(natM[1]||natM[4]||natM[7]);
+      const hasSaat= /\bsaat\b/i.test(natM[0]);
+      const hasSuffix= /(?:'|’|\s)(?:da|de|ta|te|a|e)$/i.test(natM[0]);
+      if(hasExplicitPeriod||hasSaat||hasSuffix){
+        allDay=false;
+        const period=(natM[1]||natM[4]||'').toLowerCase();
+        let h=Number(natM[2]||natM[5]||natM[7]);
+        const frac=(natM[3]||natM[6]||'').toLowerCase();
+        const mStr=frac==='buçuk'?'30':frac==='çeyrek'?'15':'00';
+        if(/akşam|öğleden\s+sonra/.test(period)&&h>=1&&h<=11) h+=12;
+        else if(/gece/.test(period)&&h===12) h=0;
+        else if(/gece/.test(period)&&h>=8&&h<=11) h+=12;
+        start=`${gcalPad(h)}:${mStr}`;
+        end=`${gcalPad(Math.min(23,h+1))}:${mStr}`;
+        txt=txt.replace(natM[0],'').trim();
+      }
+    }
   }
 
-  // 4) Tarih ("bugün", "yarın", haftanın günleri, veya "19 Kasım")
-  const low=txt.toLowerCase();
+  // 4) Tarih ("bugün", "yarın", haftanın günleri [yazım hatası toleranslı], veya "19 Kasım")
   const monthNames=['ocak','şubat','mart','nisan','mayıs','haziran','temmuz','ağustos','eylül','ekim','kasım','aralık'];
-  const dmMatch=txt.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames.join('|')})\\b`,'i'));
+  const dmMatch=txt.match(new RegExp(`(?<![\\p{L}\\p{N}])(\\d{1,2})\\s+(${monthNames.join('|')})(?![\\p{L}\\p{N}])`,'iu'));
   if(dmMatch){
     const dNum=Number(dmMatch[1]);
     const mIdx=monthNames.indexOf(dmMatch[2].toLowerCase());
     if(mIdx!==-1) date=`${now.getFullYear()}-${gcalPad(mIdx+1)}-${gcalPad(dNum)}`;
     txt=txt.replace(dmMatch[0],'').trim();
-  }else if(/\bbugün\b/i.test(txt)){
+  }else if(/(?<![\p{L}\p{N}])bugün(?![\p{L}\p{N}])/iu.test(txt)){
     date=gcalTodayISO();
-    txt=txt.replace(/\bbugün\b/i,'').trim();
-  }else if(/\byarın\b/i.test(txt)){
+    txt=txt.replace(/(?<![\p{L}\p{N}])bugün(?![\p{L}\p{N}])/iu,'').trim();
+  }else if(/(?<![\p{L}\p{N}])yarın(?![\p{L}\p{N}])/iu.test(txt)){
     const d=new Date(now); d.setDate(d.getDate()+1); date=gcalToISO(d);
-    txt=txt.replace(/\byarın\b/i,'').trim();
+    txt=txt.replace(/(?<![\p{L}\p{N}])yarın(?![\p{L}\p{N}])/iu,'').trim();
   }else{
-    const dayMap=[['pazartesi|pzt',0],['salı|sali|sal',1],['çarşamba|carsamba|çar',2],['perşembe|persembe|per',3],['cuma|cum',4],['cumartesi|cmt',5],['pazar|paz',6]];
-    for(const [pat,targetMonIdx] of dayMap){
-      const rx=new RegExp(`\\b(${pat})\\b`,'i');
-      const m=txt.match(rx);
-      if(m){
+    const trFold=s=>s.toLocaleLowerCase('tr-TR').replace(/ç/g,'c').replace(/ğ/g,'g').replace(/ı/g,'i').replace(/ö/g,'o').replace(/ş/g,'s').replace(/ü/g,'u').replace(/(.)\1+/g,'$1');
+    const lev=(a,b)=>{
+      const m=a.length, n=b.length, dp=Array.from({length:m+1},(_,i)=>Array(n+1).fill(0));
+      for(let i=0;i<=m;i++) dp[i][0]=i;
+      for(let j=0;j<=n;j++) dp[0][j]=j;
+      for(let i=1;i<=m;i++) for(let j=1;j<=n;j++)
+        dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+      return dp[m][n];
+    };
+    const dayTargets=[
+      ['pazartesi',0,2],['pzt',0,0],
+      ['sali',1,0],['sal',1,0],
+      ['carsamba',2,2],['car',2,0],
+      ['persembe',3,2],['per',3,0],
+      ['cuma',4,0],['cum',4,0],
+      ['cumartesi',5,2],['cmt',5,0],
+      ['pazar',6,1],['paz',6,0]
+    ];
+    const words=txt.match(/[\p{L}]+(?:\s+günü)?/gu)||[];
+    for(const wRaw of words){
+      const base=wRaw.replace(/\s+günü$/iu,'');
+      const wf=trFold(base);
+      let matchedIdx=null;
+      for(const [tgt,idx,maxDist] of dayTargets){
+        if(wf===tgt||(maxDist>0&&Math.abs(wf.length-tgt.length)<=maxDist&&lev(wf,tgt)<=maxDist)){
+          matchedIdx=idx; break;
+        }
+      }
+      if(matchedIdx!==null){
         const curMonIdx=gcalDowMon(now);
-        let delta=(targetMonIdx-curMonIdx+7)%7;
+        let delta=(matchedIdx-curMonIdx+7)%7;
         if(delta===0) delta=7;
         const d=new Date(now); d.setDate(d.getDate()+delta);
         date=gcalToISO(d);
-        txt=txt.replace(m[0],'').trim();
+        const esc=wRaw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        txt=txt.replace(new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`,'iu'),'').trim();
         break;
       }
     }
@@ -9852,15 +10775,14 @@ function gcalUpdatePomoDom(){
       topPomo.title=`${p.mode||'Odak'} · ${p.running?'Çalışıyor':'Duraklatıldı'} · Tıkla: Mini kontrol · Sağ tık: Duraklat/Başlat`;
     }
   }
-  let nextWinTitle=null;
   if(prefs.title&&p.running&&p.sec>0){
-    nextWinTitle=`⏱ ${mm}:${ss} — AgyDesk`;
+    const nextWinTitle=`⏱ ${mm}:${ss} — AgyDesk`;
+    if(document.title!==nextWinTitle){
+      document.title=nextWinTitle;
+      try{ if(window.ipc&&typeof window.ipc.postMessage==='function') window.ipc.postMessage('title:'+nextWinTitle); }catch(e){}
+    }
   }else if(p.sec>0||!prefs.title){
-    if(document.title!=='AgyDesk'&&!document.title.startsWith('🔔')) nextWinTitle='AgyDesk';
-  }
-  if(nextWinTitle!==null&&document.title!==nextWinTitle){
-    document.title=nextWinTitle;
-    try{ if(window.ipc&&typeof window.ipc.postMessage==='function') window.ipc.postMessage('title:'+nextWinTitle); }catch(e){}
+    syncWindowTitle();
   }
 }
 function gcalPomoToggle(){
@@ -10314,7 +11236,7 @@ function renderStudyChat(m){
   };
   if(i){ i.dataset.sessId=sid; if(chatDrafts[sid]){ i.value=chatDrafts[sid]; autoGrow(i); syncGemBoxState(i); } }
   $('#scGo').onclick=go;
-  i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); go(); } };
+  i.onkeydown=e=>{ if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){ e.preventDefault(); e.stopPropagation(); if(!i.value.trim()&&triggerActiveApproval(getStudySessId(),true)) return; go(); } };
   i.oninput=()=>{ chatDrafts[getStudySessId()]=i.value; autoGrow(i); syncGemBoxState(i); };
   wireAiSlash(i);
   wireChatDrop(m.querySelector('.sc-wrap'),()=>getStudySessId());
@@ -10387,7 +11309,7 @@ function send(){
   i.value='';autoGrow(i);syncGemBoxState(i);
   aiSend('side_ai',q);
 }
-$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}}; $('#chatIn').oninput=e=>{autoGrow(e.target);syncGemBoxState(e.target);}; wireAiSlash($('#chatIn'));
+$('#send').onclick=send; $('#chatIn').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();e.stopPropagation();if(!e.target.value.trim()&&triggerActiveApproval('side_ai',true))return;send()}}; $('#chatIn').oninput=e=>{autoGrow(e.target);syncGemBoxState(e.target);}; wireAiSlash($('#chatIn'));
 wireChatDrop($('#rb-ai'),()=>'side_ai');
 
 /* ---------- Sağ sekmeler & Panel düğmeleri ---------- */
@@ -10413,6 +11335,7 @@ function togglePane(side){
   if(side==='right'&&curMode==='write') writeNoRight=app.classList.contains('no-right');
   if(side==='left'&&curMode==='study') studyNoLeft=app.classList.contains('no-left');
   if(side==='right'&&curMode==='study') studyNoRight=app.classList.contains('no-right');
+  applyPaneWidths();
   syncPaneBtns();
   syncPdfFocusMode();
   saveSessionTabs();
@@ -10491,12 +11414,13 @@ function initResizers(){
       el.classList.add('on');
       app.classList.add('resizing');
       const onMove=e=>{
+        const avail=paneAvailW();
         if(side==='left'){
-          const raw=e.clientX-52;
-          leftW=clampLeft(raw);
+          const target=clampLeft(e.clientX-RAIL_W);
+          leftPct=clampLeftPct(target/avail);
         }else{
-          const raw=window.innerWidth-e.clientX;
-          rightW=clampRight(raw);
+          const target=clampRight(window.innerWidth-e.clientX);
+          rightPct=clampRightPct(target/avail);
         }
         applyPaneWidths();
       };
@@ -10511,19 +11435,26 @@ function initResizers(){
       window.addEventListener('mouseup',onUp);
     });
     el.addEventListener('dblclick',()=>{
-      if(side==='left') leftW=248;
-      else rightW=viewerPrev?500:340;
+      if(side==='left') leftPct=LEFT_PCT_DEF;
+      else rightPct=viewerPrev?VIEWER_PCT_MIN:RIGHT_PCT_DEF;
       applyPaneWidths();
       saveSessionTabs();
     });
   };
   bind(rl,'left');
   bind(rr,'right');
-  window.addEventListener('resize',()=>{
-    leftW=clampLeft(leftW);
-    rightW=clampRight(rightW);
+  let lastAppW=0;
+  const syncOnResize=()=>{
+    const w=app?app.clientWidth:window.innerWidth;
+    if(w===lastAppW) return;
+    lastAppW=w;
     applyPaneWidths();
-  });
+  };
+  window.addEventListener('resize',syncOnResize);
+  if(typeof ResizeObserver!=='undefined'&&app){
+    new ResizeObserver(syncOnResize).observe(app);
+  }
+  applyPaneWidths();
 }
 initResizers();
 
@@ -10611,6 +11542,7 @@ function layoutMode(m){
   if(m==='study'){show(0,1,0,'Kaynaklar');renderStudio();const stEl=$('.rt[data-rt=studio]');if(stEl)stEl.click();app.classList.toggle('no-left',!!studyNoLeft);app.classList.toggle('no-right',!!studyNoRight);}
   if(m==='plan'){app.classList.add('no-left','no-right');show(1,0,0,'Kasa Notları');}
   if(m==='ai'){app.classList.remove('no-left');app.classList.add('no-right');show(1,0,1,'AI Oturumları');const el=$('.rt[data-rt=skills]');if(el)el.click();renderSessions();}
+  applyPaneWidths();
   syncPaneBtns();
   saveSessionTabs();
   scheduleRecordNavState();
@@ -10642,8 +11574,14 @@ function isHtmlTab(id){
   const ext=(p&&p.ext?p.ext:String(id).slice(String(id).lastIndexOf('.'))).toLowerCase();
   return ext==='.html'||ext==='.htm';
 }
+function isPptxTab(id){
+  if(!String(id||'').startsWith('note:')) return false;
+  const p=pages[id];
+  const ext=(p&&p.ext?p.ext:String(id).slice(String(id).lastIndexOf('.'))).toLowerCase();
+  return /\.(pptx?|ppsx)$/i.test(ext);
+}
 function isCachedFrameTab(id){
-  return isPdfTab(id)||isHtmlTab(id);
+  return isPdfTab(id)||isHtmlTab(id)||isPptxTab(id);
 }
 function syncPdfFocusMode(){
   if(!app) return;
@@ -10679,6 +11617,21 @@ document.addEventListener('keydown',e=>{
     navForward();
     return;
   }
+  if(e.key==='Enter'&&!e.shiftKey&&!e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.isComposing){
+    if(!$('#kasaModalBg')?.classList.contains('show')&&!$('#gcalModalBg')?.classList.contains('show')){
+      const t=e.target;
+      const onDenyBtn=!!(t&&t.closest&&t.closest('[data-appr-deny]'));
+      const onEditable=!!(t&&(t.isContentEditable||t.tagName==='TEXTAREA'||t.tagName==='SELECT'||(t.tagName==='INPUT'&&t.type!=='checkbox'&&t.type!=='radio'&&t.type!=='button'&&t.type!=='submit')));
+      if(!onDenyBtn&&!onEditable){
+        const apSid=getVisibleApprovalSession();
+        if(apSid&&triggerActiveApproval(apSid,true)){
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+    }
+  }
   if(e.key==='Tab'&&e.ctrlKey){
     e.preventDefault();
     cycleTab(e.shiftKey?-1:1);
@@ -10698,6 +11651,7 @@ document.addEventListener('keydown',e=>{
     if(k==='d'){e.preventDefault();gcalSetView('day');return;}
     if(k==='w'){e.preventDefault();gcalSetView('week');return;}
     if(k==='m'){e.preventDefault();gcalSetView('month');return;}
+    if(k==='p'){e.preventDefault();gcalSetView('schedule');return;}
     if(k==='a'){e.preventDefault();gcalSetView('agenda');return;}
     if(k==='y'){e.preventDefault();gcalSetView('semester');return;}
     if(k==='t'){e.preventDefault();gcalGoToday();return;}
@@ -10770,6 +11724,7 @@ document.addEventListener('keydown',e=>{
 /* ---------- Skill kütüphanesi (komut / mod / yetenek / araç) ---------- */
 const mk=(h,prompt,r,kind)=>({h,prompt,r,kind});
 Object.assign(SK,{
+ browser:mk('/browser','Şu an açık olan Chrome penceremdeki aktif sekmeyi incele ve istediğim işlemi yap.',['komut','açık Chrome','MCP'],''),
  usage:mk('/usage','Canlı agy CLI kota ve kullanım durumunu göster.',['komut','agy /usage','anında'],'cmd'),
  compact:mk('/compact','Bağlamı sıkıştır.',['komut','token tasarrufu','anında'],'cmd'),
  clear:mk('/clear','Oturumu temizle.',['komut','—','anında'],'cmd'),
@@ -10791,7 +11746,7 @@ Object.assign(SK,{
 });
 const GROUPS=[
  ['Mühendislik & Ders Araçları',[['ozet','≡','Aktif notu & kaynakları özetle',''],['fisle','▤','A4 iki sütun sınav föyü hazırla',''],['spice','∿','Devre analizi & SPICE netlist',''],['teardown','⬡','Sistem & kayıp mekanizması analizi',''],['whisper','◉','Ham metni ders notuna yapılandır',''],['pcb','▣','Donanım & şema blok taslağı','']]],
- ['Komutlar',[['usage','◔','Canlı agy /usage kotası','cmd'],['compact','⇲','Bağlamı sıkıştır','cmd'],['clear','⌫','Oturumu temizle','cmd'],['plan','☰','Adım adım çalışma planı',''],['goal','◎','Uzun hedef modu',''],['boost','⚡','Derin matematiksel analiz','']]],
+ ['Komutlar',[['browser','🌐','Açık Chrome penceresine bağlan',''],['usage','◔','Canlı agy /usage kotası','cmd'],['compact','⇲','Bağlamı sıkıştır','cmd'],['clear','⌫','Oturumu temizle','cmd'],['plan','☰','Adım adım çalışma planı',''],['goal','◎','Uzun hedef modu',''],['boost','⚡','Derin matematiksel analiz','']]],
  ['Modlar',[['caveman','🪨','Kısa, token tasarruflu yanıt','mode'],['caveman-commit','↳','Commit mesajı',''],['caveman-review','✓','Kısa inceleme','']]],
  ['Yetenekler',[['graphify','⌘','Kavram grafı çıkar',''],['investigate-first','?','Önce teşhis',''],['surgical-patch','✂','Dar yama',''],['safe-refactor','⟳','Güvenli refactor',''],['lean-build','▢','Sade geliştirme',''],['verify-and-stop','■','Doğrula ve dur',''],['llm-council','☷','Çok perspektifli karar','']]]
 ];
@@ -10802,7 +11757,7 @@ function buildSkills(q=''){
     r.insertAdjacentHTML('beforeend',`<div class="grp">${g}</div>`);
     its.forEach(([k,ic,desc,kind])=>{
       const d=document.createElement('div'); d.className='skill s'; d.draggable=true; d.dataset.skill=k;
-      d.innerHTML=`<div class="ic">${ic}</div><div>${k.startsWith('caveman')||kind==='cmd'||['plan','goal','boost'].includes(k)?'/':''}${k}<small>${desc}</small></div><span class="tg">${kind==='cmd'?'KOMUT':kind==='mode'?'MOD':'ÇALIŞTIR'}</span>`;
+      d.innerHTML=`<div class="ic">${ic}</div><div>${k.startsWith('caveman')||kind==='cmd'||['plan','goal','boost','browser'].includes(k)?'/':''}${k}<small>${desc}</small></div><span class="tg">${kind==='cmd'?'KOMUT':kind==='mode'?'MOD':'ÇALIŞTIR'}</span>`;
       d.onclick=()=>{
         const targetSess=isAI(active)?active:(active==='studychat'?getStudySessId():'side_ai');
         if(kind==='cmd'||kind==='mode'){
@@ -10960,12 +11915,14 @@ function aiInstant(id,k){
     s.msgs.push({w:'a',h:'⏳ <code>agy -p "/usage"</code> üzerinden canlı kota sorgulanıyor…'});
     aiRefresh(id);
     loadQuota(true).then(()=>{
-      const rowsHtml=quota.map(q=>q.u===null
-        ?`<tr><td style="padding:4px 6px"><b>${q.n}</b></td><td style="padding:4px 6px"><span class="chip l">∞ Sınırsız</span></td><td style="padding:4px 6px">${q.reset}</td></tr>`
-        :`<tr><td style="padding:4px 6px"><b>${q.n}</b></td><td style="padding:4px 6px"><span class="chip ${q.u>=100?'':(q.u>85?'':'c')}">${q.u>=100?'%0 · Tükendi':'%'+(100-q.u)+' kaldı'}</span></td><td style="padding:4px 6px">${q.reset}</td></tr>`
-      ).join('');
+      const rowsHtml=quota.map(q=>{
+        const mSub=q.models?`<div style="font-size:10.5px;color:var(--mut);margin-top:2px;font-weight:400">${escHtml(q.models)}</div>`:'';
+        return q.u===null
+          ?`<tr><td style="padding:4px 6px"><b>${escHtml(q.n)}</b>${mSub}</td><td style="padding:4px 6px"><span class="chip l">∞ Sınırsız</span></td><td style="padding:4px 6px">${escHtml(q.reset)}</td></tr>`
+          :`<tr><td style="padding:4px 6px"><b>${escHtml(q.n)}</b>${mSub}</td><td style="padding:4px 6px"><span class="chip ${q.u>=100?'':(q.u>85?'':'c')}">${q.u>=100?'%0 · Tükendi':'%'+(100-q.u)+' kaldı'}</span></td><td style="padding:4px 6px">${escHtml(q.reset)}</td></tr>`;
+      }).join('');
       const msgObj=s.msgs[s.msgs.length-1];
-      const h=`<b>📊 Canlı Antigravity (<code>/usage</code>) Kota Durumu</b><table style="width:100%;margin-top:8px;border-collapse:collapse;font:12px var(--mono)"><thead><tr style="border-bottom:1px solid var(--line);color:var(--mut);text-align:left"><th style="padding:4px 6px">Model</th><th style="padding:4px 6px">Kalan Hak</th><th style="padding:4px 6px">Pencere &amp; Yenilenme</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="route"><span class="chip c">agy /usage</span><span>Canlı sunucu kotası senkronize edildi</span></div>`;
+      const h=`<b>📊 Canlı Antigravity (<code>/usage</code>) Kota Durumu</b><table style="width:100%;margin-top:8px;border-collapse:collapse;font:12px var(--mono)"><thead><tr style="border-bottom:1px solid var(--line);color:var(--mut);text-align:left"><th style="padding:4px 6px">Havuz / Modeller</th><th style="padding:4px 6px">Kalan Hak</th><th style="padding:4px 6px">Pencere &amp; Yenilenme</th></tr></thead><tbody>${rowsHtml}</tbody></table><div class="route"><span class="chip c">agy /usage</span><span>Canlı sunucu kotası senkronize edildi</span></div>`;
       if(msgObj) msgObj.h=h; else s.msgs.push({w:'a',h});
       api('/api/chats',{session:id,w:'a',h}).catch(()=>{});
       aiRefresh(id);
@@ -11007,16 +11964,21 @@ function aiInstant(id,k){
 }
 
 /* ---------- Kullanım & kalan haklar ---------- */
-let quota=[{n:'Yükleniyor…',u:0,reset:''}];
+let quota=[{n:'Yükleniyor…',u:0,reset:'',models:''}];
+let _lastQuotaSyncAt=0;
 const fmtReset=q=>q.detail?q.detail:(q.cloud?(q.used_pct>=100?`Tükendi · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:(q.count?`${q.count}/${q.limit} istek · ${Math.floor(q.reset_s/3600)} sa ${Math.floor(q.reset_s%3600/60)} dk sonra yenilenir`:`0/${q.limit} istek`)):`sınırsız · ${q.count} istek`);
-function applyQuota(rows){ quota=rows.map(q=>({n:q.label,u:q.used_pct,reset:fmtReset(q),group:q.group||q.id,source:q.source||''})); renderUsage(); }
+function applyQuota(rows){ _lastQuotaSyncAt=Date.now(); quota=rows.map(q=>({n:q.label,u:q.used_pct,reset:fmtReset(q),models:q.models||'',group:q.group||q.id,source:q.source||''})); renderUsage(); }
 async function loadQuota(force=false){ try{ applyQuota(await api(force?'/api/quota?refresh=1':'/api/quota')); return true; }catch(e){ return false; } }
 async function refreshQuota(ev){ ev&&ev.stopPropagation(); const b=$('#urefresh'); if(b){b.disabled=true;b.textContent='⟳ …';} const ok=await loadQuota(true); const b2=$('#urefresh'); if(b2){b2.disabled=false;b2.textContent=ok?'✓ Güncellendi':'⚠ Hata';setTimeout(()=>{const b3=$('#urefresh');if(b3)b3.textContent='⟳ Yenile';},1500);} }
 function useQuota(){}
 function quotaRows(){
-  return quota.map(q=>q.u===null
-   ?`<div class="qrow"><div class="l"><span>${q.n}</span><b style="color:var(--ok)">∞</b></div><div class="bar g"><i style="width:100%"></i></div><small>${q.reset}</small></div>`
-   :`<div class="qrow"><div class="l"><span>${q.n}</span><b style="${q.u>=100?'color:var(--cu)':''}">${q.u>=100?'Tükendi':'%'+(100-q.u)+' kaldı'}</b></div><div class="bar ${q.u>85?'w':''}"><i style="width:${q.u}%"></i></div><small>${q.reset}</small></div>`).join('');
+  return quota.map(q=>{
+    if(q.u===null){
+      return `<div class="qrow"><div class="l"><span>${escHtml(q.n)}</span><b style="color:var(--ok)">∞</b></div><div class="bar g"><i style="width:100%"></i></div><small>${escHtml(q.reset)}</small></div>`;
+    }
+    const rem=Math.max(0,Math.min(100,Math.round(100-q.u)));
+    return `<div class="qrow"><div class="l"><span>${escHtml(q.n)}</span><b style="${rem<=0?'color:var(--err)':(rem<15?'color:var(--cu)':'')}">${rem<=0?'Tükendi':'%'+rem+' kaldı'}</b></div><div class="bar ${rem<15?'w':''}"><i style="width:${rem}%"></i></div><small>${escHtml(q.reset)}</small>${q.models?`<small class="qmodels" title="${escAttr(q.models)}">${escHtml(q.models)}</small>`:''}</div>`;
+  }).join('');
 }
 function renderUsage(){
   const cloud=[]; const seenGroups=new Set();
@@ -11025,12 +11987,14 @@ function renderUsage(){
   $('#uring').style.setProperty('--p',left); $('#uringTxt').textContent=left+'%';
   const liveTag=quota.some(q=>q.source==='agy_cli')?' <span class="chip c" style="font-size:9.5px;padding:1px 5px;text-transform:none">agy /usage</span>':'';
   $('#upop').innerHTML=`<h4><span>AI kullanımı${liveTag}</span><button class="urefresh" id="urefresh" title="agy /usage ile kotaları yenile" onclick="refreshQuota(event)">⟳ Yenile</button></h4>${quotaRows()}
-   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kotalar doğrudan <code>agy -p "/usage"</code> üzerinden çekilir. Kotası dolan bulut modeli otomatik olarak sıradaki aktif modele devredilir.</div>`;
+   <div style="font:11px var(--mono);color:var(--mut);border-top:1px solid var(--line);padding-top:8px">Kota havuzları doğrudan <code>agy -p "/usage"</code> üzerinden otomatik okunur ve 5 dk'da bir kendini günceller.</div>`;
   const ql=$('#quotaList'); if(ql)ql.innerHTML=quotaRows();
 }
 (()=>{const rr=$('#rb-router'); rr.querySelectorAll('.quota').forEach(e=>e.remove()); rr.querySelector('.ph').insertAdjacentHTML('afterend','<div id="quotaList"></div>');})();
 $('#uring').onclick=e=>{e.stopPropagation();$('#mpop')?.classList.remove('show');$('#ppop')?.classList.remove('show');const opening=!$('#upop').classList.contains('show');$('#upop').classList.toggle('show');if(opening)loadQuota();};
 document.addEventListener('click',e=>{if(!e.target.closest('#upop'))$('#upop').classList.remove('show');});
+setInterval(()=>{ if(!document.hidden) loadQuota(false); }, 300000);
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden && Date.now()-_lastQuotaSyncAt>300000) loadQuota(false); });
 loadQuota(); loadHealth(); loadLog(); startEvents();
 
 /* ---------- Tema Yönetimi & Hızlı Seçici ---------- */
@@ -11058,6 +12022,7 @@ function applyTheme(themeId, persist=true) {
   if (persist) { try{ sessionStorage.setItem('agydesk_win_theme',curTheme); }catch(e){} persistUiState({ agydesk_theme: curTheme }, true); saveSessionTabs(); }
   noteDomCache.clear();
   renderThemePop();
+  if ($('#spop')?.classList.contains('show')) renderSettingsPop();
   if (active === 'sim' || active === 'trafo') renderMain();
   else if (active === 'cal') renderCal($('#main'), false);
   if (window.mermaid) {
@@ -11266,6 +12231,201 @@ function initTextPrefs(){
   document.addEventListener('wheel',e=>{ if(e.ctrlKey){e.preventDefault();stepTz(e.deltaY<0?1:-1);} },{passive:false});
 }
 
+/* ---------- Ayarlar & İvme Kısıtlı Yumuşak Kaydırma (AgySmoothScroll) ---------- */
+const SCROLL_PRESETS={
+  'native':     { name:'Doğal',       sub:'Tarayıcı varsayılanı', maxSpeed:1800, maxAccel:5200, gain:6.8, mult:1.0 },
+  'lerp':       { name:'Saf Lerp',    sub:'Lenis tarzı akış',     maxSpeed:2400, maxAccel:99999,gain:7.5, mult:1.0 },
+  'accel-fast': { name:'İvme · Akıcı',sub:'Sıfır geri sekme',     maxSpeed:1800, maxAccel:5200, gain:6.8, mult:1.0 },
+  'accel-cine': { name:'İvme · Sinematik', sub:'Uzun S-eğrisi',   maxSpeed:1350, maxAccel:2600, gain:4.4, mult:1.15 }
+};
+const SCROLL_CFG=(()=>{
+  const def={ mode:'accel-fast', mult:1.0, bypassTouchpad:true };
+  try{
+    const raw=JSON.parse(localStorage.getItem('agydesk_scroll_cfg')||'null');
+    if(raw&&SCROLL_PRESETS[raw.mode]) return Object.assign(def,raw);
+  }catch(_){}
+  return def;
+})();
+const _smoothStates=new WeakMap();
+
+function saveScrollCfg(){
+  try{ localStorage.setItem('agydesk_scroll_cfg',JSON.stringify(SCROLL_CFG)); }catch(_){}
+}
+function setScrollMode(mode){
+  if(!SCROLL_PRESETS[mode]) return;
+  SCROLL_CFG.mode=mode;
+  SCROLL_CFG.mult=SCROLL_PRESETS[mode].mult;
+  saveScrollCfg();
+  renderSettingsPop();
+}
+function setScrollMult(v){
+  SCROLL_CFG.mult=Math.max(0.5,Math.min(2.2,parseFloat(v)||1.0));
+  saveScrollCfg();
+  const lbl=$('#spopMultLbl');
+  if(lbl) lbl.textContent=SCROLL_CFG.mult.toFixed(1)+'x';
+}
+function toggleScrollTouchpad(){
+  SCROLL_CFG.bypassTouchpad=!SCROLL_CFG.bypassTouchpad;
+  saveScrollCfg();
+  renderSettingsPop();
+}
+function renderSettingsPop(){
+  const pop=$('#spop'); if(!pop) return;
+  const cur=SCROLL_PRESETS[SCROLL_CFG.mode]||SCROLL_PRESETS['accel-fast'];
+  const darks=THEMES.filter(t=>t.cat==='dark');
+  const lights=THEMES.filter(t=>t.cat==='light');
+  const tBtn=t=>`
+    <button class="tbtn ${t.id===curTheme?'active':''}" onclick="applyTheme('${t.id}')" title="${t.desc}">
+      <span class="tdot" style="background:${t.dot}"></span>
+      <div style="min-width:0;overflow:hidden">
+        <div class="tbtn-name">${t.name}</div>
+        <div class="tbtn-desc">${t.desc}</div>
+      </div>
+    </button>`;
+  pop.innerHTML=`
+    <div class="tpop-head"><span>⚙ Ayarlar</span><span style="font-size:10.5px;color:var(--cu)">${cur.name}</span></div>
+    <div class="tpop-sec">Kaydırma akışı (Fare tekerleği)</div>
+    <div class="sgrid">${Object.entries(SCROLL_PRESETS).map(([k,p])=>
+      `<button class="sbtn ${k===SCROLL_CFG.mode?'active':''}" onclick="setScrollMode('${k}')">${p.name}<small>${p.sub}</small></button>`
+    ).join('')}</div>
+    <div class="tpop-sec" style="margin-top:8px;display:flex;justify-content:space-between"><span>Kaydırma adımı</span><span id="spopMultLbl" style="color:var(--cu)">${SCROLL_CFG.mult.toFixed(1)}x</span></div>
+    <div class="fsize">
+      <input type="range" min="0.5" max="2.2" step="0.1" value="${SCROLL_CFG.mult}" oninput="setScrollMult(this.value)" style="flex:1">
+      <button onclick="setScrollMult(1);renderSettingsPop()" title="Varsayılan (1.0x)">⟲</button>
+    </div>
+    <div class="frow" style="margin-top:6px"><span>Touchpad pas geç</span><button class="fsw ${SCROLL_CFG.bypassTouchpad?'on':''}" onclick="toggleScrollTouchpad()" title="Dizüstü dokunmatik yüzeyinde doğal kaydırmayı koru"></button></div>
+    <div style="font:10.5px var(--mono);color:var(--mut);margin-top:4px">Shift + Tekerlek: Yatay akış (Excel)</div>
+    <div class="tpop-sec" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">Pil göstergesi</div>
+    <div class="sgrid">
+      <button class="sbtn ${batteryVisMode==='unplugged'?'active':''}" onclick="setBatteryVisMode('unplugged')">Sadece pilde<small>Prizde gizle</small></button>
+      <button class="sbtn ${batteryVisMode==='always'?'active':''}" onclick="setBatteryVisMode('always')">Her zaman<small>Prizde de göster</small></button>
+    </div>
+    <div class="tpop-sec" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--line)">🌙 Karanlık Temalar (${darks.length})</div>
+    <div class="tgrid">${darks.map(tBtn).join('')}</div>
+    <div class="tpop-sec" style="margin-top:6px">☀️ Açık & Kağıt Temalar (${lights.length})</div>
+    <div class="tgrid">${lights.map(tBtn).join('')}</div>`;
+}
+function _agyIsScrollable(el,axis){
+  const cs=getComputedStyle(el);
+  const ov=axis==='y'?cs.overflowY:cs.overflowX;
+  if(ov!=='auto'&&ov!=='scroll') return false;
+  return axis==='y'?(el.scrollHeight>el.clientHeight+1):(el.scrollWidth>el.clientWidth+1);
+}
+function _agyCanScrollDir(el,dx,dy){
+  const canY=dy!==0&&_agyIsScrollable(el,'y')&&((dy>0&&el.scrollTop<el.scrollHeight-el.clientHeight-1)||(dy<0&&el.scrollTop>1));
+  const canX=dx!==0&&_agyIsScrollable(el,'x')&&((dx>0&&el.scrollLeft<el.scrollWidth-el.clientWidth-1)||(dx<0&&el.scrollLeft>1));
+  return canY||canX;
+}
+function _agyFindScrollTarget(startEl,dx,dy){
+  let cur=startEl;
+  while(cur&&cur!==document.body&&cur!==document.documentElement){
+    if(cur.dataset&&cur.dataset.noSmoothScroll==='1') return null;
+    if(_agyCanScrollDir(cur,dx,dy)) return cur;
+    cur=cur.parentElement;
+  }
+  return null;
+}
+function _agyStepSmooth(el,ts){
+  const st=_smoothStates.get(el);
+  if(!st) return;
+  const now=ts||performance.now();
+  const dt=Math.min(0.05,Math.max(0.004,(now-(st.lastTs||now))/1000));
+  st.lastTs=now;
+  if(Math.abs(el.scrollTop-st.lastAppliedY)>3||Math.abs(el.scrollLeft-st.lastAppliedX)>3){
+    st.raf=0; st.velX=st.velY=0; return;
+  }
+  const maxY=Math.max(0,el.scrollHeight-el.clientHeight);
+  const maxX=Math.max(0,el.scrollWidth-el.clientWidth);
+  st.targetY=Math.max(0,Math.min(maxY,st.targetY));
+  st.targetX=Math.max(0,Math.min(maxX,st.targetX));
+  const forceCine=el.classList&&el.classList.contains('gprog');
+  const mode=forceCine?'accel-cine':SCROLL_CFG.mode;
+  const p=SCROLL_PRESETS[mode]||SCROLL_PRESETS['accel-fast'];
+
+  if(mode==='lerp'){
+    const alpha=1-Math.exp(-p.gain*dt);
+    const ny=st.posY+(st.targetY-st.posY)*alpha;
+    const nx=st.posX+(st.targetX-st.posX)*alpha;
+    st.velY=(ny-st.posY)/dt; st.velX=(nx-st.posX)/dt;
+    st.posY=ny; st.posX=nx;
+  }else{
+    const stepAxis=(pos,target,vel,maxBound)=>{
+      const dist=target-pos, absD=Math.abs(dist), sgn=dist>=0?1:-1;
+      const vBrake=Math.sqrt(2*p.maxAccel*0.82*absD);
+      const des=sgn*Math.min(p.maxSpeed,absD*p.gain,vBrake);
+      const maxDv=p.maxAccel*dt;
+      let nVel=vel+Math.max(-maxDv,Math.min(maxDv,des-vel));
+      let nPos=pos+nVel*dt;
+      if((dist>0&&nPos>target)||(dist<0&&nPos<target)){ nPos=target; nVel=0; }
+      return [Math.max(0,Math.min(maxBound,nPos)),nVel];
+    };
+    [st.posY,st.velY]=stepAxis(st.posY,st.targetY,st.velY,maxY);
+    [st.posX,st.velX]=stepAxis(st.posX,st.targetX,st.velX,maxX);
+  }
+
+  const doneY=Math.abs(st.targetY-st.posY)<0.6&&Math.abs(st.velY)<8;
+  const doneX=Math.abs(st.targetX-st.posX)<0.6&&Math.abs(st.velX)<8;
+  if(doneY&&doneX){
+    st.posY=st.targetY; st.posX=st.targetX; st.velY=st.velX=0;
+    el.scrollTop=st.posY; el.scrollLeft=st.posX;
+    st.lastAppliedY=el.scrollTop; st.lastAppliedX=el.scrollLeft;
+    st.raf=0; st.lastTs=0; return;
+  }
+  el.scrollTop=st.posY; el.scrollLeft=st.posX;
+  st.lastAppliedY=el.scrollTop; st.lastAppliedX=el.scrollLeft;
+  st.raf=requestAnimationFrame(t=>_agyStepSmooth(el,t));
+}
+function initSmoothScroll(){
+  const sb=$('#settingsBtn');
+  if(sb) sb.onclick=e=>{
+    e.stopPropagation();
+    $('#tpop')?.classList.remove('show');
+    $('#fpop')?.classList.remove('show');
+    $('#mpop')?.classList.remove('show');
+    $('#ppop')?.classList.remove('show');
+    renderSettingsPop();
+    $('#spop')?.classList.toggle('show');
+  };
+  const sp=$('#spop');
+  if(sp) sp.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{ if(!e.target.closest('#settingsBtn')) $('#spop')?.classList.remove('show'); });
+
+  document.addEventListener('wheel',e=>{
+    const inGprog=Boolean(e.target.closest?.('.gprog'));
+    if(e.ctrlKey||e.metaKey||(SCROLL_CFG.mode==='native'&&!inGprog)) return;
+    let dx=e.deltaX, dy=e.deltaY;
+    if(e.deltaMode===1){ dx*=36; dy*=36; }
+    else if(e.deltaMode===2){ dx*=400; dy*=400; }
+    if(e.shiftKey&&dx===0&&dy!==0){ dx=dy; dy=0; }
+    if(dx===0&&dy===0) return;
+
+    const isTouchpad=e.deltaMode===0&&Math.abs(dy)>0&&Math.abs(dy)<40&&Math.abs(dy)%10!==0;
+    if(SCROLL_CFG.bypassTouchpad&&isTouchpad) return;
+
+    const target=_agyFindScrollTarget(e.target,dx,dy);
+    if(!target) return;
+
+    e.preventDefault();
+    let st=_smoothStates.get(target);
+    if(!st){
+      st={posX:target.scrollLeft,posY:target.scrollTop,targetX:target.scrollLeft,targetY:target.scrollTop,velX:0,velY:0,raf:0,lastTs:0,lastAppliedX:target.scrollLeft,lastAppliedY:target.scrollTop};
+      _smoothStates.set(target,st);
+    }
+    if(!st.raf){
+      st.posX=target.scrollLeft; st.posY=target.scrollTop;
+      st.targetX=target.scrollLeft; st.targetY=target.scrollTop;
+      st.lastAppliedX=target.scrollLeft; st.lastAppliedY=target.scrollTop;
+      st.velX=0; st.velY=0; st.lastTs=performance.now();
+    }
+    const maxY=Math.max(0,target.scrollHeight-target.clientHeight);
+    const maxX=Math.max(0,target.scrollWidth-target.clientWidth);
+    const mult=target.classList.contains('gprog')?SCROLL_PRESETS['accel-cine'].mult:SCROLL_CFG.mult;
+    st.targetY=Math.max(0,Math.min(maxY,st.targetY+dy*mult));
+    st.targetX=Math.max(0,Math.min(maxX,st.targetX+dx*mult));
+    if(!st.raf) st.raf=requestAnimationFrame(t=>_agyStepSmooth(target,t));
+  },{passive:false});
+}
+
 /* ---------- Sol ray: sürükle-bırak ile sıralama ---------- */
 function applyRailOrder(saved){
   const rail=document.querySelector('.rail');
@@ -11410,6 +12570,8 @@ function setBatteryVisMode(mode){
   persistUiState({agydesk_bat_mode:mode},true);
   _lastBatKey='';
   renderAppBattery(_lastBatData);
+  const sp=$('#spop');
+  if(sp&&sp.classList.contains('show')) renderSettingsPop();
 }
 async function pollAppBattery(){
   try{
@@ -11446,7 +12608,10 @@ const MEDIA_CTRL_SVG={
   pause:'<svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor"><rect x="3.8" y="3" width="3" height="10" rx=".9"/><rect x="9.2" y="3" width="3" height="10" rx=".9"/></svg>',
   next:'<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M12.8 3.2a.7.7 0 0 0-.7.7v8.2a.7.7 0 0 0 1.4 0V3.9a.7.7 0 0 0-.7-.7Zm-9.5.9a.8.8 0 0 0-1.2.7v6.4a.8.8 0 0 0 1.2.7l6.4-3.2a.8.8 0 0 0 0-1.4L3.3 4.1Z"/></svg>',
   chevron:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>',
-  gear:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.3M8 12.5v1.3M2.2 8h1.3M12.5 8h1.3M3.9 3.9l.95.95M11.15 11.15l.95.95M12.1 3.9l-.95.95M4.85 11.15l-.95.95"/></svg>'
+  gear:'<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 2.2v1.3M8 12.5v1.3M2.2 8h1.3M12.5 8h1.3M3.9 3.9l.95.95M11.15 11.15l.95.95M12.1 3.9l-.95.95M4.85 11.15l-.95.95"/></svg>',
+  volHigh:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2h2.4L8.2 3.5v9L4.9 9.8H2.5a.8.8 0 0 1-.8-.8V7a.8.8 0 0 1 .8-.8Z" fill="currentColor" stroke="none"/><path d="M10.4 5.6a3.3 3.3 0 0 1 0 4.8M12.3 3.8a5.8 5.8 0 0 1 0 8.4"/></svg>',
+  volLow:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2h2.4L8.2 3.5v9L4.9 9.8H2.5a.8.8 0 0 1-.8-.8V7a.8.8 0 0 1 .8-.8Z" fill="currentColor" stroke="none"/><path d="M10.5 5.8a3.1 3.1 0 0 1 0 4.4"/></svg>',
+  volMute:'<svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.2h2.4L8.2 3.5v9L4.9 9.8H2.5a.8.8 0 0 1-.8-.8V7a.8.8 0 0 1 .8-.8Z" fill="currentColor" stroke="none"/><path d="M10.4 6.1l3.8 3.8M14.2 6.1l-3.8 3.8"/></svg>'
 };
 
 const SP_REDIRECT=window.location.origin+'/';
@@ -11467,6 +12632,7 @@ let mediaState={
   artist:'',thumb:'',playing:false,pct:0,device:'',deviceId:'',isActiveDevice:false,targetApp:'',players:[]
 };
 let pcMedia={active:null,sessions:[]};
+let pcVol={level:null,muted:false};
 let spMedia={connected:false,playing:false,title:'',artist:'',thumb:'',pct:0,device:'',devices:[]};
 
 function spConnected(){return !!localStorage.getItem('agydesk_sp_token');}
@@ -11616,6 +12782,9 @@ async function pollPcMedia(){
       else act.thumbnail=lookupMediaThumb(act.app,act.title);
     }
     pcMedia={active:act,sessions};
+    if(typeof d.volume==='number'&&!mediaVolDragging&&Date.now()>_mediaVolLocalUntil){
+      pcVol={level:Math.max(0,Math.min(100,Math.round(d.volume))),muted:!!d.muted};
+    }
   }catch{}
 }
 
@@ -11889,10 +13058,104 @@ setInterval(()=>{
   if(cur) cur.textContent=fmtMediaTime(pos);
 },1000);
 
+let mediaVolDragging=false;
+let _mediaVolLocalUntil=0;
+let _mediaVolSendTimer=null;
+let _mediaVolPending=null;
+let _mediaVolReqSeq=0;
+
+function mediaVolIcon(level,muted){
+  if(muted||level===0) return MEDIA_CTRL_SVG.volMute;
+  if(level!==null&&level<50) return MEDIA_CTRL_SVG.volLow;
+  return MEDIA_CTRL_SVG.volHigh;
+}
+function syncMediaVolDom(){
+  const sl=$('#mpopVol'), pct=$('#mpopVolPct'), btn=$('#mpopVolBtn');
+  if(!sl&&!pct&&!btn) return;
+  const known=typeof pcVol.level==='number';
+  const lvl=known?pcVol.level:0;
+  const muted=!!pcVol.muted;
+  const eff=muted?0:lvl;
+  if(sl){
+    sl.value=String(lvl);
+    sl.style.setProperty('--p',eff+'%');
+    sl.classList.toggle('muted',muted);
+  }
+  if(pct) pct.textContent=known?String(lvl):'—';
+  if(btn){
+    btn.classList.toggle('muted',muted||lvl===0);
+    btn.title=muted?'Sesi aç':'Sesi kapat';
+    btn.innerHTML=mediaVolIcon(known?lvl:50,muted);
+  }
+}
+async function flushMediaVol(){
+  if(_mediaVolSendTimer){clearTimeout(_mediaVolSendTimer);_mediaVolSendTimer=null;}
+  const payload=_mediaVolPending;
+  _mediaVolPending=null;
+  if(!payload) return;
+  const seq=++_mediaVolReqSeq;
+  try{
+    const r=await fetch('/api/media/volume',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!r.ok) return;
+    const d=await r.json();
+    if(seq===_mediaVolReqSeq&&!mediaVolDragging&&!_mediaVolPending&&typeof d.volume==='number'){
+      pcVol={level:Math.max(0,Math.min(100,Math.round(d.volume))),muted:!!d.muted};
+      syncMediaVolDom();
+    }
+  }catch{}
+}
+function queueMediaVol(payload,immediate=false){
+  _mediaVolPending=payload;
+  if(immediate){
+    flushMediaVol();
+    return;
+  }
+  if(!_mediaVolSendTimer){
+    _mediaVolSendTimer=setTimeout(flushMediaVol,55);
+  }
+}
+function onMediaVolInput(val){
+  mediaVolDragging=true;
+  const v=Math.max(0,Math.min(100,Math.round(Number(val)||0)));
+  pcVol={level:v,muted:v>0?false:pcVol.muted};
+  _mediaVolLocalUntil=Date.now()+800;
+  syncMediaVolDom();
+  queueMediaVol({volume:v},false);
+}
+function commitMediaVol(val){
+  mediaVolDragging=false;
+  const v=Math.max(0,Math.min(100,Math.round(Number(val)||0)));
+  pcVol={level:v,muted:v>0?false:pcVol.muted};
+  _mediaVolLocalUntil=Date.now()+800;
+  syncMediaVolDom();
+  queueMediaVol({volume:v},true);
+}
+function toggleMediaMute(){
+  pcVol={level:pcVol.level,muted:!pcVol.muted};
+  _mediaVolLocalUntil=Date.now()+800;
+  syncMediaVolDom();
+  queueMediaVol({toggle_mute:true},true);
+}
+function onMediaVolWheel(e){
+  if(!e||!e.deltaY) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const base=typeof pcVol.level==='number'?pcVol.level:50;
+  const step=e.deltaY<0?2:-2;
+  const next=Math.max(0,Math.min(100,base+step));
+  pcVol={level:next,muted:next>0?false:pcVol.muted};
+  _mediaVolLocalUntil=Date.now()+800;
+  syncMediaVolDom();
+  queueMediaVol({volume:next},false);
+}
+
 let _lastMediaPopSig='';
 function renderMediaPop(){
   const pop=$('#mpop'); if(!pop)return;
-  if(mediaSeeking&&pop.classList.contains('show'))return;
+  if((mediaSeeking||mediaVolDragging)&&pop.classList.contains('show'))return;
   const activeEl=document.activeElement;
   if(activeEl&&activeEl.id==='spCidIn'&&pop.classList.contains('show'))return;
 
@@ -11907,6 +13170,7 @@ function renderMediaPop(){
     const el=$('#mpopSeek'), cur=$('#mpopCurTime');
     if(el){ el.value=pos; el.style.setProperty('--p',pct.toFixed(1)+'%'); }
     if(cur) cur.textContent=fmtMediaTime(pos);
+    if(!mediaVolDragging&&Date.now()>_mediaVolLocalUntil) syncMediaVolDom();
     return;
   }
   _lastMediaPopSig=sig;
@@ -11940,6 +13204,17 @@ function renderMediaPop(){
       `}
     </div>`:'';
 
+  const volKnown=typeof pcVol.level==='number';
+  const volVal=volKnown?pcVol.level:0;
+  const volMuted=!!pcVol.muted;
+  const volEff=volMuted?0:volVal;
+  const volHtml=`
+    <div class="mpop-vol" id="mpopVolWrap" title="PC Sesi · Fare tekerleği ile ayarla">
+      <button type="button" id="mpopVolBtn" class="mpop-vbtn ${volMuted||volVal===0?'muted':''}" onclick="toggleMediaMute()" title="${volMuted?'Sesi aç':'Sesi kapat'}">${mediaVolIcon(volKnown?volVal:50,volMuted)}</button>
+      <input type="range" id="mpopVol" class="mpop-seek mpop-vslider ${volMuted?'muted':''}" min="0" max="100" step="1" value="${volVal}" style="--p:${volEff}%" oninput="onMediaVolInput(this.value)" onchange="commitMediaVol(this.value)" aria-label="PC Sesi">
+      <span id="mpopVolPct" class="mpop-vpct">${volKnown?volVal:'—'}</span>
+    </div>`;
+
   pop.innerHTML=`
     <div class="mpop-head">
       <span class="mpop-plat">${mediaIcon(s.platform)}<span>${escAttr(s.platformLabel)}</span></span>
@@ -11961,6 +13236,7 @@ function renderMediaPop(){
       <button class="mpop-cbtn main" onclick="mediaCmd('playpause')" title="Oynat / Duraklat">${s.playing?MEDIA_CTRL_SVG.pause:MEDIA_CTRL_SVG.play}</button>
       <button class="mpop-cbtn" onclick="mediaCmd('next')" title="Sonraki parça">${MEDIA_CTRL_SVG.next}</button>
     </div>
+    ${volHtml}
     ${setupHtml}
   `;
 }
@@ -12009,6 +13285,43 @@ async function refreshMediaNow(){
   return _mediaRefreshInFlight;
 }
 
+let _mediaVolPollTimer=null;
+let _mediaVolPollInFlight=false;
+async function pollPcVolumeFast(){
+  if(_mediaVolPollInFlight||mediaVolDragging||_mediaVolPending||Date.now()<_mediaVolLocalUntil) return;
+  _mediaVolPollInFlight=true;
+  try{
+    const r=await fetch('/api/media/volume',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!r.ok) return;
+    const d=await r.json();
+    if(!mediaVolDragging&&!_mediaVolPending&&Date.now()>_mediaVolLocalUntil&&typeof d.volume==='number'){
+      const lvl=Math.max(0,Math.min(100,Math.round(d.volume)));
+      const muted=!!d.muted;
+      if(lvl!==pcVol.level||muted!==pcVol.muted){
+        pcVol={level:lvl,muted};
+        syncMediaVolDom();
+      }
+    }
+  }catch{}finally{
+    _mediaVolPollInFlight=false;
+  }
+}
+function stopMediaVolPoll(){
+  if(_mediaVolPollTimer){clearInterval(_mediaVolPollTimer);_mediaVolPollTimer=null;}
+}
+function startMediaVolPoll(){
+  if(_mediaVolPollTimer) return;
+  pollPcVolumeFast();
+  _mediaVolPollTimer=setInterval(()=>{
+    const pop=$('#mpop');
+    if(document.hidden||!pop||!pop.classList.contains('show')){
+      stopMediaVolPoll();
+      return;
+    }
+    pollPcVolumeFast();
+  },160);
+}
+
 function openMediaPop(pin=false){
   const pop=$('#mpop'); if(!pop)return;
   $('#upop')?.classList.remove('show');
@@ -12020,12 +13333,14 @@ function openMediaPop(pin=false){
   pop.classList.add('show');
   positionRailPop(pop,$('#mediaBtn'));
   renderMediaRail();
+  startMediaVolPoll();
 }
 
 function closeMediaPop(force=false){
   if(force)mediaPinned=false;
   if(!force&&mediaPinned)return;
   $('#mpop')?.classList.remove('show');
+  stopMediaVolPoll();
   renderMediaRail();
 }
 
@@ -12054,13 +13369,33 @@ function initMediaHub(){
     else{openMediaPop(true);refreshMediaNow();}
   });
   pop.addEventListener('click',e=>e.stopPropagation());
+  pop.addEventListener('wheel',e=>{
+    if(e.target.closest('#mpopVolWrap')||pop.scrollHeight<=pop.clientHeight+2){
+      onMediaVolWheel(e);
+    }
+  },{passive:false});
+  btn.addEventListener('wheel',e=>{
+    if(!pop.classList.contains('show')) openMediaPop(false);
+    onMediaVolWheel(e);
+  },{passive:false});
   document.addEventListener('click',e=>{
     if(!e.target.closest('#mpop')&&!e.target.closest('#mediaBtn'))closeMediaPop(true);
   });
   document.addEventListener('keydown',e=>{
     if(e.key==='Escape'&&pop.classList.contains('show'))closeMediaPop(true);
+    if((e.key==='AudioVolumeUp'||e.key==='AudioVolumeDown'||e.key==='AudioVolumeMute')&&pop.classList.contains('show')){
+      setTimeout(pollPcVolumeFast,25);
+    }
   });
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden){refreshMediaNow();scheduleMediaPoll();}});
+  document.addEventListener('visibilitychange',()=>{
+    if(!document.hidden){
+      refreshMediaNow();
+      scheduleMediaPoll();
+      if(pop.classList.contains('show')) startMediaVolPoll();
+    }else{
+      stopMediaVolPoll();
+    }
+  });
   let _mediaPollTimer=null;
   function scheduleMediaPoll(){
     if(_mediaPollTimer) clearTimeout(_mediaPollTimer);
@@ -12455,7 +13790,7 @@ function initNoteContextMenu(){
 
 /* ---------- Başlat (Son açık sekmeleri geri yükle; yoksa Kasalar ana ekranı) ---------- */
 initMainScrollTracking();
-initThemes(); initTextPrefs(); initRailDrag(); initAppClock(); initAppBattery(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
+initThemes(); initTextPrefs(); initSmoothScroll(); initRailDrag(); initAppClock(); initAppBattery(); initMediaHub(); initPomoPop(); initGcalPomo(); initNoteContextMenu(); syncEffortSelects(); syncAllGemBoxes();
 let _bootFresh=false; try{ _bootFresh=!sessionStorage.getItem(TAB_STORE_KEY)&&!new URLSearchParams(location.search).get('detach_tab'); }catch(e){}
 if(!restoreSessionTabs()){
   _restoringSession=true;

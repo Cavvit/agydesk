@@ -29,6 +29,8 @@ public static class WinTitleHelper {
     [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
+    [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(int dwProcessId);
 
     public static List<string> VisibleTitles() {
         var list = new List<string>();
@@ -65,17 +67,23 @@ public static class WinTitleHelper {
     }
 
     private static void FocusHwnd(IntPtr hwnd) {
+        AllowSetForegroundWindow(-1);
         if (IsIconic(hwnd)) ShowWindow(hwnd, 9);
+        else ShowWindow(hwnd, 5);
         IntPtr fg = GetForegroundWindow();
         uint dummy;
         uint fgThread = fg != IntPtr.Zero ? GetWindowThreadProcessId(fg, out dummy) : 0;
+        uint tgtThread = GetWindowThreadProcessId(hwnd, out dummy);
         uint curThread = GetCurrentThreadId();
-        bool attached = (fgThread != 0 && fgThread != curThread) && AttachThreadInput(curThread, fgThread, true);
+        bool attFg = (fgThread != 0 && fgThread != curThread) && AttachThreadInput(curThread, fgThread, true);
+        bool attTgt = (tgtThread != 0 && tgtThread != curThread && tgtThread != fgThread) && AttachThreadInput(curThread, tgtThread, true);
         try {
             BringWindowToTop(hwnd);
             SetForegroundWindow(hwnd);
+            SwitchToThisWindow(hwnd, true);
         } finally {
-            if (attached) AttachThreadInput(curThread, fgThread, false);
+            if (attTgt) AttachThreadInput(curThread, tgtThread, false);
+            if (attFg) AttachThreadInput(curThread, fgThread, false);
         }
     }
 
@@ -126,6 +134,126 @@ public static class WinTitleHelper {
             return true;
         }
         return false;
+    }
+}
+
+[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+internal class MMDeviceEnumeratorComObject {}
+
+[Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDeviceEnumerator {
+    [PreserveSig] int EnumAudioEndpoints(int dataFlow, int dwStateMask, out IntPtr ppDevices);
+    [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice ppDevice);
+}
+
+[Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IMMDevice {
+    [PreserveSig] int Activate(ref Guid iid, uint dwClsCtx, IntPtr pActivationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
+}
+
+[Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IAudioEndpointVolume {
+    [PreserveSig] int RegisterControlChangeNotify(IntPtr pNotify);
+    [PreserveSig] int UnregisterControlChangeNotify(IntPtr pNotify);
+    [PreserveSig] int GetChannelCount(out uint pnChannelCount);
+    [PreserveSig] int SetMasterVolumeLevel(float fLevelDB, ref Guid pguidEventContext);
+    [PreserveSig] int SetMasterVolumeLevelScalar(float fLevel, ref Guid pguidEventContext);
+    [PreserveSig] int GetMasterVolumeLevel(out float pfLevelDB);
+    [PreserveSig] int GetMasterVolumeLevelScalar(out float pfLevel);
+    [PreserveSig] int SetChannelVolumeLevel(uint nChannel, float fLevelDB, ref Guid pguidEventContext);
+    [PreserveSig] int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, ref Guid pguidEventContext);
+    [PreserveSig] int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+    [PreserveSig] int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+    [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool bMute, ref Guid pguidEventContext);
+    [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool pbMute);
+}
+
+public static class AudioVolHelper {
+    private static readonly Guid IID_IAudioEndpointVolume = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
+
+    private static IAudioEndpointVolume GetEndpoint(out IMMDeviceEnumerator enumerator, out IMMDevice device) {
+        enumerator = null;
+        device = null;
+        enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
+        int hr = enumerator.GetDefaultAudioEndpoint(0, 1, out device);
+        if (hr != 0 || device == null) {
+            hr = enumerator.GetDefaultAudioEndpoint(0, 0, out device);
+        }
+        if (hr != 0 || device == null) return null;
+        Guid iid = IID_IAudioEndpointVolume;
+        object obj;
+        hr = device.Activate(ref iid, 23u, IntPtr.Zero, out obj);
+        if (hr != 0 || obj == null) return null;
+        return obj as IAudioEndpointVolume;
+    }
+
+    private static void ReleaseAll(object a, object b, object c) {
+        try { if (a != null) Marshal.ReleaseComObject(a); } catch {}
+        try { if (b != null) Marshal.ReleaseComObject(b); } catch {}
+        try { if (c != null) Marshal.ReleaseComObject(c); } catch {}
+    }
+
+    public static int[] Get() {
+        IMMDeviceEnumerator en = null;
+        IMMDevice dev = null;
+        IAudioEndpointVolume ep = null;
+        try {
+            ep = GetEndpoint(out en, out dev);
+            if (ep == null) return null;
+            float scalar = 0f;
+            bool muted = false;
+            if (ep.GetMasterVolumeLevelScalar(out scalar) != 0) return null;
+            ep.GetMute(out muted);
+            int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100.0)));
+            return new int[] { pct, muted ? 1 : 0 };
+        } catch {
+            return null;
+        } finally {
+            ReleaseAll(ep, dev, en);
+        }
+    }
+
+    public static int[] Set(int level, int muteMode) {
+        IMMDeviceEnumerator en = null;
+        IMMDevice dev = null;
+        IAudioEndpointVolume ep = null;
+        try {
+            ep = GetEndpoint(out en, out dev);
+            if (ep == null) return null;
+            Guid ctx = Guid.Empty;
+            bool curMute = false;
+            ep.GetMute(out curMute);
+
+            if (muteMode == 2) {
+                ep.SetMute(!curMute, ref ctx);
+                curMute = !curMute;
+            } else if (muteMode == 1) {
+                ep.SetMute(true, ref ctx);
+                curMute = true;
+            } else if (muteMode == 0) {
+                ep.SetMute(false, ref ctx);
+                curMute = false;
+            }
+
+            if (level >= 0) {
+                int clamped = Math.Max(0, Math.Min(100, level));
+                ep.SetMasterVolumeLevelScalar(clamped / 100.0f, ref ctx);
+                if (clamped > 0 && muteMode < 0 && curMute) {
+                    ep.SetMute(false, ref ctx);
+                }
+            }
+
+            float scalar = 0f;
+            bool muted = false;
+            ep.GetMasterVolumeLevelScalar(out scalar);
+            ep.GetMute(out muted);
+            int pct = Math.Max(0, Math.Min(100, (int)Math.Round(scalar * 100.0)));
+            return new int[] { pct, muted ? 1 : 0 };
+        } catch {
+            return null;
+        } finally {
+            ReleaseAll(ep, dev, en);
+        }
     }
 }
 "@
@@ -312,11 +440,22 @@ function Get-StatusObj($targetApp) {
         } catch {}
     }
 
+    $av = Get-AudioVol
     if ($best) {
         $best['thumbnail'] = $bestThumb
-        return [ordered]@{ ok = $true; active = $best; sessions = $list }
+        return [ordered]@{ ok = $true; active = $best; sessions = $list; volume = $av.volume; muted = $av.muted }
     }
-    return [ordered]@{ ok = $true; active = $null; sessions = @() }
+    return [ordered]@{ ok = $true; active = $null; sessions = @(); volume = $av.volume; muted = $av.muted }
+}
+
+function Get-AudioVol {
+    try {
+        $v = [AudioVolHelper]::Get()
+        if ($null -ne $v -and $v.Length -ge 2) {
+            return @{ volume = [int]$v[0]; muted = ($v[1] -ne 0) }
+        }
+    } catch {}
+    return @{ volume = $null; muted = $false }
 }
 
 function Invoke-MediaCmd($action, $targetApp, $positionMs) {
@@ -383,6 +522,28 @@ function Invoke-MediaOpen($targetApp, $title, $platform) {
     return [ordered]@{ ok = $false; error = 'Medya uygulaması açılamadı' }
 }
 
+function Invoke-VolumeCmd($vol, $muted, $toggleMute) {
+    $lvl = -1
+    if ($null -ne $vol) {
+        try { $lvl = [int][Math]::Max(0, [Math]::Min(100, [int]$vol)) } catch { $lvl = -1 }
+    }
+    $mMode = -1
+    if ($toggleMute -eq $true) {
+        $mMode = 2
+    } elseif ($null -ne $muted) {
+        $mMode = if ([bool]$muted) { 1 } else { 0 }
+    }
+    try {
+        $v = [AudioVolHelper]::Set($lvl, $mMode)
+        if ($null -ne $v -and $v.Length -ge 2) {
+            return [ordered]@{ ok = $true; volume = [int]$v[0]; muted = ($v[1] -ne 0) }
+        }
+    } catch {
+        return [ordered]@{ ok = $false; error = $_.Exception.Message }
+    }
+    return [ordered]@{ ok = $false; error = 'Ses aygıtı bulunamadı' }
+}
+
 while ($true) {
     $line = [Console]::In.ReadLine()
     if ($null -eq $line) { break }
@@ -396,6 +557,8 @@ while ($true) {
             $out = Invoke-MediaCmd $req.action $req.app $req.position_ms
         } elseif ($req.op -eq 'open') {
             $out = Invoke-MediaOpen $req.app $req.title $req.platform
+        } elseif ($req.op -eq 'volume') {
+            $out = Invoke-VolumeCmd $req.volume $req.muted $req.toggle_mute
         } else {
             $out = [ordered]@{ ok = $false; error = 'Bilinmeyen op' }
         }

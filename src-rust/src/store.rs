@@ -15,16 +15,25 @@ const USAGE_TTL_S: f64 = 300.0;
 #[derive(Clone)]
 pub struct LiveQuotaInfo {
     group: String,
+    label: String,
+    models: String,
     used_pct: u32,
     remaining_pct: u32,
     reset_s: i64,
     detail: String,
     buckets: Vec<Value>,
+    providers: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct LiveUsageSnapshot {
+    groups: Vec<LiveQuotaInfo>,
+    by_provider: HashMap<String, LiveQuotaInfo>,
 }
 
 struct UsageCache {
     ts: f64,
-    data: Option<HashMap<String, LiveQuotaInfo>>,
+    data: Option<LiveUsageSnapshot>,
 }
 
 static USAGE_CACHE: Lazy<Mutex<UsageCache>> = Lazy::new(|| {
@@ -66,9 +75,16 @@ fn fmt_dur_tr(reset_s: i64) -> String {
     if reset_s <= 0 {
         return String::new();
     }
-    let hours = reset_s / 3600;
+    let days = reset_s / 86400;
+    let hours = (reset_s % 86400) / 3600;
     let mins = (reset_s % 3600) / 60;
-    if hours > 0 {
+    if days > 0 {
+        if hours > 0 {
+            format!("{} gün {} sa", days, hours)
+        } else {
+            format!("{} gün", days)
+        }
+    } else if hours > 0 {
         if mins > 0 {
             format!("{} sa {} dk", hours, mins)
         } else {
@@ -79,7 +95,96 @@ fn fmt_dur_tr(reset_s: i64) -> String {
     }
 }
 
-fn summarize_group_buckets(g_name: &str, raw_buckets: &[Value], now: f64) -> LiveQuotaInfo {
+fn friendly_group_label(g_name: &str) -> String {
+    let trimmed = g_name.trim();
+    match trimmed.to_lowercase().as_str() {
+        "gemini models" => "Gemini Modelleri".to_string(),
+        "claude and gpt models" => "Claude & GPT Modelleri".to_string(),
+        _ if !trimmed.is_empty() => trimmed.to_string(),
+        _ => "Bulut Modelleri".to_string(),
+    }
+}
+
+fn extract_group_models(g_desc: &str) -> String {
+    let trimmed = g_desc.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let low = trimmed.to_lowercase();
+    for prefix in [
+        "models within this group:",
+        "models in this group:",
+        "included models:",
+    ] {
+        if low.starts_with(prefix) {
+            return trimmed[prefix.len()..].trim().to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+fn group_slug(g_name: &str) -> String {
+    let mut s = String::new();
+    let mut prev_dash = false;
+    for ch in g_name.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            s.push(ch);
+            prev_dash = false;
+        } else if !prev_dash && !s.is_empty() {
+            s.push('-');
+            prev_dash = true;
+        }
+    }
+    s.trim_matches('-').to_string()
+}
+
+fn match_providers_for_group(g_name: &str, g_desc: &str, b_ids: &str) -> Vec<&'static str> {
+    fn push_uniq(list: &mut Vec<&'static str>, p: &'static str) {
+        if !list.contains(&p) {
+            list.push(p);
+        }
+    }
+    let low = format!("{} {} {}", g_name, g_desc, b_ids).to_lowercase();
+    let mut matched: Vec<&'static str> = Vec::new();
+
+    if low.contains("argon") {
+        push_uniq(&mut matched, "gemini-argon");
+    }
+    if low.contains("neon") {
+        push_uniq(&mut matched, "gemini-neon");
+    }
+    if low.contains("hydrogen") || low.contains("flash") {
+        push_uniq(&mut matched, "gemini-hydrogen");
+    }
+    if low.contains("opus") {
+        push_uniq(&mut matched, "claude-opus");
+    }
+    if low.contains("sonnet") {
+        push_uniq(&mut matched, "claude-sonnet");
+    }
+
+    let has_any_gemini = matched.iter().any(|p| p.starts_with("gemini-"));
+    if !has_any_gemini && low.contains("gemini") {
+        push_uniq(&mut matched, "gemini-argon");
+        push_uniq(&mut matched, "gemini-neon");
+        push_uniq(&mut matched, "gemini-hydrogen");
+    }
+
+    let has_any_claude = matched.iter().any(|p| p.starts_with("claude-"));
+    if !has_any_claude && (low.contains("claude") || low.contains("gpt") || b_ids.contains("3p-")) {
+        push_uniq(&mut matched, "claude-opus");
+        push_uniq(&mut matched, "claude-sonnet");
+    }
+
+    matched
+}
+
+fn summarize_group_buckets(
+    g_name: &str,
+    g_desc: &str,
+    raw_buckets: &[Value],
+    now: f64,
+) -> LiveQuotaInfo {
     let mut buckets = Vec::new();
     let mut pieces = Vec::new();
     let mut active_candidates: Vec<(u32, i64)> = Vec::new();
@@ -161,6 +266,8 @@ fn summarize_group_buckets(g_name: &str, raw_buckets: &[Value], now: f64) -> Liv
 
     LiveQuotaInfo {
         group: g_name.to_string(),
+        label: friendly_group_label(g_name),
+        models: extract_group_models(g_desc),
         used_pct,
         remaining_pct: rem_pct,
         reset_s,
@@ -170,28 +277,29 @@ fn summarize_group_buckets(g_name: &str, raw_buckets: &[Value], now: f64) -> Liv
             pieces.join(" · ")
         },
         buckets,
+        providers: Vec::new(),
     }
 }
 
-fn parse_agy_usage_json(raw: &str, now: f64) -> Option<HashMap<String, LiveQuotaInfo>> {
+fn parse_agy_usage_json(raw: &str, now: f64) -> Option<LiveUsageSnapshot> {
     let text = raw.trim();
     if text.is_empty() {
         return None;
     }
     let obj: Value = serde_json::from_str(text).ok()?;
-    let groups = obj
+    let groups_arr = obj
         .get("command")?
         .get("data")?
         .get("groups")?
         .as_array()?;
-    if groups.is_empty() {
+    if groups_arr.is_empty() {
         return None;
     }
 
-    let mut out = HashMap::new();
-    let mut gemini_fallback: Option<LiveQuotaInfo> = None;
+    let mut groups: Vec<LiveQuotaInfo> = Vec::new();
+    let mut group_matches: Vec<Vec<&'static str>> = Vec::new();
 
-    for g in groups {
+    for g in groups_arr {
         let g_name = g.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let g_desc = g.get("description").and_then(|v| v.as_str()).unwrap_or("");
         let Some(raw_buckets) = g.get("buckets").and_then(|v| v.as_array()) else {
@@ -200,8 +308,6 @@ fn parse_agy_usage_json(raw: &str, now: f64) -> Option<HashMap<String, LiveQuota
         if raw_buckets.is_empty() {
             continue;
         }
-        let info = summarize_group_buckets(g_name, raw_buckets, now);
-        let low = format!("{} {}", g_name, g_desc).to_lowercase();
         let b_ids: String = raw_buckets
             .iter()
             .filter_map(|b| b.get("id").and_then(|v| v.as_str()))
@@ -209,32 +315,59 @@ fn parse_agy_usage_json(raw: &str, now: f64) -> Option<HashMap<String, LiveQuota
             .join(" ")
             .to_lowercase();
 
-        if low.contains("argon") || b_ids.contains("argon") {
-            out.insert("gemini-argon".to_string(), info);
-        } else if low.contains("claude") || low.contains("gpt") || b_ids.contains("3p-") {
-            out.insert("claude-opus".to_string(), info.clone());
-            out.insert("claude-sonnet".to_string(), info);
-        } else if low.contains("gemini") || low.contains("hydrogen") || low.contains("neon") {
-            gemini_fallback = Some(info.clone());
-            out.insert("gemini-neon".to_string(), info.clone());
-            out.insert("gemini-hydrogen".to_string(), info);
+        let info = summarize_group_buckets(g_name, g_desc, raw_buckets, now);
+        let matched = match_providers_for_group(g_name, g_desc, &b_ids);
+        groups.push(info);
+        group_matches.push(matched);
+    }
+
+    if groups.is_empty() {
+        return None;
+    }
+
+    // Assign each internal provider to its most specific matching group
+    // (e.g. a dedicated Argon group wins over a broad Gemini group; unified Gemini pool covers all).
+    let mut provider_owner: HashMap<&'static str, (usize, usize)> = HashMap::new();
+    for (idx, matched) in group_matches.iter().enumerate() {
+        let specificity = matched.len().max(1);
+        for &prov in matched {
+            let replace = match provider_owner.get(prov) {
+                None => true,
+                Some(&(_, prev_spec)) => specificity < prev_spec,
+            };
+            if replace {
+                provider_owner.insert(prov, (idx, specificity));
+            }
         }
     }
 
-    if !out.contains_key("gemini-argon") {
-        if let Some(fb) = gemini_fallback {
-            out.insert("gemini-argon".to_string(), fb);
+    // Fallback: if any gemini provider wasn't explicitly named, bind to the broadest Gemini group.
+    if let Some((gem_idx, _)) = groups.iter().enumerate().find(|(_, g)| {
+        g.group.to_lowercase().contains("gemini") || g.models.to_lowercase().contains("gemini")
+    }) {
+        for prov in ["gemini-argon", "gemini-neon", "gemini-hydrogen"] {
+            provider_owner.entry(prov).or_insert((gem_idx, 99));
         }
     }
 
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
+    let mut by_provider: HashMap<String, LiveQuotaInfo> = HashMap::new();
+    for (prov, &(idx, _)) in &provider_owner {
+        groups[idx].providers.push((*prov).to_string());
     }
+    for g in &mut groups {
+        g.providers.sort();
+    }
+    for (prov, &(idx, _)) in &provider_owner {
+        by_provider.insert((*prov).to_string(), groups[idx].clone());
+    }
+
+    Some(LiveUsageSnapshot {
+        groups,
+        by_provider,
+    })
 }
 
-pub fn fetch_agy_usage(force: bool) -> Option<HashMap<String, LiveQuotaInfo>> {
+pub fn fetch_agy_usage(force: bool) -> Option<LiveUsageSnapshot> {
     let now = now_ts();
     if !force {
         if let Ok(cache) = USAGE_CACHE.lock() {
@@ -274,7 +407,7 @@ pub fn fetch_agy_usage(force: bool) -> Option<HashMap<String, LiveQuotaInfo>> {
                      ON CONFLICT(id) DO UPDATE SET raw=excluded.raw, ts=excluded.ts",
                     params![stdout.as_ref(), now],
                 );
-                for (prov, info) in &parsed {
+                for (prov, info) in &parsed.by_provider {
                     if info.used_pct >= 100 && info.reset_s > 0 {
                         let until = now + (info.reset_s.max(60) as f64);
                         let _ = c.execute(
@@ -453,6 +586,44 @@ pub fn set_conv_id(session: &str, conv_id: Option<&str>) {
     }
 }
 
+pub fn get_compact_ctx(session: &str) -> Option<String> {
+    let c = open_conn().ok()?;
+    let key = format!("compact_ctx:{}", session);
+    let val: String = c
+        .query_row("SELECT val FROM ui_state WHERE key=?1", params![key], |r| {
+            r.get(0)
+        })
+        .ok()?;
+    if val.is_empty() {
+        None
+    } else {
+        Some(val)
+    }
+}
+
+pub fn set_compact_ctx(session: &str, summary: Option<&str>) {
+    let Ok(c) = open_conn() else { return };
+    let key = format!("compact_ctx:{}", session);
+    match summary {
+        None | Some("") => {
+            let _ = c.execute("DELETE FROM ui_state WHERE key=?1", params![key]);
+        }
+        Some(s) => {
+            let _ = c.execute(
+                "INSERT INTO ui_state(key,val,updated_ts) VALUES(?1,?2,?3)
+                 ON CONFLICT(key) DO UPDATE SET val=excluded.val, updated_ts=excluded.updated_ts",
+                params![key, s, now_ts()],
+            );
+        }
+    }
+}
+
+pub fn pop_compact_ctx(session: &str) -> Option<String> {
+    let val = get_compact_ctx(session)?;
+    set_compact_ctx(session, None);
+    Some(val)
+}
+
 pub fn record_usage(provider: &str, tokens: i64, real: bool) {
     if let Ok(c) = open_conn() {
         let _ = c.execute(
@@ -469,12 +640,60 @@ pub fn quota_status() -> Vec<Value> {
 pub fn quota_status_with(live: bool, refresh: bool) -> Vec<Value> {
     let mut out = Vec::new();
     let now = now_ts();
-    let live_map = if live || refresh {
+    let live_snap = if live || refresh {
         fetch_agy_usage(refresh)
     } else {
         USAGE_CACHE.lock().ok().and_then(|c| c.data.clone())
     };
     let Ok(c) = open_conn() else { return out };
+
+    // Dynamic self-adapting mode: emit one row per real `agy /usage` quota group,
+    // plus the unlimited local Ollama row.
+    if let Some(ref snap) = live_snap {
+        if !snap.groups.is_empty() {
+            for g in &snap.groups {
+                let slug = group_slug(&g.group);
+                let gid = if slug.is_empty() {
+                    "group:cloud".to_string()
+                } else {
+                    format!("group:{}", slug)
+                };
+                out.push(json!({
+                    "id": gid,
+                    "label": g.label,
+                    "group": g.group,
+                    "models": g.models,
+                    "providers": g.providers,
+                    "used_pct": g.used_pct,
+                    "remaining_pct": g.remaining_pct,
+                    "reset_s": g.reset_s,
+                    "detail": g.detail,
+                    "buckets": g.buckets,
+                    "source": "agy_cli",
+                    "cloud": true
+                }));
+            }
+            for p in PROVIDERS.iter().filter(|p| p.limit.is_none()) {
+                let n: i64 = c
+                    .query_row(
+                        "SELECT COUNT(*) FROM usage WHERE provider=?1",
+                        params![p.id],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                out.push(json!({
+                    "id": p.id,
+                    "label": p.label,
+                    "used_pct": Value::Null,
+                    "count": n,
+                    "reset_s": Value::Null,
+                    "detail": format!("sınırsız · {} istek", n),
+                    "cloud": false
+                }));
+            }
+            return out;
+        }
+    }
 
     for p in PROVIDERS {
         let Some(limit) = p.limit else {
@@ -509,26 +728,6 @@ pub fn quota_status_with(live: bool, refresh: bool) -> Vec<Value> {
             }
         }
         let n = ts_list.len() as u32;
-
-        if let Some(ref map) = live_map {
-            if let Some(info) = map.get(p.id) {
-                out.push(json!({
-                    "id": p.id,
-                    "label": p.label,
-                    "limit": limit,
-                    "count": n,
-                    "used_pct": info.used_pct,
-                    "remaining_pct": info.remaining_pct,
-                    "reset_s": info.reset_s,
-                    "detail": info.detail,
-                    "group": info.group,
-                    "buckets": info.buckets,
-                    "source": "agy_cli",
-                    "cloud": true
-                }));
-                continue;
-            }
-        }
 
         let ex: Option<f64> = c
             .query_row(
@@ -573,9 +772,21 @@ pub fn quota_status_with(live: bool, refresh: bool) -> Vec<Value> {
 }
 
 pub fn used_pct(provider: &str) -> u32 {
+    if let Ok(cache) = USAGE_CACHE.lock() {
+        if let Some(ref snap) = cache.data {
+            if let Some(info) = snap.by_provider.get(provider) {
+                return info.used_pct;
+            }
+        }
+    }
     for q in quota_status() {
         if q.get("id").and_then(|v| v.as_str()) == Some(provider) {
             return q.get("used_pct").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        }
+        if let Some(provs) = q.get("providers").and_then(|v| v.as_array()) {
+            if provs.iter().any(|v| v.as_str() == Some(provider)) {
+                return q.get("used_pct").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            }
         }
     }
     0
@@ -759,13 +970,35 @@ mod tests {
     fn parses_agy_usage_json_groups() {
         let raw = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","description":"Gemini 4 Hydrogen","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.66,"reset_time":"2026-11-20T22:51:49Z"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.65,"reset_time":"2026-11-15T13:20:49Z"}]},{"name":"Claude and GPT models","description":"Claude Opus 5.5, Claude Sonnet 5.5","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.0,"reset_time":"2026-11-17T07:42:49Z"},{"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","disabled":true,"remaining_fraction":1.0}]},{"name":"Gemini 4 Argon","description":"Argon","buckets":[{"id":"gemini-argon-wtu-weekly","name":"Gemini 4 Argon Weekly Limit","window":"weekly","remaining_fraction":0.74,"reset_time":"2026-11-20T23:13:24Z"}]}]}}}"#;
         let parsed = parse_agy_usage_json(raw, 1794745200.0).expect("should parse");
-        assert_eq!(parsed["gemini-hydrogen"].remaining_pct, 65);
-        assert_eq!(parsed["gemini-hydrogen"].used_pct, 35);
-        assert!(parsed["gemini-hydrogen"].detail.contains("Haftalık: %66"));
-        assert!(parsed["gemini-hydrogen"].detail.contains("5 sa: %65"));
-        assert_eq!(parsed["gemini-argon"].remaining_pct, 74);
-        assert_eq!(parsed["gemini-argon"].used_pct, 26);
-        assert_eq!(parsed["claude-opus"].used_pct, 100);
-        assert_eq!(parsed["claude-sonnet"].used_pct, 100);
+        assert_eq!(parsed.groups.len(), 3);
+        assert_eq!(parsed.by_provider["gemini-hydrogen"].remaining_pct, 65);
+        assert_eq!(parsed.by_provider["gemini-hydrogen"].used_pct, 35);
+        assert!(parsed.by_provider["gemini-hydrogen"].detail.contains("Haftalık: %66"));
+        assert!(parsed.by_provider["gemini-hydrogen"].detail.contains("5 sa: %65"));
+        assert_eq!(parsed.by_provider["gemini-argon"].remaining_pct, 74);
+        assert_eq!(parsed.by_provider["gemini-argon"].used_pct, 26);
+        assert_eq!(parsed.by_provider["claude-opus"].used_pct, 100);
+        assert_eq!(parsed.by_provider["claude-sonnet"].used_pct, 100);
+    }
+
+    #[test]
+    fn parses_unified_gemini_and_future_dynamic_groups() {
+        let raw = r#"{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"name":"Gemini Models","description":"Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen","buckets":[{"id":"gemini-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":0.8031,"reset_time":"2026-11-30T20:07:18Z"},{"id":"gemini-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.6928,"reset_time":"2026-11-25T18:25:49Z"}]},{"name":"Claude and GPT models","description":"Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B","buckets":[{"id":"3p-weekly","name":"Weekly Limit Remaining","window":"weekly","remaining_fraction":1.0,"reset_time":"1970-01-01T00:00:00Z"},{"id":"3p-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":1.0,"reset_time":"1970-01-01T00:00:00Z"}]},{"name":"Experimental Models","description":"Models within this group: Future Model X","buckets":[{"id":"exp-5h","name":"Five Hour Limit Remaining","window":"5h","remaining_fraction":0.5,"reset_time":"2026-11-25T18:25:49Z"}]}]}}}"#;
+        let parsed = parse_agy_usage_json(raw, 1795620000.0).expect("should parse");
+        assert_eq!(parsed.groups.len(), 3);
+        assert_eq!(parsed.groups[0].label, "Gemini Modelleri");
+        assert_eq!(
+            parsed.groups[0].models,
+            "Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen"
+        );
+        assert_eq!(parsed.groups[2].label, "Experimental Models");
+        assert_eq!(parsed.groups[2].models, "Future Model X");
+        for prov in ["gemini-argon", "gemini-neon", "gemini-hydrogen"] {
+            assert_eq!(parsed.by_provider[prov].remaining_pct, 69, "prov={prov}");
+            assert_eq!(parsed.by_provider[prov].used_pct, 31, "prov={prov}");
+        }
+        for prov in ["claude-opus", "claude-sonnet"] {
+            assert_eq!(parsed.by_provider[prov].remaining_pct, 100, "prov={prov}");
+        }
     }
 }
